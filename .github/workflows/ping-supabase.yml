@@ -1,0 +1,30 @@
+name: Keep Supabase Alive
+
+on:
+  schedule:
+    # Chạy mỗi 6 giờ (4 lần/ngày là đủ để không bị pause)
+    - cron: '0 */6 * * *'
+  
+  # Cho phép chạy thủ công để test
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase Database
+        run: |
+          response=$(curl -s -o /dev/null -w "%{http_code}" \
+            "${{ secrets.VITE_SUPABASE_URL }}/rest/v1/settings?select=key&limit=1" \
+            -H "apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json")
+          
+          if [ "$response" = "200" ]; then
+            echo "✅ Supabase is alive! Status: $response"
+          else
+            echo "⚠️ Ping returned status: $response"
+            exit 1
+          fi
+      
+      - name: Log timestamp
+        run: echo "Pinged at $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
