@@ -8,6 +8,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 // ============================================
 // CUSTOMERS
 // ============================================
+
 export async function getCustomers() {
   const { data, error } = await supabase
     .from('customers')
@@ -30,7 +31,11 @@ export async function getCustomer(id) {
 export async function createCustomer(customer) {
   const { data, error } = await supabase
     .from('customers')
-    .insert([{ ...customer, balance: 0 }])
+    .insert([{ 
+      ...customer, 
+      balance: 0,
+      discount_percent: customer.discount_percent || 0
+    }])
     .select()
     .single()
   if (error) throw error
@@ -56,13 +61,24 @@ export async function deleteCustomer(id) {
   if (error) throw error
 }
 
+// Cập nhật chiết khấu khách hàng
+export async function updateCustomerDiscount(id, discountPercent) {
+  const { data, error } = await supabase
+    .from('customers')
+    .update({ discount_percent: discountPercent })
+    .eq('id', id)
+    .select()
+    .single()
+  if (error) throw error
+  return data
+}
+
 // ============================================
 // CUSTOMER BALANCE (Số dư khách hàng)
 // ============================================
 
 // Nạp tiền vào tài khoản khách
 export async function depositToCustomer(customerId, amount, note = '') {
-  // 1. Tạo payment record
   const { data, error } = await supabase
     .from('payments')
     .insert([{
@@ -77,14 +93,12 @@ export async function depositToCustomer(customerId, amount, note = '') {
     .single()
   if (error) throw error
 
-  // 2. Cập nhật balance
   await recalcCustomerBalance(customerId)
   return data
 }
 
 // Rút tiền từ tài khoản khách (thanh toán từ số dư)
 export async function withdrawFromCustomer(customerId, amount, orderId = null, note = '') {
-  // 1. Tạo payment record
   const { data, error } = await supabase
     .from('payments')
     .insert([{
@@ -99,21 +113,18 @@ export async function withdrawFromCustomer(customerId, amount, orderId = null, n
     .single()
   if (error) throw error
 
-  // 2. Cập nhật balance
   await recalcCustomerBalance(customerId)
   return data
 }
 
 // Tính lại số dư khách hàng
 export async function recalcCustomerBalance(customerId) {
-  // Tổng deposit
   const { data: deposits } = await supabase
     .from('payments')
     .select('amount')
     .eq('customer_id', customerId)
     .eq('type', 'deposit')
 
-  // Tổng withdraw
   const { data: withdrawals } = await supabase
     .from('payments')
     .select('amount')
@@ -124,7 +135,6 @@ export async function recalcCustomerBalance(customerId) {
   const totalWithdraw = withdrawals?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
   const balance = totalDeposit - totalWithdraw
 
-  // Cập nhật
   await supabase
     .from('customers')
     .update({ balance })
@@ -148,13 +158,13 @@ export async function getCustomerTransactions(customerId) {
 // ============================================
 // PRODUCTS (Sản phẩm mẫu)
 // ============================================
+
 export async function getProducts() {
   const { data, error } = await supabase
     .from('products')
     .select('*')
     .order('name')
   if (error) {
-    // Nếu bảng chưa có thì trả về mảng rỗng
     if (error.code === '42P01') return []
     throw error
   }
@@ -193,6 +203,7 @@ export async function deleteProduct(id) {
 // ============================================
 // ORDERS
 // ============================================
+
 export async function getOrders() {
   const { data, error } = await supabase
     .from('orders')
@@ -223,9 +234,20 @@ export async function getOrdersByCustomer(customerId) {
 }
 
 export async function createOrder(order) {
+  // Tính toán chiết khấu và thành tiền
+  const grossAmount = order.quantity * order.unit_price
+  const discountPercent = order.discount_percent || 0
+  const discountAmount = (grossAmount * discountPercent) / 100
+  const finalAmount = grossAmount - discountAmount
+
   const { data, error } = await supabase
     .from('orders')
-    .insert([order])
+    .insert([{
+      ...order,
+      discount_percent: discountPercent,
+      discount_amount: discountAmount,
+      final_amount: finalAmount
+    }])
     .select(`
       *,
       customer:customers(*),
@@ -239,9 +261,24 @@ export async function createOrder(order) {
 
 // Tạo nhiều đơn cùng lúc (1 khách mua nhiều sản phẩm)
 export async function createMultipleOrders(orders) {
+  // Tính toán chiết khấu cho từng đơn
+  const ordersWithDiscount = orders.map(order => {
+    const grossAmount = order.quantity * order.unit_price
+    const discountPercent = order.discount_percent || 0
+    const discountAmount = (grossAmount * discountPercent) / 100
+    const finalAmount = grossAmount - discountAmount
+
+    return {
+      ...order,
+      discount_percent: discountPercent,
+      discount_amount: discountAmount,
+      final_amount: finalAmount
+    }
+  })
+
   const { data, error } = await supabase
     .from('orders')
-    .insert(orders)
+    .insert(ordersWithDiscount)
     .select(`
       *,
       customer:customers(*),
@@ -253,6 +290,26 @@ export async function createMultipleOrders(orders) {
 }
 
 export async function updateOrder(id, updates) {
+  // Nếu có thay đổi quantity hoặc unit_price, tính lại
+  if (updates.quantity !== undefined || updates.unit_price !== undefined || updates.discount_percent !== undefined) {
+    const { data: currentOrder } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('id', id)
+      .single()
+
+    const quantity = updates.quantity ?? currentOrder.quantity
+    const unitPrice = updates.unit_price ?? currentOrder.unit_price
+    const discountPercent = updates.discount_percent ?? currentOrder.discount_percent ?? 0
+
+    const grossAmount = quantity * unitPrice
+    const discountAmount = (grossAmount * discountPercent) / 100
+    const finalAmount = grossAmount - discountAmount
+
+    updates.discount_amount = discountAmount
+    updates.final_amount = finalAmount
+  }
+
   const { data, error } = await supabase
     .from('orders')
     .update(updates)
@@ -274,6 +331,7 @@ export async function deleteOrder(id) {
 // ============================================
 // DELIVERIES
 // ============================================
+
 export async function addDelivery(delivery) {
   const { data, error } = await supabase
     .from('deliveries')
@@ -295,8 +353,8 @@ export async function deleteDelivery(id) {
 // ============================================
 // PAYMENTS
 // ============================================
+
 export async function addPayment(payment) {
-  // Lấy customer_id từ order nếu chưa có
   let customerId = payment.customer_id
   if (!customerId && payment.order_id) {
     const { data: order } = await supabase
@@ -355,9 +413,68 @@ export async function getCustomerReport(customerId) {
   return { customer, orders: orders || [], transactions: transactions || [] }
 }
 
+// Lấy danh sách khách hàng với thống kê
+export async function getCustomersWithStats() {
+  const { data: customers } = await supabase
+    .from('customers')
+    .select('*')
+    .order('name')
+
+  const { data: orders } = await supabase
+    .from('orders')
+    .select('customer_id, quantity, unit_price, final_amount, payments(*)')
+
+  // Tính toán thống kê cho từng khách
+  const stats = {}
+  orders?.forEach(order => {
+    if (!stats[order.customer_id]) {
+      stats[order.customer_id] = {
+        orderCount: 0,
+        totalAmount: 0,
+        totalPaid: 0
+      }
+    }
+    stats[order.customer_id].orderCount++
+    stats[order.customer_id].totalAmount += Number(order.final_amount) || (order.quantity * order.unit_price)
+    stats[order.customer_id].totalPaid += order.payments
+      ?.filter(p => p.type === 'payment' || !p.type)
+      ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+  })
+
+  return customers?.map(c => ({
+    ...c,
+    orderCount: stats[c.id]?.orderCount || 0,
+    totalAmount: stats[c.id]?.totalAmount || 0,
+    totalPaid: stats[c.id]?.totalPaid || 0,
+    debt: (stats[c.id]?.totalAmount || 0) - (stats[c.id]?.totalPaid || 0)
+  })) || []
+}
+
+// ============================================
+// CLEANUP & MAINTENANCE
+// ============================================
+
+// Cleanup old orders (xóa đơn cũ)
+export async function cleanupOldOrders(daysOld = 365) {
+  const cutoffDate = new Date()
+  cutoffDate.setDate(cutoffDate.getDate() - daysOld)
+  const dateStr = cutoffDate.toISOString().split('T')[0]
+
+  const { data, error } = await supabase
+    .from('orders')
+    .delete()
+    .eq('status', 'completed')
+    .lt('order_date', dateStr)
+    .select()
+
+  if (error) throw error
+  return data?.length || 0
+}
+
 // ============================================
 // AUTHENTICATION
 // ============================================
+
 export async function checkPassword(password) {
   const { data, error } = await supabase
     .from('settings')
@@ -378,21 +495,4 @@ export async function setPassword(password) {
     .from('settings')
     .upsert([{ key: 'app_password', value: password }])
   if (error) throw error
-}
-
-// Cleanup old orders (xóa đơn cũ)
-export async function cleanupOldOrders(daysOld = 365) {
-  const cutoffDate = new Date()
-  cutoffDate.setDate(cutoffDate.getDate() - daysOld)
-  const dateStr = cutoffDate.toISOString().split('T')[0]
-  
-  const { data, error } = await supabase
-    .from('orders')
-    .delete()
-    .eq('status', 'completed')
-    .lt('order_date', dateStr)
-    .select()
-  
-  if (error) throw error
-  return data?.length || 0
 }

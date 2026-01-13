@@ -1,18 +1,26 @@
 import { useState, useEffect } from 'react'
 import { 
-  User, Phone, MapPin, Wallet, Plus, 
-  History, Package, ChevronRight, X, ArrowDownCircle, ArrowUpCircle
+  User, Phone, Wallet, Plus, X, Edit2, Save,
+  Package, ChevronRight, ArrowDownCircle, ArrowUpCircle,
+  Percent, MessageCircle
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
-import { getCustomerReport, depositToCustomer } from '../lib/supabase'
-import { formatMoney, formatMoneyFull, formatDate, sumBy } from '../lib/helpers'
+import { getCustomerReport, depositToCustomer, updateCustomer } from '../lib/supabase'
+import { formatMoney, formatMoneyFull, formatDate, sumBy, getPhoneLink, getZaloLink } from '../lib/helpers'
 
 export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, onSelectOrder }) {
   const toast = useToast()
   const [loading, setLoading] = useState(false)
   const [activeTab, setActiveTab] = useState('overview')
   const [report, setReport] = useState({ orders: [], transactions: [] })
+
+  // Edit mode
+  const [isEditing, setIsEditing] = useState(false)
+  const [editName, setEditName] = useState('')
+  const [editPhone, setEditPhone] = useState('')
+  const [editDiscount, setEditDiscount] = useState('')
+  const [editNote, setEditNote] = useState('')
 
   // Deposit form
   const [showDeposit, setShowDeposit] = useState(false)
@@ -22,6 +30,10 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
   useEffect(() => {
     if (isOpen && customer?.id) {
       loadData()
+      setEditName(customer.name || '')
+      setEditPhone(customer.phone || '')
+      setEditDiscount(customer.discount_percent?.toString() || '0')
+      setEditNote(customer.note || '')
     }
   }, [isOpen, customer?.id])
 
@@ -59,44 +71,167 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
     }
   }
 
+  const handleSaveEdit = async () => {
+    if (!editName.trim()) {
+      toast.warning('Tên khách hàng không được để trống')
+      return
+    }
+
+    setLoading(true)
+    try {
+      await updateCustomer(customer.id, {
+        name: editName.trim(),
+        phone: editPhone.trim() || null,
+        discount_percent: Number(editDiscount) || 0,
+        note: editNote.trim() || null
+      })
+      toast.success('Đã cập nhật thông tin khách hàng')
+      setIsEditing(false)
+      loadData()
+      onUpdate?.()
+    } catch (err) {
+      toast.error('Lỗi: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   if (!customer) return null
 
   // Thống kê
   const currentBalance = report?.customer?.balance || customer?.balance || 0
+  const currentDiscount = report?.customer?.discount_percent || customer?.discount_percent || 0
   const totalOrders = report?.orders?.length || 0
-  const totalSpent = report?.orders?.reduce((sum, o) => sum + (o.quantity * o.unit_price), 0) || 0
+
+  // Tính doanh thu (sử dụng final_amount nếu có, không thì tính từ quantity * unit_price)
+  const totalGross = report?.orders?.reduce((sum, o) => sum + (o.quantity * o.unit_price), 0) || 0
+  const totalDiscount = report?.orders?.reduce((sum, o) => sum + (Number(o.discount_amount) || 0), 0) || 0
+  const totalSpent = report?.orders?.reduce((sum, o) => {
+    return sum + (Number(o.final_amount) || (o.quantity * o.unit_price))
+  }, 0) || 0
+
+  const totalPaid = report?.orders?.reduce((sum, o) => {
+    const payments = o.payments?.filter(p => p.type === 'payment' || !p.type) || []
+    return sum + sumBy(payments, 'amount')
+  }, 0) || 0
+
+  const totalDebt = totalSpent - totalPaid
   const totalDeposit = report?.transactions?.filter(t => t.type === 'deposit').reduce((sum, t) => sum + Number(t.amount), 0) || 0
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={customer.name} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title="Chi tiết khách hàng" size="lg">
       <div className="p-4 max-h-[80vh] overflow-y-auto">
-        {/* Header */}
+
+        {/* === HEADER === */}
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-3">
             <div className="w-14 h-14 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center text-white text-xl font-bold">
               {customer.name?.charAt(0)?.toUpperCase()}
             </div>
-            <div>
-              <h3 className="font-semibold text-gray-800">{customer.name}</h3>
-              {customer.phone && (
-                <p className="text-sm text-gray-500 flex items-center gap-1">
-                  <Phone size={14} /> {customer.phone}
-                </p>
-              )}
-            </div>
+
+            {!isEditing ? (
+              <div>
+                <h3 className="font-semibold text-gray-800">{report?.customer?.name || customer.name}</h3>
+                {(report?.customer?.phone || customer.phone) && (
+                  <div className="flex items-center gap-2 mt-1">
+                    <a 
+                      href={getPhoneLink(report?.customer?.phone || customer.phone)}
+                      className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1"
+                    >
+                      <Phone size={14} />
+                      {report?.customer?.phone || customer.phone}
+                    </a>
+                    <a
+                      href={getZaloLink(report?.customer?.phone || customer.phone)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="p-1 bg-blue-500 text-white rounded text-xs hover:bg-blue-600"
+                    >
+                      Zalo
+                    </a>
+                  </div>
+                )}
+                {currentDiscount > 0 && (
+                  <p className="text-sm text-green-600 flex items-center gap-1 mt-1">
+                    <Percent size={14} />
+                    Chiết khấu: {currentDiscount}%
+                  </p>
+                )}
+              </div>
+            ) : (
+              <div className="flex-1 space-y-2">
+                <input
+                  type="text"
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  placeholder="Tên khách hàng"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                />
+                <input
+                  type="tel"
+                  value={editPhone}
+                  onChange={(e) => setEditPhone(e.target.value)}
+                  placeholder="Số điện thoại"
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                />
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    value={editDiscount}
+                    onChange={(e) => setEditDiscount(e.target.value)}
+                    placeholder="CK %"
+                    min="0"
+                    max="100"
+                    className="w-20 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  />
+                  <span className="text-gray-500 text-sm">% chiết khấu</span>
+                </div>
+              </div>
+            )}
           </div>
 
-          {/* Balance card */}
-          <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-3 text-right">
-            <p className="text-xs text-gray-500">Số dư tài khoản</p>
-            <p className={`text-xl font-bold ${currentBalance > 0 ? 'text-green-600' : 'text-gray-400'}`}>
-              {formatMoneyFull(currentBalance)}
-            </p>
+          {/* Nút Edit/Save */}
+          {!isEditing ? (
+            <button
+              onClick={() => setIsEditing(true)}
+              className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg"
+            >
+              <Edit2 size={18} />
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <button
+                onClick={handleSaveEdit}
+                disabled={loading}
+                className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
+              >
+                <Save size={18} />
+              </button>
+              <button
+                onClick={() => setIsEditing(false)}
+                className="p-2 text-gray-400 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={18} />
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* === SỐ DƯ === */}
+        <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl p-4 mb-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm text-gray-500">Số dư tài khoản</p>
+              <p className={`text-2xl font-bold ${currentBalance > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+                {formatMoneyFull(currentBalance)}
+              </p>
+            </div>
             <button
               onClick={() => setShowDeposit(true)}
-              className="mt-1 text-xs text-green-600 hover:text-green-700 flex items-center gap-1 ml-auto"
+              className="px-4 py-2 bg-green-500 text-white rounded-lg hover:bg-green-600 flex items-center gap-2"
             >
-              <Plus size={12} /> Nạp tiền
+              <Plus size={16} />
+              Nạp tiền
             </button>
           </div>
         </div>
@@ -135,23 +270,37 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
           </div>
         )}
 
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <div className="bg-blue-50 rounded-xl p-3 text-center">
+        {/* === THỐNG KÊ === */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="bg-blue-50 rounded-xl p-3">
             <p className="text-xs text-gray-500">Tổng đơn</p>
             <p className="text-lg font-bold text-blue-600">{totalOrders}</p>
           </div>
-          <div className="bg-purple-50 rounded-xl p-3 text-center">
+          <div className="bg-purple-50 rounded-xl p-3">
             <p className="text-xs text-gray-500">Đã mua</p>
             <p className="text-lg font-bold text-purple-600">{formatMoney(totalSpent)}</p>
           </div>
-          <div className="bg-amber-50 rounded-xl p-3 text-center">
+          <div className="bg-amber-50 rounded-xl p-3">
             <p className="text-xs text-gray-500">Đã nạp</p>
             <p className="text-lg font-bold text-amber-600">{formatMoney(totalDeposit)}</p>
           </div>
+          <div className="bg-red-50 rounded-xl p-3">
+            <p className="text-xs text-gray-500">Công nợ</p>
+            <p className={`text-lg font-bold ${totalDebt > 0 ? 'text-red-600' : 'text-gray-400'}`}>
+              {formatMoney(totalDebt)}
+            </p>
+          </div>
         </div>
 
-        {/* Tabs */}
+        {/* Thống kê chiết khấu */}
+        {totalDiscount > 0 && (
+          <div className="bg-green-50 rounded-xl p-3 mb-4 flex items-center justify-between">
+            <span className="text-sm text-gray-600">Tổng chiết khấu đã được hưởng:</span>
+            <span className="font-semibold text-green-600">{formatMoneyFull(totalDiscount)}</span>
+          </div>
+        )}
+
+        {/* === TABS === */}
         <div className="flex border-b border-gray-100 mb-4">
           {[
             { id: 'overview', label: 'Tổng quan' },
@@ -172,7 +321,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
           ))}
         </div>
 
-        {/* Tab content */}
+        {/* === TAB CONTENT === */}
         {loading ? (
           <div className="text-center py-8 text-gray-400">Đang tải...</div>
         ) : activeTab === 'overview' ? (
@@ -188,11 +337,14 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
                   <p className="font-medium text-gray-800">{order.product}</p>
                   <p className="text-sm text-gray-500">
                     {order.quantity} {order.unit} • {formatDate(order.order_date)}
+                    {order.discount_percent > 0 && (
+                      <span className="text-green-600"> • CK {order.discount_percent}%</span>
+                    )}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-gray-700">
-                    {formatMoney(order.quantity * order.unit_price)}
+                    {formatMoney(order.final_amount || order.quantity * order.unit_price)}
                   </span>
                   <ChevronRight size={16} className="text-gray-400" />
                 </div>
@@ -206,8 +358,8 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
           <div className="space-y-2">
             {report?.orders?.map((order) => {
               const delivered = sumBy(order.deliveries, 'quantity')
-              const paid = sumBy(order.payments?.filter(p => p.type === 'payment'), 'amount')
-              const total = order.quantity * order.unit_price
+              const paid = sumBy(order.payments?.filter(p => p.type === 'payment' || !p.type), 'amount')
+              const total = order.final_amount || (order.quantity * order.unit_price)
 
               return (
                 <button
@@ -220,6 +372,9 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
                       <p className="font-medium text-gray-800">{order.product}</p>
                       <p className="text-sm text-gray-500">
                         {order.quantity} {order.unit} × {formatMoney(order.unit_price)}
+                        {order.discount_percent > 0 && (
+                          <span className="text-green-600"> (-{order.discount_percent}%)</span>
+                        )}
                       </p>
                       <p className="text-xs text-gray-400 mt-1">{formatDate(order.order_date)}</p>
                     </div>

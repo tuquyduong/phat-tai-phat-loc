@@ -1,4 +1,4 @@
-import { format, formatDistanceToNow, isToday, isYesterday, parseISO, startOfMonth, endOfMonth, subMonths } from 'date-fns'
+import { format, formatDistanceToNow, isToday, isYesterday, parseISO, startOfMonth, endOfMonth, startOfQuarter, endOfQuarter, startOfYear, endOfYear, subMonths, subQuarters, subYears } from 'date-fns'
 import { vi } from 'date-fns/locale'
 
 // ============================================
@@ -31,7 +31,6 @@ export function formatMoney(amount) {
 export function formatMoneyFull(amount) {
   if (!amount && amount !== 0) return '0 đ'
   const num = Number(amount)
-  // Hỗ trợ số thập phân - hiển thị đúng 31,666.67đ
   return num.toLocaleString('vi-VN', { 
     minimumFractionDigits: 0,
     maximumFractionDigits: 2 
@@ -47,6 +46,18 @@ export function calcUnitPrice(totalAmount, quantity) {
 // Tính tổng tiền từ đơn giá
 export function calcTotalAmount(unitPrice, quantity) {
   return (unitPrice || 0) * (quantity || 0)
+}
+
+// Tính chiết khấu
+export function calcDiscount(amount, discountPercent) {
+  if (!discountPercent || discountPercent === 0) return 0
+  return (amount * discountPercent) / 100
+}
+
+// Tính thành tiền sau chiết khấu
+export function calcFinalAmount(amount, discountPercent) {
+  const discount = calcDiscount(amount, discountPercent)
+  return amount - discount
 }
 
 // ============================================
@@ -106,6 +117,10 @@ export function toInputDate(dateString) {
   return format(date, 'yyyy-MM-dd')
 }
 
+// ============================================
+// LỌC THỜI GIAN NÂNG CAO
+// ============================================
+
 // Lấy ngày đầu tháng
 export function getStartOfMonth(date = new Date()) {
   return startOfMonth(date)
@@ -116,9 +131,110 @@ export function getEndOfMonth(date = new Date()) {
   return endOfMonth(date)
 }
 
+// Lấy ngày đầu quý
+export function getStartOfQuarter(date = new Date()) {
+  return startOfQuarter(date)
+}
+
+// Lấy ngày cuối quý
+export function getEndOfQuarter(date = new Date()) {
+  return endOfQuarter(date)
+}
+
+// Lấy ngày đầu năm
+export function getStartOfYear(date = new Date()) {
+  return startOfYear(date)
+}
+
+// Lấy ngày cuối năm
+export function getEndOfYear(date = new Date()) {
+  return endOfYear(date)
+}
+
 // Lấy tháng trước
 export function getPreviousMonth(date = new Date(), months = 1) {
   return subMonths(date, months)
+}
+
+// Lấy quý trước
+export function getPreviousQuarter(date = new Date(), quarters = 1) {
+  return subQuarters(date, quarters)
+}
+
+// Lấy năm trước
+export function getPreviousYear(date = new Date(), years = 1) {
+  return subYears(date, years)
+}
+
+// Lấy số quý hiện tại (1-4)
+export function getCurrentQuarter(date = new Date()) {
+  return Math.ceil((date.getMonth() + 1) / 3)
+}
+
+// Format quý/năm
+export function formatQuarterYear(date = new Date()) {
+  const quarter = getCurrentQuarter(date)
+  const year = date.getFullYear()
+  return `Q${quarter}/${year}`
+}
+
+// Tạo date range theo preset
+export function getDateRangePreset(preset) {
+  const now = new Date()
+
+  switch (preset) {
+    case 'this_month':
+      return {
+        startDate: toInputDate(getStartOfMonth(now)),
+        endDate: toInputDate(getEndOfMonth(now)),
+        label: `Tháng ${format(now, 'MM/yyyy')}`
+      }
+    case 'last_month':
+      const lastMonth = getPreviousMonth(now)
+      return {
+        startDate: toInputDate(getStartOfMonth(lastMonth)),
+        endDate: toInputDate(getEndOfMonth(lastMonth)),
+        label: `Tháng ${format(lastMonth, 'MM/yyyy')}`
+      }
+    case 'this_quarter':
+      return {
+        startDate: toInputDate(getStartOfQuarter(now)),
+        endDate: toInputDate(getEndOfQuarter(now)),
+        label: formatQuarterYear(now)
+      }
+    case 'last_quarter':
+      const lastQuarter = getPreviousQuarter(now)
+      return {
+        startDate: toInputDate(getStartOfQuarter(lastQuarter)),
+        endDate: toInputDate(getEndOfQuarter(lastQuarter)),
+        label: formatQuarterYear(lastQuarter)
+      }
+    case 'this_year':
+      return {
+        startDate: toInputDate(getStartOfYear(now)),
+        endDate: toInputDate(getEndOfYear(now)),
+        label: `Năm ${now.getFullYear()}`
+      }
+    case 'last_year':
+      const lastYear = getPreviousYear(now)
+      return {
+        startDate: toInputDate(getStartOfYear(lastYear)),
+        endDate: toInputDate(getEndOfYear(lastYear)),
+        label: `Năm ${lastYear.getFullYear()}`
+      }
+    case 'all':
+      return {
+        startDate: '2020-01-01',
+        endDate: toInputDate(now),
+        label: 'Tất cả'
+      }
+    default:
+      return {
+        startDate: toInputDate(getStartOfMonth(now)),
+        endDate: toInputDate(getEndOfMonth(now)),
+        label: `Tháng ${format(now, 'MM/yyyy')}`
+      }
+  }
 }
 
 // ============================================
@@ -172,4 +288,71 @@ export function sortBy(array, key, desc = false) {
     if (desc) return bVal - aVal
     return aVal - bVal
   })
+}
+
+// ============================================
+// XUẤT EXCEL
+// ============================================
+
+// Chuyển data thành CSV string
+export function arrayToCSV(data, columns) {
+  if (!data || data.length === 0) return ''
+
+  // Header
+  const header = columns.map(col => col.label).join(',')
+
+  // Rows
+  const rows = data.map(item => {
+    return columns.map(col => {
+      let value = typeof col.key === 'function' ? col.key(item) : item[col.key]
+      // Escape quotes and wrap in quotes if contains comma
+      if (typeof value === 'string' && (value.includes(',') || value.includes('"'))) {
+        value = `"${value.replace(/"/g, '""')}"`
+      }
+      return value ?? ''
+    }).join(',')
+  })
+
+  return [header, ...rows].join('\n')
+}
+
+// Download CSV file
+export function downloadCSV(csvString, filename) {
+  // Add BOM for Excel to recognize UTF-8
+  const BOM = '\uFEFF'
+  const blob = new Blob([BOM + csvString], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${filename}.csv`
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
+}
+
+// Format số điện thoại
+export function formatPhone(phone) {
+  if (!phone) return ''
+  // Remove non-digits
+  const digits = phone.replace(/\D/g, '')
+  // Format: 0912 345 678
+  if (digits.length === 10) {
+    return `${digits.slice(0, 4)} ${digits.slice(4, 7)} ${digits.slice(7)}`
+  }
+  return phone
+}
+
+// Tạo link gọi điện
+export function getPhoneLink(phone) {
+  if (!phone) return ''
+  const digits = phone.replace(/\D/g, '')
+  return `tel:${digits}`
+}
+
+// Tạo link Zalo
+export function getZaloLink(phone) {
+  if (!phone) return ''
+  const digits = phone.replace(/\D/g, '')
+  return `https://zalo.me/${digits}`
 }

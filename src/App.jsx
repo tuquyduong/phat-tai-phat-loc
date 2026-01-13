@@ -19,7 +19,7 @@ import { ToastProvider, useToast } from './components/Toast'
 import { DashboardSkeleton, ListSkeleton } from './components/Skeleton'
 import PWAInstallPrompt from './components/PWAInstallPrompt'
 
-// Tabs - THÊM REPORTS
+// Tabs
 const TABS = {
   ALL: 'all',
   PENDING: 'pending',
@@ -54,7 +54,7 @@ function AppContent() {
   const [filterDate, setFilterDate] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
-  const [selectedCustomer, setSelectedCustomer] = useState(null) // MỚI - cho CustomerDetail
+  const [selectedCustomer, setSelectedCustomer] = useState(null)
   const [showCreateOrder, setShowCreateOrder] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
   const [dashboardDetail, setDashboardDetail] = useState(null)
@@ -175,13 +175,18 @@ function AppContent() {
     [orders]
   )
 
-  // MỚI - Handle chọn order từ modal khác (Reports, CustomerDetail)
+  // Handle chọn order từ modal khác (Reports, CustomerDetail)
   const handleSelectOrderFromModal = (order) => {
     setSelectedCustomer(null)
     setDashboardDetail(null)
     // Tìm order đầy đủ với payments, deliveries
     const fullOrder = orders.find(o => o.id === order.id) || order
     setSelectedOrder(fullOrder)
+  }
+
+  // Handle chọn customer
+  const handleSelectCustomer = (customer) => {
+    setSelectedCustomer(customer)
   }
 
   // Show loading
@@ -279,7 +284,7 @@ function AppContent() {
           </div>
         )}
 
-        {/* Tabs - THÊM NÚT BÁO CÁO */}
+        {/* Tabs */}
         <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
           <button
             onClick={() => setActiveTab(TABS.PENDING)}
@@ -311,7 +316,6 @@ function AppContent() {
           >
             Tất cả
           </button>
-          {/* MỚI - Tab Báo cáo */}
           <button
             onClick={() => setActiveTab(TABS.REPORTS)}
             className={`px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 ${
@@ -398,16 +402,15 @@ function AppContent() {
           </div>
         )}
 
-        {/* Content - THÊM REPORTS */}
+        {/* Content */}
         {loading ? (
           <ListSkeleton count={3} />
         ) : activeTab === TABS.REPORTS ? (
-          // MỚI - Tab Báo cáo
           <Reports
             orders={orders}
             customers={customers}
             onSelectOrder={handleSelectOrderFromModal}
-            onSelectCustomer={setSelectedCustomer}
+            onSelectCustomer={handleSelectCustomer}
           />
         ) : activeTab === TABS.DEBT ? (
           <DebtSummary
@@ -497,7 +500,6 @@ function AppContent() {
         }}
       />
 
-      {/* MỚI - Modal chi tiết khách hàng */}
       <CustomerDetail
         customer={selectedCustomer}
         isOpen={!!selectedCustomer}
