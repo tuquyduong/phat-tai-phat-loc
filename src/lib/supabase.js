@@ -379,3 +379,20 @@ export async function setPassword(password) {
     .upsert([{ key: 'app_password', value: password }])
   if (error) throw error
 }
+
+// Cleanup old orders (xóa đơn cũ)
+export async function cleanupOldOrders(daysOld = 365) {
+  const cutoffDate = new Date()
+  cutoffDate.setDate(cutoffDate.getDate() - daysOld)
+  const dateStr = cutoffDate.toISOString().split('T')[0]
+  
+  const { data, error } = await supabase
+    .from('orders')
+    .delete()
+    .eq('status', 'completed')
+    .lt('order_date', dateStr)
+    .select()
+  
+  if (error) throw error
+  return data?.length || 0
+}
