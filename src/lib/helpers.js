@@ -1,39 +1,71 @@
-import { format, formatDistanceToNow, isToday, isYesterday, parseISO } from 'date-fns'
+import { format, formatDistanceToNow, isToday, isYesterday, parseISO, startOfMonth, endOfMonth, subMonths } from 'date-fns'
 import { vi } from 'date-fns/locale'
 
-// Format tiền VND
+// ============================================
+// TIỀN TỆ
+// ============================================
+
+// Format tiền VND - Rút gọn (cho hiển thị compact)
 export function formatMoney(amount) {
   if (!amount && amount !== 0) return '0đ'
-  
+
   const num = Number(amount)
   if (num >= 1000000) {
-    return (num / 1000000).toFixed(1).replace('.0', '') + 'tr'
+    const formatted = (num / 1000000)
+    if (formatted === Math.floor(formatted)) {
+      return formatted + 'tr'
+    }
+    return formatted.toFixed(1) + 'tr'
   }
   if (num >= 1000) {
-    return (num / 1000).toFixed(0) + 'k'
+    const formatted = (num / 1000)
+    if (formatted === Math.floor(formatted)) {
+      return formatted + 'k'
+    }
+    return formatted.toFixed(1) + 'k'
   }
   return num.toLocaleString('vi-VN') + 'đ'
 }
 
-// Format tiền đầy đủ
+// Format tiền đầy đủ - Chính xác (cho form, báo cáo)
 export function formatMoneyFull(amount) {
   if (!amount && amount !== 0) return '0 đ'
-  return Number(amount).toLocaleString('vi-VN') + ' đ'
+  const num = Number(amount)
+  // Hỗ trợ số thập phân - hiển thị đúng 31,666.67đ
+  return num.toLocaleString('vi-VN', { 
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2 
+  }) + ' đ'
 }
+
+// Tính đơn giá từ tổng tiền
+export function calcUnitPrice(totalAmount, quantity) {
+  if (!quantity || quantity === 0) return 0
+  return totalAmount / quantity
+}
+
+// Tính tổng tiền từ đơn giá
+export function calcTotalAmount(unitPrice, quantity) {
+  return (unitPrice || 0) * (quantity || 0)
+}
+
+// ============================================
+// NGÀY THÁNG
+// ============================================
 
 // Format ngày thân thiện
 export function formatDate(dateString) {
   if (!dateString) return ''
-  
+
   const date = typeof dateString === 'string' ? parseISO(dateString) : dateString
-  
+
   if (isToday(date)) {
     return 'Hôm nay'
   }
   if (isYesterday(date)) {
     return 'Hôm qua'
   }
-  
+
   return format(date, 'dd/MM/yyyy', { locale: vi })
 }
 
@@ -51,6 +83,13 @@ export function formatDateFull(dateString) {
   return format(date, 'EEEE, dd/MM/yyyy', { locale: vi })
 }
 
+// Format tháng/năm
+export function formatMonthYear(dateString) {
+  if (!dateString) return ''
+  const date = typeof dateString === 'string' ? parseISO(dateString) : dateString
+  return format(date, 'MM/yyyy', { locale: vi })
+}
+
 // Thời gian tương đối
 export function formatTimeAgo(dateString) {
   if (!dateString) return ''
@@ -66,6 +105,25 @@ export function toInputDate(dateString) {
   const date = typeof dateString === 'string' ? parseISO(dateString) : dateString
   return format(date, 'yyyy-MM-dd')
 }
+
+// Lấy ngày đầu tháng
+export function getStartOfMonth(date = new Date()) {
+  return startOfMonth(date)
+}
+
+// Lấy ngày cuối tháng
+export function getEndOfMonth(date = new Date()) {
+  return endOfMonth(date)
+}
+
+// Lấy tháng trước
+export function getPreviousMonth(date = new Date(), months = 1) {
+  return subMonths(date, months)
+}
+
+// ============================================
+// TÍNH TOÁN
+// ============================================
 
 // Tính tổng từ array
 export function sumBy(array, key) {
@@ -92,4 +150,26 @@ export function getDebtColor(paid, total) {
   if (percent >= 100) return 'text-green-600'
   if (percent >= 50) return 'text-amber-600'
   return 'text-red-600'
+}
+
+// Group array theo key
+export function groupBy(array, key) {
+  return array?.reduce((groups, item) => {
+    const value = typeof key === 'function' ? key(item) : item[key]
+    if (!groups[value]) {
+      groups[value] = []
+    }
+    groups[value].push(item)
+    return groups
+  }, {}) || {}
+}
+
+// Sắp xếp array theo key
+export function sortBy(array, key, desc = false) {
+  return [...(array || [])].sort((a, b) => {
+    const aVal = typeof key === 'function' ? key(a) : a[key]
+    const bVal = typeof key === 'function' ? key(b) : b[key]
+    if (desc) return bVal - aVal
+    return aVal - bVal
+  })
 }

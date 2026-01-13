@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   Package, Plus, Search, Filter, X,
-  RefreshCw, LogOut, Settings
+  RefreshCw, LogOut, Settings, BarChart3
 } from 'lucide-react'
 import { getOrders, getCustomers, getProducts, checkPassword } from './lib/supabase'
 import Login from './components/Login'
@@ -13,15 +13,18 @@ import DebtSummary from './components/DebtSummary'
 import Alerts from './components/Alerts'
 import SettingsModal from './components/SettingsModal'
 import DashboardDetail from './components/DashboardDetail'
+import CustomerDetail from './components/CustomerDetail'
+import Reports from './components/Reports'
 import { ToastProvider, useToast } from './components/Toast'
 import { DashboardSkeleton, ListSkeleton } from './components/Skeleton'
 import PWAInstallPrompt from './components/PWAInstallPrompt'
 
-// Tabs
+// Tabs - THÊM REPORTS
 const TABS = {
   ALL: 'all',
   PENDING: 'pending',
-  DEBT: 'debt'
+  DEBT: 'debt',
+  REPORTS: 'reports'
 }
 
 // Default settings
@@ -51,9 +54,10 @@ function AppContent() {
   const [filterDate, setFilterDate] = useState('')
   const [showFilters, setShowFilters] = useState(false)
   const [selectedOrder, setSelectedOrder] = useState(null)
+  const [selectedCustomer, setSelectedCustomer] = useState(null) // MỚI - cho CustomerDetail
   const [showCreateOrder, setShowCreateOrder] = useState(false)
   const [showSettings, setShowSettings] = useState(false)
-  const [dashboardDetail, setDashboardDetail] = useState(null) // 'pending' | 'delivery' | 'debt' | 'debtors'
+  const [dashboardDetail, setDashboardDetail] = useState(null)
 
   // Settings state
   const [settings, setSettings] = useState(() => {
@@ -171,6 +175,15 @@ function AppContent() {
     [orders]
   )
 
+  // MỚI - Handle chọn order từ modal khác (Reports, CustomerDetail)
+  const handleSelectOrderFromModal = (order) => {
+    setSelectedCustomer(null)
+    setDashboardDetail(null)
+    // Tìm order đầy đủ với payments, deliveries
+    const fullOrder = orders.find(o => o.id === order.id) || order
+    setSelectedOrder(fullOrder)
+  }
+
   // Show loading
   if (checkingAuth) {
     return (
@@ -196,7 +209,7 @@ function AppContent() {
                 <Package className="text-white" size={20} />
               </div>
               <div>
-                <h1 className="font-bold text-gray-800">Quản Lý Đơn Hàng</h1>
+                <h1 className="font-bold text-gray-800">Chi Mai - Phát Tài Phát Lộc</h1>
                 <p className="text-xs text-gray-400">
                   {pendingOrders.length} đơn đang xử lý
                 </p>
@@ -242,8 +255,8 @@ function AppContent() {
           </div>
         )}
 
-        {/* Alerts */}
-        {!loading && pendingOrders.length > 0 && (
+        {/* Alerts - Ẩn khi ở tab Báo cáo */}
+        {!loading && pendingOrders.length > 0 && activeTab !== TABS.REPORTS && (
           <Alerts
             orders={pendingOrders}
             settings={settings}
@@ -252,19 +265,21 @@ function AppContent() {
           />
         )}
 
-        {/* Dashboard - Clickable */}
-        <div className="mb-4">
-          {loading ? (
-            <DashboardSkeleton />
-          ) : (
-            <Dashboard 
-              orders={orders} 
-              onCardClick={setDashboardDetail}
-            />
-          )}
-        </div>
+        {/* Dashboard - Ẩn khi ở tab Báo cáo */}
+        {activeTab !== TABS.REPORTS && (
+          <div className="mb-4">
+            {loading ? (
+              <DashboardSkeleton />
+            ) : (
+              <Dashboard 
+                orders={orders} 
+                onCardClick={setDashboardDetail}
+              />
+            )}
+          </div>
+        )}
 
-        {/* Tabs */}
+        {/* Tabs - THÊM NÚT BÁO CÁO */}
         <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
           <button
             onClick={() => setActiveTab(TABS.PENDING)}
@@ -296,10 +311,22 @@ function AppContent() {
           >
             Tất cả
           </button>
+          {/* MỚI - Tab Báo cáo */}
+          <button
+            onClick={() => setActiveTab(TABS.REPORTS)}
+            className={`px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-colors flex items-center gap-1.5 ${
+              activeTab === TABS.REPORTS
+                ? 'bg-green-500 text-white shadow-md'
+                : 'bg-white text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            <BarChart3 size={16} />
+            Báo cáo
+          </button>
         </div>
 
-        {/* Search & Filter */}
-        {activeTab !== TABS.DEBT && (
+        {/* Search & Filter - Ẩn khi ở tab Công nợ và Báo cáo */}
+        {activeTab !== TABS.DEBT && activeTab !== TABS.REPORTS && (
           <div className="mb-4 space-y-3">
             <div className="flex gap-2">
               <div className="flex-1 relative">
@@ -371,9 +398,17 @@ function AppContent() {
           </div>
         )}
 
-        {/* Content */}
+        {/* Content - THÊM REPORTS */}
         {loading ? (
           <ListSkeleton count={3} />
+        ) : activeTab === TABS.REPORTS ? (
+          // MỚI - Tab Báo cáo
+          <Reports
+            orders={orders}
+            customers={customers}
+            onSelectOrder={handleSelectOrderFromModal}
+            onSelectCustomer={setSelectedCustomer}
+          />
         ) : activeTab === TABS.DEBT ? (
           <DebtSummary
             orders={orders}
@@ -460,6 +495,15 @@ function AppContent() {
           setDashboardDetail(null)
           setSelectedOrder(order)
         }}
+      />
+
+      {/* MỚI - Modal chi tiết khách hàng */}
+      <CustomerDetail
+        customer={selectedCustomer}
+        isOpen={!!selectedCustomer}
+        onClose={() => setSelectedCustomer(null)}
+        onUpdate={loadData}
+        onSelectOrder={handleSelectOrderFromModal}
       />
 
       <PWAInstallPrompt />
