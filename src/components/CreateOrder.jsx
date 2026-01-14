@@ -530,24 +530,11 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
           />
         </div>
 
-        {/* === CHIẾT KHẤU, PHÍ SHIP & SỐ DƯ === */}
+        {/* === PHÍ SHIP & CHIẾT KHẤU === */}
         {grossTotal > 0 && (
           <div className="space-y-3">
-            {/* Toggle mở rộng */}
-            <button
-              type="button"
-              onClick={() => setShowAdvanced(!showAdvanced)}
-              className="w-full flex items-center justify-between p-3 bg-gray-50 rounded-xl text-sm"
-            >
-              <span className="flex items-center gap-2 text-gray-700">
-                <Percent size={16} />
-                Chiết khấu, Phí ship & Thanh toán
-              </span>
-              {showAdvanced ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
-            </button>
-
-            {showAdvanced && (
-              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+            {/* MỚI: Hiện luôn phí ship và chiết khấu (không cần toggle) */}
+            <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 {/* Chiết khấu */}
                 <div>
                   <label className="block text-sm text-gray-600 mb-2">Chiết khấu đơn hàng</label>
@@ -623,7 +610,6 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                   </div>
                 )}
               </div>
-            )}
           </div>
         )}
 

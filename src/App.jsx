@@ -31,6 +31,7 @@ const TABS = {
 const DEFAULT_SETTINGS = {
   deliveryAlertDays: 3,
   paymentAlertDays: 7,
+  birthdayAlertDays: 7,  // MỚI: Cảnh báo sinh nhật
 }
 
 function AppContent() {
@@ -135,6 +136,18 @@ function AppContent() {
     localStorage.setItem('order_tracker_settings', JSON.stringify(newSettings))
   }
 
+  // MỚI: Click header về home
+  const handleGoHome = () => {
+    setActiveTab(TABS.PENDING)
+    setSearchQuery('')
+    setFilterCustomer('')
+    setFilterDate('')
+    setShowFilters(false)
+    setSelectedOrder(null)
+    setSelectedCustomer(null)
+    setDashboardDetail(null)
+  }
+
   // Filter orders
   const filteredOrders = useMemo(() => {
     let result = [...orders]
@@ -209,17 +222,21 @@ function AppContent() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-2xl mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            {/* MỚI: Click vào header để về home */}
+            <button 
+              onClick={handleGoHome}
+              className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+            >
               <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 rounded-xl flex items-center justify-center shadow-md">
                 <Package className="text-white" size={20} />
               </div>
-              <div>
+              <div className="text-left">
                 <h1 className="font-bold text-gray-800">Chi Mai - Phát Tài Phát Lộc</h1>
                 <p className="text-xs text-gray-400">
                   {pendingOrders.length} đơn đang xử lý
                 </p>
               </div>
-            </div>
+            </button>
             <div className="flex items-center gap-2">
               <button
                 onClick={() => loadData(true)}
@@ -248,40 +265,26 @@ function AppContent() {
         </div>
       </header>
 
-      {/* Main content */}
-      <main className="max-w-2xl mx-auto px-4 py-4 pb-24">
-        {/* Error message */}
-        {error && (
-          <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl text-red-600 flex items-center justify-between">
-            <span>{error}</span>
-            <button onClick={() => loadData()} className="font-medium hover:underline">
-              Thử lại
-            </button>
-          </div>
-        )}
-
-        {/* Alerts - Ẩn khi ở tab Báo cáo */}
-        {!loading && pendingOrders.length > 0 && activeTab !== TABS.REPORTS && (
-          <Alerts
-            orders={pendingOrders}
-            settings={settings}
-            onSelectOrder={setSelectedOrder}
-            onOpenSettings={() => setShowSettings(true)}
+      {/* Main Content */}
+      <main className="max-w-2xl mx-auto px-4 py-4">
+        {/* Dashboard - Chỉ hiện ở tab Đang xử lý */}
+        {activeTab === TABS.PENDING && !loading && (
+          <Dashboard 
+            orders={orders} 
+            onDetailClick={setDashboardDetail}
           />
         )}
 
-        {/* Dashboard - Ẩn khi ở tab Báo cáo */}
-        {activeTab !== TABS.REPORTS && (
-          <div className="mb-4">
-            {loading ? (
-              <DashboardSkeleton />
-            ) : (
-              <Dashboard 
-                orders={orders} 
-                onCardClick={setDashboardDetail}
-              />
-            )}
-          </div>
+        {/* Alerts - Chỉ hiện ở tab Đang xử lý */}
+        {activeTab === TABS.PENDING && !loading && pendingOrders.length > 0 && (
+          <Alerts
+            orders={pendingOrders}
+            customers={customers}
+            settings={settings}
+            onSelectOrder={setSelectedOrder}
+            onSelectCustomer={handleSelectCustomer}
+            onOpenSettings={() => setShowSettings(true)}
+          />
         )}
 
         {/* Tabs */}
@@ -487,6 +490,7 @@ function AppContent() {
         settings={settings}
         onSaveSettings={handleSaveSettings}
         onDataChanged={loadData}
+        onSelectCustomer={handleSelectCustomer}
       />
 
       <DashboardDetail

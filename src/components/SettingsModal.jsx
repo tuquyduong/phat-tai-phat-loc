@@ -1,23 +1,25 @@
 import { useState, useEffect } from 'react'
 import { 
   Bell, Truck, Wallet, Lock, Save, Trash2, 
-  Package, Plus, Users, Edit2, Check
+  Package, Plus, Users, Edit2, Check, X, Cake,
+  Phone, Percent, ChevronRight
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
 import { 
   setPassword, cleanupOldOrders, 
   getProducts, createProduct, updateProduct, deleteProduct,
-  getCustomers, deleteCustomer 
+  getCustomers, createCustomer, updateCustomer, deleteCustomer 
 } from '../lib/supabase'
-import { formatMoney } from '../lib/helpers'
+import { formatMoney, formatBirthday } from '../lib/helpers'
 
 export default function SettingsModal({ 
   isOpen, 
   onClose, 
   settings, 
   onSaveSettings,
-  onDataChanged
+  onDataChanged,
+  onSelectCustomer  // MỚI: Callback để mở CustomerDetail
 }) {
   const toast = useToast()
   const [activeTab, setActiveTab] = useState('alerts')
@@ -35,14 +37,17 @@ export default function SettingsModal({
 
   // Customers state
   const [customers, setCustomers] = useState([])
+  const [showAddCustomer, setShowAddCustomer] = useState(false)
+  const [customerForm, setCustomerForm] = useState({ name: '', phone: '', discount_percent: '', birthday: '' })
 
   // Load data when modal opens
   useEffect(() => {
     if (isOpen) {
       loadProducts()
       loadCustomers()
+      setLocalSettings(settings)
     }
-  }, [isOpen])
+  }, [isOpen, settings])
 
   const loadProducts = async () => {
     try {
@@ -95,7 +100,13 @@ export default function SettingsModal({
     }
   }
 
+  // TẠM TẮT: Chức năng dọn dẹp
   const handleCleanup = async () => {
+    toast.warning('Chức năng này đang tạm thời bị vô hiệu hóa')
+    return
+
+    // Code cũ - giữ lại để sau này dùng
+    /*
     if (!confirm(`Xóa tất cả đơn đã hoàn thành hơn ${cleanupDays} ngày?`)) return
 
     setLoading(true)
@@ -108,6 +119,7 @@ export default function SettingsModal({
     } finally {
       setLoading(false)
     }
+    */
   }
 
   // Product handlers
@@ -184,7 +196,32 @@ export default function SettingsModal({
     setShowAddProduct(false)
   }
 
-  // Customer handlers
+  // MỚI: Customer handlers
+  const handleAddCustomer = async () => {
+    if (!customerForm.name.trim()) {
+      toast.warning('Vui lòng nhập tên khách hàng')
+      return
+    }
+    setLoading(true)
+    try {
+      await createCustomer({
+        name: customerForm.name.trim(),
+        phone: customerForm.phone.trim() || null,
+        discount_percent: Number(customerForm.discount_percent) || 0,
+        birthday: customerForm.birthday || null
+      })
+      toast.success('Đã thêm khách hàng')
+      setCustomerForm({ name: '', phone: '', discount_percent: '', birthday: '' })
+      setShowAddCustomer(false)
+      loadCustomers()
+      onDataChanged?.()
+    } catch (err) {
+      toast.error('Lỗi: ' + err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleDeleteCustomer = async (id, name) => {
     if (!confirm(`Xóa khách hàng "${name}" và TẤT CẢ đơn hàng của họ?`)) return
     try {
@@ -195,6 +232,12 @@ export default function SettingsModal({
     } catch (err) {
       toast.error('Lỗi: ' + err.message)
     }
+  }
+
+  // MỚI: Click vào khách để xem chi tiết
+  const handleCustomerClick = (customer) => {
+    onClose()
+    onSelectCustomer?.(customer)
   }
 
   const tabs = [
@@ -270,6 +313,28 @@ export default function SettingsModal({
               </div>
             </div>
 
+            {/* MỚI: Cảnh báo sinh nhật */}
+            <div>
+              <label className="flex items-center gap-2 text-sm font-medium text-gray-700 mb-2">
+                <Cake size={16} className="text-pink-500" />
+                Nhắc sinh nhật trước
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={localSettings.birthdayAlertDays || 7}
+                  onChange={(e) => setLocalSettings(prev => ({
+                    ...prev,
+                    birthdayAlertDays: Number(e.target.value) || 7
+                  }))}
+                  className="w-20 px-3 py-2 border border-gray-200 rounded-lg text-center"
+                  min="1"
+                  max="30"
+                />
+                <span className="text-gray-600">ngày</span>
+              </div>
+            </div>
+
             <button
               onClick={handleSave}
               className="w-full py-2.5 bg-green-500 text-white font-medium rounded-xl hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
@@ -288,7 +353,7 @@ export default function SettingsModal({
             </p>
 
             {/* Product list */}
-            <div className="space-y-2">
+            <div className="space-y-2 max-h-64 overflow-y-auto">
               {products.map((product) => (
                 <div
                   key={product.id}
@@ -453,38 +518,143 @@ export default function SettingsModal({
           </div>
         )}
 
-        {/* Tab: Customers */}
+        {/* Tab: Customers - CẬP NHẬT */}
         {activeTab === 'customers' && (
           <div className="space-y-4">
             <p className="text-sm text-gray-500">
-              Xóa khách hàng sẽ xóa luôn tất cả đơn hàng của họ
+              Bấm vào khách hàng để xem/sửa chi tiết
             </p>
 
+            {/* Customer list */}
             <div className="space-y-2 max-h-64 overflow-y-auto">
               {customers.map((customer) => (
                 <div
                   key={customer.id}
-                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition-colors"
                 >
-                  <div>
-                    <p className="font-medium text-gray-800">{customer.name}</p>
-                    {customer.phone && (
-                      <p className="text-sm text-gray-500">{customer.phone}</p>
-                    )}
-                  </div>
+                  {/* MỚI: Click để xem chi tiết */}
                   <button
-                    onClick={() => handleDeleteCustomer(customer.id, customer.name)}
-                    className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                    onClick={() => handleCustomerClick(customer)}
+                    className="flex-1 text-left flex items-center gap-3"
                   >
-                    <Trash2 size={16} />
+                    <div className="w-10 h-10 bg-gradient-to-br from-green-500 to-emerald-600 rounded-full flex items-center justify-center text-white font-bold">
+                      {customer.name?.charAt(0)?.toUpperCase()}
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-800">{customer.name}</p>
+                      <div className="flex items-center gap-2 text-sm text-gray-500">
+                        {customer.phone && (
+                          <span className="flex items-center gap-1">
+                            <Phone size={12} />
+                            {customer.phone}
+                          </span>
+                        )}
+                        {customer.discount_percent > 0 && (
+                          <span className="flex items-center gap-1 text-green-600">
+                            <Percent size={12} />
+                            {customer.discount_percent}%
+                          </span>
+                        )}
+                        {customer.birthday && (
+                          <span className="flex items-center gap-1 text-pink-600">
+                            <Cake size={12} />
+                            {formatBirthday(customer.birthday)}
+                          </span>
+                        )}
+                      </div>
+                    </div>
                   </button>
+                  <div className="flex items-center gap-1">
+                    <ChevronRight size={18} className="text-gray-400" />
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleDeleteCustomer(customer.id, customer.name)
+                      }}
+                      className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
               ))}
 
-              {customers.length === 0 && (
+              {customers.length === 0 && !showAddCustomer && (
                 <p className="text-center text-gray-400 py-4">Chưa có khách hàng</p>
               )}
             </div>
+
+            {/* MỚI: Add customer form */}
+            {showAddCustomer && (
+              <div className="p-3 bg-green-50 rounded-lg space-y-2">
+                <input
+                  type="text"
+                  value={customerForm.name}
+                  onChange={(e) => setCustomerForm(prev => ({ ...prev, name: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  placeholder="Tên khách hàng *"
+                  autoFocus
+                />
+                <input
+                  type="tel"
+                  value={customerForm.phone}
+                  onChange={(e) => setCustomerForm(prev => ({ ...prev, phone: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  placeholder="Số điện thoại"
+                />
+                <div className="flex gap-2">
+                  <div className="flex items-center gap-1 flex-1">
+                    <Percent size={14} className="text-gray-400" />
+                    <input
+                      type="number"
+                      value={customerForm.discount_percent}
+                      onChange={(e) => setCustomerForm(prev => ({ ...prev, discount_percent: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                      placeholder="CK %"
+                      min="0"
+                      max="100"
+                    />
+                  </div>
+                  <div className="flex items-center gap-1 flex-1">
+                    <Cake size={14} className="text-pink-400" />
+                    <input
+                      type="date"
+                      value={customerForm.birthday}
+                      onChange={(e) => setCustomerForm(prev => ({ ...prev, birthday: e.target.value }))}
+                      className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                    />
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={handleAddCustomer}
+                    disabled={loading}
+                    className="flex-1 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600"
+                  >
+                    Thêm khách
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowAddCustomer(false)
+                      setCustomerForm({ name: '', phone: '', discount_percent: '', birthday: '' })
+                    }}
+                    className="px-4 py-2 bg-white text-gray-600 text-sm font-medium rounded-lg hover:bg-gray-100"
+                  >
+                    Hủy
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {!showAddCustomer && (
+              <button
+                onClick={() => setShowAddCustomer(true)}
+                className="w-full py-2.5 border-2 border-dashed border-gray-300 text-gray-500 font-medium rounded-xl hover:border-green-500 hover:text-green-600 transition-colors flex items-center justify-center gap-2"
+              >
+                <Plus size={18} />
+                Thêm khách hàng mới
+              </button>
+            )}
           </div>
         )}
 
@@ -519,14 +689,14 @@ export default function SettingsModal({
               </div>
             </div>
 
-            {/* Cleanup */}
+            {/* Cleanup - TẠM TẮT */}
             <div>
               <h3 className="font-semibold text-gray-800 mb-3">Dọn dẹp dữ liệu</h3>
-              <div className="p-3 bg-red-50 rounded-lg">
-                <p className="text-sm text-red-700 mb-3">
-                  Xóa đơn hàng đã hoàn thành để giảm dung lượng
+              <div className="p-3 bg-gray-100 rounded-lg">
+                <p className="text-sm text-gray-500 mb-3">
+                  ⚠️ Chức năng này đang tạm thời bị vô hiệu hóa
                 </p>
-                <div className="flex items-center gap-2 mb-3">
+                <div className="flex items-center gap-2 mb-3 opacity-50">
                   <span className="text-sm text-gray-600">Xóa đơn hoàn thành hơn</span>
                   <input
                     type="number"
@@ -534,15 +704,16 @@ export default function SettingsModal({
                     onChange={(e) => setCleanupDays(Number(e.target.value) || 30)}
                     className="w-16 px-2 py-1 border border-gray-200 rounded text-center text-sm"
                     min="7"
+                    disabled
                   />
                   <span className="text-sm text-gray-600">ngày</span>
                 </div>
                 <button
                   onClick={handleCleanup}
-                  disabled={loading}
-                  className="px-4 py-2 bg-red-500 text-white text-sm font-medium rounded-lg hover:bg-red-600 disabled:opacity-50 transition-colors"
+                  disabled={true}
+                  className="px-4 py-2 bg-gray-400 text-white text-sm font-medium rounded-lg cursor-not-allowed"
                 >
-                  {loading ? 'Đang xóa...' : 'Dọn dẹp ngay'}
+                  Tạm thời vô hiệu
                 </button>
               </div>
             </div>
