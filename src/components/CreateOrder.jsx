@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { 
   User, Package, Calendar, Plus, X, Trash2, Calculator, 
-  Percent, Wallet, ChevronDown, ChevronUp 
+  Percent, Wallet, ChevronDown, ChevronUp, Truck
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
@@ -42,6 +42,9 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
   const [useBalance, setUseBalance] = useState(false)
   const [balanceToUse, setBalanceToUse] = useState(0)
 
+  // MỚI: Phí ship
+  const [shippingFee, setShippingFee] = useState(0)
+
   // Order date
   const [orderDate, setOrderDate] = useState(toInputDate())
 
@@ -71,8 +74,11 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
   const grossTotal = calcGrossTotal()
   const discountAmount = calcDiscount(grossTotal, discountPercent)
   const afterDiscount = grossTotal - discountAmount
-  const actualBalanceToUse = useBalance ? Math.min(balanceToUse, selectedCustomer?.balance || 0, afterDiscount) : 0
-  const finalTotal = afterDiscount - actualBalanceToUse
+  // SỬA: Cộng thêm phí ship
+  const afterShipping = afterDiscount + Number(shippingFee || 0)
+  const actualBalanceToUse = useBalance ? Math.min(balanceToUse, selectedCustomer?.balance || 0, afterShipping) : 0
+  // SỬA: finalTotal đã bao gồm ship
+  const finalTotal = afterShipping - actualBalanceToUse
 
   const resetForm = () => {
     setCustomerId('')
@@ -84,6 +90,7 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
     setDiscountPercent(0)
     setUseBalance(false)
     setBalanceToUse(0)
+    setShippingFee(0)  // MỚI: Reset ship
     setOrderDate(toInputDate())
     setShowNewCustomer(false)
     setShowAdvanced(false)
@@ -200,8 +207,12 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
         finalCustomerId = newCustomer.id
       }
 
+      // SỬA: Chia đều phí ship cho các đơn hàng (hoặc gán cho đơn đầu tiên)
+      const shipPerOrder = validItems.length > 1 ? 0 : Number(shippingFee) || 0
+      const shipForFirstOrder = validItems.length > 1 ? Number(shippingFee) || 0 : 0
+
       // Chuẩn bị danh sách đơn hàng
-      const ordersToCreate = validItems.map(item => {
+      const ordersToCreate = validItems.map((item, index) => {
         const unitPrice = Number(item.unitPrice) || calcUnitPrice(Number(item.totalPrice), Number(item.quantity))
         return {
           customer_id: finalCustomerId,
@@ -210,6 +221,8 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
           unit: item.unit.trim() || 'gói',
           unit_price: unitPrice,
           discount_percent: discountPercent,
+          // MỚI: Thêm shipping_fee (chỉ đơn đầu tiên có ship nếu nhiều đơn)
+          shipping_fee: index === 0 ? (shipPerOrder || shipForFirstOrder) : 0,
           order_date: orderDate,
           status: 'pending'
         }
@@ -517,7 +530,7 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
           />
         </div>
 
-        {/* === CHIẾT KHẤU & SỐ DƯ === */}
+        {/* === CHIẾT KHẤU, PHÍ SHIP & SỐ DƯ === */}
         {grossTotal > 0 && (
           <div className="space-y-3">
             {/* Toggle mở rộng */}
@@ -528,7 +541,7 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
             >
               <span className="flex items-center gap-2 text-gray-700">
                 <Percent size={16} />
-                Chiết khấu & Thanh toán
+                Chiết khấu, Phí ship & Thanh toán
               </span>
               {showAdvanced ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
             </button>
@@ -556,6 +569,25 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                   )}
                 </div>
 
+                {/* MỚI: Phí ship */}
+                <div>
+                  <label className="block text-sm text-gray-600 mb-2 flex items-center gap-1">
+                    <Truck size={14} />
+                    Phí ship
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      value={shippingFee}
+                      onChange={(e) => setShippingFee(Math.max(0, Number(e.target.value)))}
+                      min="0"
+                      placeholder="0"
+                      className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                    />
+                    <span className="text-gray-500">đ</span>
+                  </div>
+                </div>
+
                 {/* Trừ số dư */}
                 {selectedCustomer?.balance > 0 && (
                   <div>
@@ -566,7 +598,7 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                         onChange={(e) => {
                           setUseBalance(e.target.checked)
                           if (e.target.checked) {
-                            setBalanceToUse(Math.min(selectedCustomer.balance, afterDiscount))
+                            setBalanceToUse(Math.min(selectedCustomer.balance, afterShipping))
                           }
                         }}
                         className="rounded border-gray-300 text-green-500 focus:ring-green-500"
@@ -580,9 +612,9 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                         <input
                           type="number"
                           value={balanceToUse}
-                          onChange={(e) => setBalanceToUse(Math.min(selectedCustomer.balance, afterDiscount, Number(e.target.value)))}
+                          onChange={(e) => setBalanceToUse(Math.min(selectedCustomer.balance, afterShipping, Number(e.target.value)))}
                           min="0"
-                          max={Math.min(selectedCustomer.balance, afterDiscount)}
+                          max={Math.min(selectedCustomer.balance, afterShipping)}
                           className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
                         />
                         <span className="text-gray-500">đ</span>
@@ -607,6 +639,17 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
               <div className="flex justify-between text-sm text-green-600">
                 <span>Chiết khấu {discountPercent}%:</span>
                 <span>-{formatMoneyFull(discountAmount)}</span>
+              </div>
+            )}
+
+            {/* MỚI: Hiển thị phí ship */}
+            {Number(shippingFee) > 0 && (
+              <div className="flex justify-between text-sm text-gray-600">
+                <span className="flex items-center gap-1">
+                  <Truck size={12} />
+                  Phí ship:
+                </span>
+                <span>+{formatMoneyFull(shippingFee)}</span>
               </div>
             )}
 

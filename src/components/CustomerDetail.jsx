@@ -2,12 +2,12 @@ import { useState, useEffect } from 'react'
 import { 
   User, Phone, Wallet, Plus, X, Edit2, Save,
   Package, ChevronRight, ArrowDownCircle, ArrowUpCircle,
-  Percent, MessageCircle
+  Percent, MessageCircle, Cake
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
 import { getCustomerReport, depositToCustomer, updateCustomer } from '../lib/supabase'
-import { formatMoney, formatMoneyFull, formatDate, sumBy, getPhoneLink, getZaloLink } from '../lib/helpers'
+import { formatMoney, formatMoneyFull, formatDate, sumBy, getPhoneLink, getZaloLink, formatBirthday } from '../lib/helpers'
 
 export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, onSelectOrder }) {
   const toast = useToast()
@@ -21,6 +21,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
   const [editPhone, setEditPhone] = useState('')
   const [editDiscount, setEditDiscount] = useState('')
   const [editNote, setEditNote] = useState('')
+  const [editBirthday, setEditBirthday] = useState('')  // MỚI
 
   // Deposit form
   const [showDeposit, setShowDeposit] = useState(false)
@@ -34,6 +35,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
       setEditPhone(customer.phone || '')
       setEditDiscount(customer.discount_percent?.toString() || '0')
       setEditNote(customer.note || '')
+      setEditBirthday(customer.birthday || '')  // MỚI
     }
   }, [isOpen, customer?.id])
 
@@ -71,6 +73,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
     }
   }
 
+  // SỬA: Thêm birthday vào handleSaveEdit
   const handleSaveEdit = async () => {
     if (!editName.trim()) {
       toast.warning('Tên khách hàng không được để trống')
@@ -83,7 +86,8 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
         name: editName.trim(),
         phone: editPhone.trim() || null,
         discount_percent: Number(editDiscount) || 0,
-        note: editNote.trim() || null
+        note: editNote.trim() || null,
+        birthday: editBirthday || null  // MỚI
       })
       toast.success('Đã cập nhật thông tin khách hàng')
       setIsEditing(false)
@@ -101,6 +105,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
   // Thống kê
   const currentBalance = report?.customer?.balance || customer?.balance || 0
   const currentDiscount = report?.customer?.discount_percent || customer?.discount_percent || 0
+  const currentBirthday = report?.customer?.birthday || customer?.birthday  // MỚI
   const totalOrders = report?.orders?.length || 0
 
   // Tính doanh thu (sử dụng final_amount nếu có, không thì tính từ quantity * unit_price)
@@ -110,8 +115,9 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
     return sum + (Number(o.final_amount) || (o.quantity * o.unit_price))
   }, 0) || 0
 
+  // SỬA: Thêm balance_used vào filter payments
   const totalPaid = report?.orders?.reduce((sum, o) => {
-    const payments = o.payments?.filter(p => p.type === 'payment' || !p.type) || []
+    const payments = o.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type) || []
     return sum + sumBy(payments, 'amount')
   }, 0) || 0
 
@@ -157,6 +163,13 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
                     Chiết khấu: {currentDiscount}%
                   </p>
                 )}
+                {/* MỚI: Hiển thị ngày sinh */}
+                {currentBirthday && (
+                  <p className="text-sm text-pink-600 flex items-center gap-1 mt-1">
+                    <Cake size={14} />
+                    Sinh nhật: {formatBirthday(currentBirthday)}
+                  </p>
+                )}
               </div>
             ) : (
               <div className="flex-1 space-y-2">
@@ -185,6 +198,16 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
                     className="w-20 px-3 py-2 border border-gray-200 rounded-lg text-sm"
                   />
                   <span className="text-gray-500 text-sm">% chiết khấu</span>
+                </div>
+                {/* MỚI: Input ngày sinh */}
+                <div className="flex items-center gap-2">
+                  <Cake size={16} className="text-pink-500" />
+                  <input
+                    type="date"
+                    value={editBirthday}
+                    onChange={(e) => setEditBirthday(e.target.value)}
+                    className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  />
                 </div>
               </div>
             )}
@@ -358,7 +381,8 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
           <div className="space-y-2">
             {report?.orders?.map((order) => {
               const delivered = sumBy(order.deliveries, 'quantity')
-              const paid = sumBy(order.payments?.filter(p => p.type === 'payment' || !p.type), 'amount')
+              // SỬA: Thêm balance_used vào filter
+              const paid = sumBy(order.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type), 'amount')
               const total = order.final_amount || (order.quantity * order.unit_price)
 
               return (
@@ -395,7 +419,8 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
           </div>
         ) : activeTab === 'transactions' ? (
           <div className="space-y-2">
-            {report?.transactions?.filter(t => ['deposit', 'withdraw', 'refund'].includes(t.type)).map((trans) => (
+            {/* SỬA: Thêm balance_used vào filter */}
+            {report?.transactions?.filter(t => ['deposit', 'withdraw', 'balance_used', 'refund'].includes(t.type)).map((trans) => (
               <div key={trans.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                 <div className="flex items-center gap-3">
                   {trans.type === 'deposit' ? (
@@ -421,7 +446,8 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
                 </span>
               </div>
             ))}
-            {(!report?.transactions || report.transactions.filter(t => ['deposit', 'withdraw'].includes(t.type)).length === 0) && (
+            {/* SỬA: Thêm balance_used vào filter check */}
+            {(!report?.transactions || report.transactions.filter(t => ['deposit', 'withdraw', 'balance_used'].includes(t.type)).length === 0) && (
               <p className="text-center text-gray-400 py-4">Chưa có giao dịch số dư</p>
             )}
           </div>

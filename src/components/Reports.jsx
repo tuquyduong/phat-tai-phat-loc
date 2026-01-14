@@ -78,8 +78,9 @@ export default function Reports({ orders, customers, onSelectOrder, onSelectCust
       return sum + (Number(o.final_amount) || (o.quantity * o.unit_price))
     }, 0)
 
+    // SỬA: Thêm balance_used vào filter
     const totalPaid = filteredOrders.reduce((sum, o) => {
-      const payments = o.payments?.filter(p => p.type === 'payment' || !p.type) || []
+      const payments = o.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type) || []
       return sum + sumBy(payments, 'amount')
     }, 0)
 
@@ -111,8 +112,9 @@ export default function Reports({ orders, customers, onSelectOrder, onSelectCust
       const totalAmount = customerOrders.reduce((sum, o) => {
         return sum + (Number(o.final_amount) || (o.quantity * o.unit_price))
       }, 0)
+      // SỬA: Thêm balance_used vào filter
       const totalPaid = customerOrders.reduce((sum, o) => {
-        const payments = o.payments?.filter(p => p.type === 'payment' || !p.type) || []
+        const payments = o.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type) || []
         return sum + sumBy(payments, 'amount')
       }, 0)
       const totalDiscount = customerOrders.reduce((sum, o) => sum + (Number(o.discount_amount) || 0), 0)
@@ -277,7 +279,9 @@ export default function Reports({ orders, customers, onSelectOrder, onSelectCust
           discountPercent: o.discount_percent || 0,
           discountAmount: o.discount_amount || 0,
           finalAmount: o.final_amount || (o.quantity * o.unit_price),
-          paid: sumBy(o.payments?.filter(p => p.type === 'payment' || !p.type) || [], 'amount'),
+          // SỬA: Thêm balance_used vào filter và thêm cột shipping
+          paid: sumBy(o.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type) || [], 'amount'),
+          shippingFee: o.shipping_fee || 0,
           delivered: sumBy(o.deliveries || [], 'quantity'),
           status: o.status
         }))
@@ -290,6 +294,7 @@ export default function Reports({ orders, customers, onSelectOrder, onSelectCust
           { key: 'unitPrice', label: 'Đơn giá' },
           { key: 'discountPercent', label: 'CK %' },
           { key: 'discountAmount', label: 'Tiền CK' },
+          { key: 'shippingFee', label: 'Phí ship' },
           { key: 'finalAmount', label: 'Thành tiền' },
           { key: 'paid', label: 'Đã TT' },
           { key: 'delivered', label: 'Đã giao' },

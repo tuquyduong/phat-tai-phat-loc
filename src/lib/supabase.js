@@ -98,6 +98,7 @@ export async function depositToCustomer(customerId, amount, note = '') {
 }
 
 // Rút tiền từ tài khoản khách (thanh toán từ số dư)
+// SỬA: type = 'balance_used' thay vì 'withdraw' để phân biệt rõ
 export async function withdrawFromCustomer(customerId, amount, orderId = null, note = '') {
   const { data, error } = await supabase
     .from('payments')
@@ -105,7 +106,7 @@ export async function withdrawFromCustomer(customerId, amount, orderId = null, n
       customer_id: customerId,
       order_id: orderId,
       amount: amount,
-      type: 'withdraw',
+      type: 'balance_used',  // SỬA: Đổi từ 'withdraw' thành 'balance_used'
       note: note || 'Thanh toán từ số dư',
       payment_date: new Date().toISOString().split('T')[0]
     }])
@@ -118,6 +119,7 @@ export async function withdrawFromCustomer(customerId, amount, orderId = null, n
 }
 
 // Tính lại số dư khách hàng
+// SỬA: Cập nhật để tính cả 'balance_used'
 export async function recalcCustomerBalance(customerId) {
   const { data: deposits } = await supabase
     .from('payments')
@@ -125,11 +127,12 @@ export async function recalcCustomerBalance(customerId) {
     .eq('customer_id', customerId)
     .eq('type', 'deposit')
 
+  // SỬA: Lấy cả 'withdraw' (cũ) và 'balance_used' (mới)
   const { data: withdrawals } = await supabase
     .from('payments')
     .select('amount')
     .eq('customer_id', customerId)
-    .eq('type', 'withdraw')
+    .in('type', ['withdraw', 'balance_used'])
 
   const totalDeposit = deposits?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
   const totalWithdraw = withdrawals?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
@@ -144,12 +147,13 @@ export async function recalcCustomerBalance(customerId) {
 }
 
 // Lấy lịch sử giao dịch số dư
+// SỬA: Thêm 'balance_used' vào danh sách type
 export async function getCustomerTransactions(customerId) {
   const { data, error } = await supabase
     .from('payments')
     .select('*')
     .eq('customer_id', customerId)
-    .in('type', ['deposit', 'withdraw', 'refund'])
+    .in('type', ['deposit', 'withdraw', 'balance_used', 'refund'])
     .order('created_at', { ascending: false })
   if (error) throw error
   return data
@@ -233,12 +237,14 @@ export async function getOrdersByCustomer(customerId) {
   return data
 }
 
+// SỬA: Thêm shipping_fee vào tính toán
 export async function createOrder(order) {
   // Tính toán chiết khấu và thành tiền
   const grossAmount = order.quantity * order.unit_price
   const discountPercent = order.discount_percent || 0
   const discountAmount = (grossAmount * discountPercent) / 100
-  const finalAmount = grossAmount - discountAmount
+  const shippingFee = order.shipping_fee || 0  // MỚI
+  const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
 
   const { data, error } = await supabase
     .from('orders')
@@ -246,6 +252,7 @@ export async function createOrder(order) {
       ...order,
       discount_percent: discountPercent,
       discount_amount: discountAmount,
+      shipping_fee: shippingFee,  // MỚI
       final_amount: finalAmount
     }])
     .select(`
@@ -260,18 +267,21 @@ export async function createOrder(order) {
 }
 
 // Tạo nhiều đơn cùng lúc (1 khách mua nhiều sản phẩm)
+// SỬA: Thêm shipping_fee vào tính toán
 export async function createMultipleOrders(orders) {
   // Tính toán chiết khấu cho từng đơn
   const ordersWithDiscount = orders.map(order => {
     const grossAmount = order.quantity * order.unit_price
     const discountPercent = order.discount_percent || 0
     const discountAmount = (grossAmount * discountPercent) / 100
-    const finalAmount = grossAmount - discountAmount
+    const shippingFee = order.shipping_fee || 0  // MỚI
+    const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
 
     return {
       ...order,
       discount_percent: discountPercent,
       discount_amount: discountAmount,
+      shipping_fee: shippingFee,  // MỚI
       final_amount: finalAmount
     }
   })
@@ -289,9 +299,11 @@ export async function createMultipleOrders(orders) {
   return data
 }
 
+// SỬA: Thêm shipping_fee vào updateOrder
 export async function updateOrder(id, updates) {
-  // Nếu có thay đổi quantity hoặc unit_price, tính lại
-  if (updates.quantity !== undefined || updates.unit_price !== undefined || updates.discount_percent !== undefined) {
+  // Nếu có thay đổi quantity, unit_price, discount_percent, hoặc shipping_fee, tính lại
+  if (updates.quantity !== undefined || updates.unit_price !== undefined || 
+      updates.discount_percent !== undefined || updates.shipping_fee !== undefined) {
     const { data: currentOrder } = await supabase
       .from('orders')
       .select('*')
@@ -301,12 +313,14 @@ export async function updateOrder(id, updates) {
     const quantity = updates.quantity ?? currentOrder.quantity
     const unitPrice = updates.unit_price ?? currentOrder.unit_price
     const discountPercent = updates.discount_percent ?? currentOrder.discount_percent ?? 0
+    const shippingFee = updates.shipping_fee ?? currentOrder.shipping_fee ?? 0  // MỚI
 
     const grossAmount = quantity * unitPrice
     const discountAmount = (grossAmount * discountPercent) / 100
-    const finalAmount = grossAmount - discountAmount
+    const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
 
     updates.discount_amount = discountAmount
+    updates.shipping_fee = shippingFee  // MỚI
     updates.final_amount = finalAmount
   }
 
@@ -414,6 +428,7 @@ export async function getCustomerReport(customerId) {
 }
 
 // Lấy danh sách khách hàng với thống kê
+// SỬA: Tính totalPaid bao gồm cả balance_used (tiền trừ từ số dư)
 export async function getCustomersWithStats() {
   const { data: customers } = await supabase
     .from('customers')
@@ -436,8 +451,10 @@ export async function getCustomersWithStats() {
     }
     stats[order.customer_id].orderCount++
     stats[order.customer_id].totalAmount += Number(order.final_amount) || (order.quantity * order.unit_price)
+
+    // SỬA: Tính totalPaid bao gồm payment + balance_used (có order_id)
     stats[order.customer_id].totalPaid += order.payments
-      ?.filter(p => p.type === 'payment' || !p.type)
+      ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
       ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
   })
 
@@ -448,6 +465,67 @@ export async function getCustomersWithStats() {
     totalPaid: stats[c.id]?.totalPaid || 0,
     debt: (stats[c.id]?.totalAmount || 0) - (stats[c.id]?.totalPaid || 0)
   })) || []
+}
+
+// MỚI: Lấy tổng doanh thu (tiền đã nhận từ khách)
+export async function getTotalRevenue() {
+  const { data, error } = await supabase
+    .from('payments')
+    .select('amount, type')
+    .in('type', ['payment', 'deposit'])
+
+  if (error) throw error
+
+  return data?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+}
+
+// MỚI: Lấy thống kê tổng quan
+export async function getDashboardStats() {
+  // Lấy tất cả payments
+  const { data: allPayments } = await supabase
+    .from('payments')
+    .select('amount, type, customer_id')
+
+  // Lấy tất cả orders chưa hoàn thành
+  const { data: pendingOrders } = await supabase
+    .from('orders')
+    .select(`
+      *,
+      customer:customers(*),
+      deliveries(*),
+      payments(*)
+    `)
+    .neq('status', 'completed')
+
+  // Tính doanh thu = tổng tiền đã nhận (payment + deposit)
+  const totalRevenue = allPayments
+    ?.filter(p => p.type === 'payment' || p.type === 'deposit' || !p.type)
+    ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+
+  // Tính tổng công nợ
+  let totalDebt = 0
+  const debtorSet = new Set()
+
+  pendingOrders?.forEach(order => {
+    const orderTotal = Number(order.final_amount) || (order.quantity * order.unit_price)
+    // Tính tiền đã thanh toán cho đơn này (payment + balance_used)
+    const orderPaid = order.payments
+      ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+      ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+
+    const debt = orderTotal - orderPaid
+    if (debt > 0) {
+      totalDebt += debt
+      debtorSet.add(order.customer_id)
+    }
+  })
+
+  return {
+    totalRevenue,
+    totalDebt,
+    debtorCount: debtorSet.size,
+    pendingCount: pendingOrders?.length || 0
+  }
 }
 
 // ============================================

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   Package, Truck, Wallet, Calendar, User, Plus, Trash2,
-  Check, X, Clock, AlertCircle
+  Check, X, Clock, AlertCircle, Percent, Tag
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
@@ -26,10 +26,23 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
 
   if (!order) return null
 
-  // Calculations
+  // SỬA: Calculations - dùng final_amount và filter payments
   const totalDelivered = sumBy(order.deliveries, 'quantity')
-  const totalPaid = sumBy(order.payments, 'amount')
-  const totalAmount = order.quantity * order.unit_price
+
+  // SỬA: Chỉ tính payments có type = 'payment', 'balance_used', hoặc không có type
+  const totalPaid = order.payments
+    ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+    ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+
+  // MỚI: Tính toán chi tiết
+  const grossAmount = order.quantity * order.unit_price
+  const discountPercent = Number(order.discount_percent) || 0
+  const discountAmount = Number(order.discount_amount) || 0
+  const shippingFee = Number(order.shipping_fee) || 0
+
+  // SỬA: Dùng final_amount, fallback về tính toán nếu không có
+  const totalAmount = Number(order.final_amount) || (grossAmount - discountAmount + shippingFee)
+
   const remainingDelivery = order.quantity - totalDelivered
   const remainingPayment = totalAmount - totalPaid
   const deliveryPercent = calcProgress(totalDelivered, order.quantity)
@@ -46,7 +59,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
         quantity: Number(deliveryQty),
         delivery_date: deliveryDate
       })
-      
+
       // Auto complete if all delivered and paid
       const newTotalDelivered = totalDelivered + Number(deliveryQty)
       if (newTotalDelivered >= order.quantity && totalPaid >= totalAmount) {
@@ -58,7 +71,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
       } else {
         toast.success(`Đã ghi nhận giao ${deliveryQty} ${order.unit || 'cái'}`)
       }
-      
+
       setShowAddDelivery(false)
       setDeliveryQty('')
       onUpdate()
@@ -79,7 +92,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
         amount: Number(paymentAmount),
         payment_date: paymentDate
       })
-      
+
       // Auto complete if all delivered and paid
       const newTotalPaid = totalPaid + Number(paymentAmount)
       if (totalDelivered >= order.quantity && newTotalPaid >= totalAmount) {
@@ -91,7 +104,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
       } else {
         toast.success(`Đã ghi nhận thanh toán ${formatMoney(paymentAmount)}`)
       }
-      
+
       setShowAddPayment(false)
       setPaymentAmount('')
       onUpdate()
@@ -169,10 +182,21 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
     }
   }
 
+  // MỚI: Helper để hiển thị label cho payment type
+  const getPaymentTypeLabel = (type) => {
+    switch (type) {
+      case 'balance_used':
+        return '(Trừ số dư)'
+      case 'payment':
+      default:
+        return ''
+    }
+  }
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Chi tiết đơn hàng" size="lg">
       <div className="p-5 space-y-5">
-        {/* Order info */}
+        {/* Order info - MỚI: Hiển thị chi tiết hơn */}
         <div className="bg-gray-50 rounded-xl p-4">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -204,6 +228,41 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
               </p>
             </div>
           </div>
+
+          {/* MỚI: Chi tiết giá - chỉ hiện khi có chiết khấu hoặc ship */}
+          {(discountPercent > 0 || shippingFee > 0) && (
+            <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-500">Tạm tính:</span>
+                <span className="text-gray-600">{formatMoneyFull(grossAmount)}</span>
+              </div>
+
+              {discountPercent > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-green-600 flex items-center gap-1">
+                    <Percent size={12} />
+                    Chiết khấu {discountPercent}%:
+                  </span>
+                  <span className="text-green-600">-{formatMoneyFull(discountAmount)}</span>
+                </div>
+              )}
+
+              {shippingFee > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-500 flex items-center gap-1">
+                    <Truck size={12} />
+                    Phí ship:
+                  </span>
+                  <span className="text-gray-600">+{formatMoneyFull(shippingFee)}</span>
+                </div>
+              )}
+
+              <div className="flex justify-between text-sm font-semibold pt-1">
+                <span className="text-gray-700">Thành tiền:</span>
+                <span className="text-gray-800">{formatMoneyFull(totalAmount)}</span>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Delivery section */}
@@ -345,10 +404,12 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
             </div>
           </div>
 
-          {/* Payment list */}
-          {order.payments?.length > 0 ? (
+          {/* Payment list - MỚI: Hiển thị type */}
+          {order.payments?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type).length > 0 ? (
             <div className="space-y-2">
-              {order.payments.map((p) => (
+              {order.payments
+                .filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+                .map((p) => (
                 <div
                   key={p.id}
                   className="flex items-center justify-between px-3 py-2 bg-gray-50 rounded-lg group"
@@ -356,8 +417,14 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
                   <div className="flex items-center gap-3">
                     <span className="text-sm text-gray-500">{formatDateShort(p.payment_date)}</span>
                     <span className="font-medium text-green-600">{formatMoney(p.amount)}</span>
+                    {/* MỚI: Hiển thị label nếu trừ số dư */}
+                    {p.type === 'balance_used' && (
+                      <span className="text-xs text-blue-500 bg-blue-50 px-1.5 py-0.5 rounded">
+                        Trừ số dư
+                      </span>
+                    )}
                   </div>
-                  {!isCompleted && (
+                  {!isCompleted && p.type !== 'balance_used' && (
                     <button
                       onClick={() => handleDeletePayment(p.id)}
                       className="p-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
@@ -429,7 +496,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
               Mở lại đơn
             </button>
           )}
-          
+
           {!showDeleteConfirm ? (
             <button
               onClick={() => setShowDeleteConfirm(true)}

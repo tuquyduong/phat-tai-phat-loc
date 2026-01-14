@@ -17,8 +17,14 @@ export default function Dashboard({ orders, onCardClick }) {
     const debtorSet = new Set()
 
     pending.forEach(o => {
-      const totalAmount = o.quantity * o.unit_price
-      const paid = sumBy(o.payments, 'amount')
+      // SỬA: Dùng final_amount thay vì quantity * unit_price
+      const totalAmount = Number(o.final_amount) || (o.quantity * o.unit_price)
+
+      // SỬA: Chỉ tính payments có type = 'payment', 'balance_used', hoặc không có type (dữ liệu cũ)
+      const paid = o.payments
+        ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+        ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+
       const debt = totalAmount - paid
       if (debt > 0) {
         totalDebt += debt
