@@ -62,11 +62,11 @@ export function calcFinalAmount(amount, discountPercent) {
   return amount - discount
 }
 
-// MỚI: Tính thành tiền đơn hàng (bao gồm ship)
-export function calcOrderTotal(quantity, unitPrice, discountPercent = 0, shippingFee = 0) {
+// MỚI: Tính thành tiền đơn hàng (bao gồm CK % + CK tiền mặt + ship)
+export function calcOrderTotal(quantity, unitPrice, discountPercent = 0, discountCash = 0, shippingFee = 0) {
   const gross = quantity * unitPrice
-  const discount = calcDiscount(gross, discountPercent)
-  return gross - discount + shippingFee
+  const discountFromPercent = calcDiscount(gross, discountPercent)
+  return gross - discountFromPercent - discountCash + shippingFee
 }
 
 // ============================================

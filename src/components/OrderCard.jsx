@@ -4,8 +4,12 @@ import { formatMoney, formatDate, sumBy, calcProgress, getProgressColor } from '
 export default function OrderCard({ order, onClick }) {
   // Tính toán tiến độ
   const totalDelivered = sumBy(order.deliveries, 'quantity')
-  const totalPaid = sumBy(order.payments, 'amount')
-  const totalAmount = order.quantity * order.unit_price
+  // SỬA: Filter payments đúng type (payment, balance_used, hoặc không có type)
+  const totalPaid = order.payments
+    ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+    ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+  // SỬA: Dùng final_amount thay vì quantity * unit_price
+  const totalAmount = Number(order.final_amount) || (order.quantity * order.unit_price)
   
   const deliveryPercent = calcProgress(totalDelivered, order.quantity)
   const paymentPercent = calcProgress(totalPaid, totalAmount)

@@ -3,6 +3,18 @@ import { Package, Truck, Wallet, Users, ChevronRight } from 'lucide-react'
 import Modal from './Modal'
 import { formatMoney, formatDate, sumBy } from '../lib/helpers'
 
+// Helper function để tính paid đúng cách
+const calcPaid = (payments) => {
+  return payments
+    ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
+    ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
+}
+
+// Helper function để tính totalAmount đúng cách
+const calcTotalAmount = (order) => {
+  return Number(order.final_amount) || (order.quantity * order.unit_price)
+}
+
 export default function DashboardDetail({ type, isOpen, onClose, orders, onSelectOrder }) {
   const data = useMemo(() => {
     if (!type || !orders) return { title: '', items: [], icon: Package }
@@ -19,7 +31,7 @@ export default function DashboardDetail({ type, isOpen, onClose, orders, onSelec
             order: o,
             title: o.customer?.name || 'Khách hàng',
             subtitle: `${o.product} • ${o.quantity} ${o.unit}`,
-            value: formatMoney(o.quantity * o.unit_price),
+            value: formatMoney(calcTotalAmount(o)),
             date: formatDate(o.order_date)
           }))
         }
@@ -49,12 +61,12 @@ export default function DashboardDetail({ type, isOpen, onClose, orders, onSelec
 
       case 'debt':
         const withDebt = pending.filter(o => {
-          const totalAmount = o.quantity * o.unit_price
-          const paid = sumBy(o.payments, 'amount')
+          const totalAmount = calcTotalAmount(o)
+          const paid = calcPaid(o.payments)
           return totalAmount - paid > 0
         }).map(o => {
-          const totalAmount = o.quantity * o.unit_price
-          const paid = sumBy(o.payments, 'amount')
+          const totalAmount = calcTotalAmount(o)
+          const paid = calcPaid(o.payments)
           const debt = totalAmount - paid
           return {
             order: o,
@@ -78,8 +90,8 @@ export default function DashboardDetail({ type, isOpen, onClose, orders, onSelec
         // Group by customer
         const debtByCustomer = {}
         pending.forEach(o => {
-          const totalAmount = o.quantity * o.unit_price
-          const paid = sumBy(o.payments, 'amount')
+          const totalAmount = calcTotalAmount(o)
+          const paid = calcPaid(o.payments)
           const debt = totalAmount - paid
           if (debt > 0) {
             const customerId = o.customer_id

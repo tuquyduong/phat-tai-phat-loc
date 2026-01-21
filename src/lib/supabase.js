@@ -237,14 +237,15 @@ export async function getOrdersByCustomer(customerId) {
   return data
 }
 
-// SỬA: Thêm shipping_fee vào tính toán
+// SỬA: Thêm shipping_fee và discount_cash vào tính toán
 export async function createOrder(order) {
   // Tính toán chiết khấu và thành tiền
   const grossAmount = order.quantity * order.unit_price
   const discountPercent = order.discount_percent || 0
   const discountAmount = (grossAmount * discountPercent) / 100
-  const shippingFee = order.shipping_fee || 0  // MỚI
-  const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
+  const discountCash = order.discount_cash || 0  // MỚI: Chiết khấu tiền mặt
+  const shippingFee = order.shipping_fee || 0
+  const finalAmount = grossAmount - discountAmount - discountCash + shippingFee  // SỬA: Trừ thêm CK tiền mặt
 
   const { data, error } = await supabase
     .from('orders')
@@ -252,7 +253,8 @@ export async function createOrder(order) {
       ...order,
       discount_percent: discountPercent,
       discount_amount: discountAmount,
-      shipping_fee: shippingFee,  // MỚI
+      discount_cash: discountCash,  // MỚI
+      shipping_fee: shippingFee,
       final_amount: finalAmount
     }])
     .select(`
@@ -267,21 +269,23 @@ export async function createOrder(order) {
 }
 
 // Tạo nhiều đơn cùng lúc (1 khách mua nhiều sản phẩm)
-// SỬA: Thêm shipping_fee vào tính toán
+// SỬA: Thêm shipping_fee và discount_cash vào tính toán
 export async function createMultipleOrders(orders) {
   // Tính toán chiết khấu cho từng đơn
   const ordersWithDiscount = orders.map(order => {
     const grossAmount = order.quantity * order.unit_price
     const discountPercent = order.discount_percent || 0
     const discountAmount = (grossAmount * discountPercent) / 100
-    const shippingFee = order.shipping_fee || 0  // MỚI
-    const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
+    const discountCash = order.discount_cash || 0  // MỚI: Chiết khấu tiền mặt
+    const shippingFee = order.shipping_fee || 0
+    const finalAmount = grossAmount - discountAmount - discountCash + shippingFee  // SỬA: Trừ thêm CK tiền mặt
 
     return {
       ...order,
       discount_percent: discountPercent,
       discount_amount: discountAmount,
-      shipping_fee: shippingFee,  // MỚI
+      discount_cash: discountCash,  // MỚI
+      shipping_fee: shippingFee,
       final_amount: finalAmount
     }
   })
@@ -299,11 +303,12 @@ export async function createMultipleOrders(orders) {
   return data
 }
 
-// SỬA: Thêm shipping_fee vào updateOrder
+// SỬA: Thêm shipping_fee và discount_cash vào updateOrder
 export async function updateOrder(id, updates) {
-  // Nếu có thay đổi quantity, unit_price, discount_percent, hoặc shipping_fee, tính lại
+  // Nếu có thay đổi quantity, unit_price, discount_percent, discount_cash, hoặc shipping_fee, tính lại
   if (updates.quantity !== undefined || updates.unit_price !== undefined || 
-      updates.discount_percent !== undefined || updates.shipping_fee !== undefined) {
+      updates.discount_percent !== undefined || updates.discount_cash !== undefined ||
+      updates.shipping_fee !== undefined) {
     const { data: currentOrder } = await supabase
       .from('orders')
       .select('*')
@@ -313,14 +318,16 @@ export async function updateOrder(id, updates) {
     const quantity = updates.quantity ?? currentOrder.quantity
     const unitPrice = updates.unit_price ?? currentOrder.unit_price
     const discountPercent = updates.discount_percent ?? currentOrder.discount_percent ?? 0
-    const shippingFee = updates.shipping_fee ?? currentOrder.shipping_fee ?? 0  // MỚI
+    const discountCash = updates.discount_cash ?? currentOrder.discount_cash ?? 0  // MỚI
+    const shippingFee = updates.shipping_fee ?? currentOrder.shipping_fee ?? 0
 
     const grossAmount = quantity * unitPrice
     const discountAmount = (grossAmount * discountPercent) / 100
-    const finalAmount = grossAmount - discountAmount + shippingFee  // SỬA: Cộng thêm ship
+    const finalAmount = grossAmount - discountAmount - discountCash + shippingFee  // SỬA: Trừ thêm CK tiền mặt
 
     updates.discount_amount = discountAmount
-    updates.shipping_fee = shippingFee  // MỚI
+    updates.discount_cash = discountCash  // MỚI
+    updates.shipping_fee = shippingFee
     updates.final_amount = finalAmount
   }
 

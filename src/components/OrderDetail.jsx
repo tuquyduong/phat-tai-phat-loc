@@ -38,10 +38,11 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
   const grossAmount = order.quantity * order.unit_price
   const discountPercent = Number(order.discount_percent) || 0
   const discountAmount = Number(order.discount_amount) || 0
+  const discountCash = Number(order.discount_cash) || 0  // MỚI: CK tiền mặt
   const shippingFee = Number(order.shipping_fee) || 0
 
   // SỬA: Dùng final_amount, fallback về tính toán nếu không có
-  const totalAmount = Number(order.final_amount) || (grossAmount - discountAmount + shippingFee)
+  const totalAmount = Number(order.final_amount) || (grossAmount - discountAmount - discountCash + shippingFee)
 
   const remainingDelivery = order.quantity - totalDelivered
   const remainingPayment = totalAmount - totalPaid
@@ -230,7 +231,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
           </div>
 
           {/* MỚI: Chi tiết giá - chỉ hiện khi có chiết khấu hoặc ship */}
-          {(discountPercent > 0 || shippingFee > 0) && (
+          {(discountPercent > 0 || discountCash > 0 || shippingFee > 0) && (
             <div className="mt-3 pt-3 border-t border-gray-200 space-y-1">
               <div className="flex justify-between text-sm">
                 <span className="text-gray-500">Tạm tính:</span>
@@ -244,6 +245,16 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
                     Chiết khấu {discountPercent}%:
                   </span>
                   <span className="text-green-600">-{formatMoneyFull(discountAmount)}</span>
+                </div>
+              )}
+
+              {discountCash > 0 && (
+                <div className="flex justify-between text-sm">
+                  <span className="text-orange-600 flex items-center gap-1">
+                    <Tag size={12} />
+                    CK tiền mặt:
+                  </span>
+                  <span className="text-orange-600">-{formatMoneyFull(discountCash)}</span>
                 </div>
               )}
 
