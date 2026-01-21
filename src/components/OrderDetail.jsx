@@ -9,7 +9,7 @@ import {
   formatMoney, formatMoneyFull, formatDate, formatDateShort,
   sumBy, calcProgress, getProgressColor, toInputDate
 } from '../lib/helpers'
-import { addDelivery, addPayment, deleteDelivery, deletePayment, updateOrder, deleteOrder } from '../lib/supabase'
+import { addDelivery, addPayment, deleteDelivery, deletePayment, updateOrder, deleteOrder, withdrawFromCustomer } from '../lib/supabase'
 
 export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
   const toast = useToast()
@@ -23,6 +23,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
   const [deliveryDate, setDeliveryDate] = useState(toInputDate())
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState(toInputDate())
+  const [useBalance, setUseBalance] = useState(false)  // MỚI: Trừ từ số dư
 
   if (!order) return null
 
@@ -88,14 +89,33 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
     if (!paymentAmount || Number(paymentAmount) <= 0) return
     setLoading(true)
     try {
-      await addPayment({
-        order_id: order.id,
-        amount: Number(paymentAmount),
-        payment_date: paymentDate
-      })
+      const amount = Number(paymentAmount)
+      
+      if (useBalance) {
+        // Trừ từ số dư khách hàng
+        const customerBalance = order.customer?.balance || 0
+        if (amount > customerBalance) {
+          toast.error(`Số dư không đủ! Chỉ còn ${formatMoney(customerBalance)}`)
+          setLoading(false)
+          return
+        }
+        await withdrawFromCustomer(
+          order.customer_id,
+          amount,
+          order.id,
+          `Thanh toán đơn hàng từ số dư`
+        )
+      } else {
+        // Thanh toán thường
+        await addPayment({
+          order_id: order.id,
+          amount: amount,
+          payment_date: paymentDate
+        })
+      }
 
       // Auto complete if all delivered and paid
-      const newTotalPaid = totalPaid + Number(paymentAmount)
+      const newTotalPaid = totalPaid + amount
       if (totalDelivered >= order.quantity && newTotalPaid >= totalAmount) {
         await updateOrder(order.id, { 
           status: 'completed',
@@ -103,11 +123,12 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
         })
         toast.success('Đã thanh toán đủ và hoàn thành đơn!')
       } else {
-        toast.success(`Đã ghi nhận thanh toán ${formatMoney(paymentAmount)}`)
+        toast.success(`Đã ghi nhận thanh toán ${formatMoney(amount)}${useBalance ? ' (từ số dư)' : ''}`)
       }
 
       setShowAddPayment(false)
       setPaymentAmount('')
+      setUseBalance(false)
       onUpdate()
     } catch (err) {
       toast.error('Lỗi: ' + err.message)
@@ -453,32 +474,93 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
           {/* Add payment form */}
           {showAddPayment && (
             <div className="mt-3 p-3 bg-green-50 rounded-lg space-y-3">
+              {/* MỚI: Checkbox trừ từ số dư */}
+              {order.customer?.balance > 0 && (
+                <label className="flex items-center gap-2 text-sm cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={useBalance}
+                    onChange={(e) => {
+                      setUseBalance(e.target.checked)
+                      if (e.target.checked) {
+                        // Auto fill số tiền = min(số dư, còn nợ)
+                        const maxAmount = Math.min(order.customer.balance, remainingPayment)
+                        setPaymentAmount(maxAmount.toString())
+                      }
+                    }}
+                    className="rounded border-gray-300 text-green-500 focus:ring-green-500"
+                  />
+                  <Wallet size={16} className="text-blue-500" />
+                  <span className="text-gray-700">
+                    Trừ từ số dư ({formatMoney(order.customer.balance)})
+                  </span>
+                </label>
+              )}
+
               <div className="flex gap-3">
-                <input
-                  type="number"
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  placeholder="Số tiền"
-                  className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                  autoFocus
-                />
-                <input
-                  type="date"
-                  value={paymentDate}
-                  onChange={(e) => setPaymentDate(e.target.value)}
-                  className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
-                />
+                <div className="flex-1">
+                  <input
+                    type="number"
+                    value={paymentAmount}
+                    onChange={(e) => {
+                      const val = e.target.value
+                      // Nếu dùng số dư, không cho nhập quá số dư hoặc quá số nợ
+                      if (useBalance && val) {
+                        const maxAmount = Math.min(order.customer?.balance || 0, remainingPayment)
+                        if (Number(val) > maxAmount) {
+                          setPaymentAmount(maxAmount.toString())
+                          return
+                        }
+                      }
+                      setPaymentAmount(val)
+                    }}
+                    placeholder="Số tiền"
+                    max={useBalance ? Math.min(order.customer?.balance || 0, remainingPayment) : undefined}
+                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                    autoFocus
+                  />
+                  {/* Hiển thị giới hạn khi dùng số dư */}
+                  {useBalance && (
+                    <p className="text-xs text-blue-600 mt-1">
+                      Tối đa: {formatMoney(Math.min(order.customer?.balance || 0, remainingPayment))}
+                    </p>
+                  )}
+                </div>
+                {!useBalance && (
+                  <input
+                    type="date"
+                    value={paymentDate}
+                    onChange={(e) => setPaymentDate(e.target.value)}
+                    className="px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                  />
+                )}
               </div>
+              
+              {/* Cảnh báo nếu số dư không đủ trả hết */}
+              {useBalance && order.customer?.balance < remainingPayment && (
+                <p className="text-xs text-orange-600 bg-orange-50 p-2 rounded-lg">
+                  ⚠️ Số dư ({formatMoney(order.customer.balance)}) không đủ trả hết nợ ({formatMoney(remainingPayment)}). 
+                  Còn lại {formatMoney(remainingPayment - order.customer.balance)} sau khi trừ.
+                </p>
+              )}
+              
               <div className="flex gap-2">
                 <button
                   onClick={handleAddPayment}
                   disabled={loading || !paymentAmount}
-                  className="flex-1 py-2 bg-green-500 text-white text-sm font-medium rounded-lg hover:bg-green-600 disabled:opacity-50"
+                  className={`flex-1 py-2 text-white text-sm font-medium rounded-lg disabled:opacity-50 ${
+                    useBalance 
+                      ? 'bg-blue-500 hover:bg-blue-600' 
+                      : 'bg-green-500 hover:bg-green-600'
+                  }`}
                 >
-                  {loading ? 'Đang lưu...' : 'Lưu'}
+                  {loading ? 'Đang lưu...' : useBalance ? 'Trừ số dư' : 'Lưu'}
                 </button>
                 <button
-                  onClick={() => setShowAddPayment(false)}
+                  onClick={() => {
+                    setShowAddPayment(false)
+                    setUseBalance(false)
+                  }}
                   className="px-4 py-2 text-gray-600 text-sm font-medium bg-white rounded-lg hover:bg-gray-100"
                 >
                   Hủy

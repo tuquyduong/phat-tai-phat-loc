@@ -238,16 +238,29 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
       })
 
       // Tạo tất cả đơn hàng
-      await createMultipleOrders(ordersToCreate)
+      const createdOrders = await createMultipleOrders(ordersToCreate)
 
-      // Trừ số dư nếu có
-      if (actualBalanceToUse > 0) {
-        await withdrawFromCustomer(
-          finalCustomerId, 
-          actualBalanceToUse, 
-          null, 
-          `Thanh toán đơn hàng ngày ${orderDate}`
-        )
+      // MỚI: Phân bổ tiền trừ số dư cho từng đơn hàng
+      if (actualBalanceToUse > 0 && createdOrders?.length > 0) {
+        let remainingBalance = actualBalanceToUse
+        
+        for (const createdOrder of createdOrders) {
+          if (remainingBalance <= 0) break
+          
+          // Tính số tiền cần thanh toán cho đơn này
+          const orderTotal = Number(createdOrder.final_amount) || 0
+          const amountForThisOrder = Math.min(remainingBalance, orderTotal)
+          
+          if (amountForThisOrder > 0) {
+            await withdrawFromCustomer(
+              finalCustomerId, 
+              amountForThisOrder, 
+              createdOrder.id,
+              `Thanh toán từ số dư`
+            )
+            remainingBalance -= amountForThisOrder
+          }
+        }
       }
 
       // Lưu sản phẩm mới nếu được chọn
