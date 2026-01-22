@@ -271,7 +271,7 @@ function AppContent() {
         {activeTab === TABS.PENDING && !loading && (
           <Dashboard 
             orders={orders} 
-            onDetailClick={setDashboardDetail}
+            onCardClick={setDashboardDetail}
           />
         )}
 
@@ -287,12 +287,13 @@ function AppContent() {
           />
         )}
 
-        {/* Tabs */}
-        <div className="flex items-center gap-2 mb-4 overflow-x-auto pb-1">
-          <button
-            onClick={() => setActiveTab(TABS.PENDING)}
-            className={`px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-colors ${
-              activeTab === TABS.PENDING
+        {/* Tabs - Sticky khi scroll */}
+        <div className="sticky top-0 z-40 -mx-4 px-4 py-2 bg-gray-50">
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            <button
+              onClick={() => setActiveTab(TABS.PENDING)}
+              className={`px-4 py-2 rounded-lg font-medium text-sm whitespace-nowrap transition-colors ${
+                activeTab === TABS.PENDING
                 ? 'bg-green-500 text-white shadow-md'
                 : 'bg-white text-gray-600 hover:bg-gray-100'
             }`}
@@ -330,6 +331,7 @@ function AppContent() {
             <BarChart3 size={16} />
             Báo cáo
           </button>
+          </div>
         </div>
 
         {/* Search & Filter - Ẩn khi ở tab Công nợ và Báo cáo */}
