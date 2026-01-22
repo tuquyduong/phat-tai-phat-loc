@@ -238,29 +238,16 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
       })
 
       // Tạo tất cả đơn hàng
-      const createdOrders = await createMultipleOrders(ordersToCreate)
+      await createMultipleOrders(ordersToCreate)
 
-      // MỚI: Phân bổ tiền trừ số dư cho từng đơn hàng
-      if (actualBalanceToUse > 0 && createdOrders?.length > 0) {
-        let remainingBalance = actualBalanceToUse
-        
-        for (const createdOrder of createdOrders) {
-          if (remainingBalance <= 0) break
-          
-          // Tính số tiền cần thanh toán cho đơn này
-          const orderTotal = Number(createdOrder.final_amount) || 0
-          const amountForThisOrder = Math.min(remainingBalance, orderTotal)
-          
-          if (amountForThisOrder > 0) {
-            await withdrawFromCustomer(
-              finalCustomerId, 
-              amountForThisOrder, 
-              createdOrder.id,
-              `Thanh toán từ số dư`
-            )
-            remainingBalance -= amountForThisOrder
-          }
-        }
+      // Trừ số dư nếu có
+      if (actualBalanceToUse > 0) {
+        await withdrawFromCustomer(
+          finalCustomerId, 
+          actualBalanceToUse, 
+          null, 
+          `Thanh toán đơn hàng ngày ${orderDate}`
+        )
       }
 
       // Lưu sản phẩm mới nếu được chọn
@@ -415,12 +402,15 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-lg bg-white text-sm"
                 >
                   <option value="">-- Chọn sản phẩm mẫu --</option>
+                  <option value="custom">✏️ Nhập sản phẩm mới (dùng 1 lần)</option>
+                  {products?.length > 0 && (
+                    <option disabled>───────────────</option>
+                  )}
                   {products?.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name} ({p.default_qty} {p.unit} × {formatMoney(p.default_price)})
                     </option>
                   ))}
-                  <option value="custom">✏️ Nhập sản phẩm khác...</option>
                 </select>
 
                 {/* Tên sản phẩm (khi chọn custom) */}
@@ -429,8 +419,9 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                     type="text"
                     value={item.product}
                     onChange={(e) => updateItem(item.id, 'product', e.target.value)}
-                    placeholder="Tên sản phẩm *"
+                    placeholder="Nhập tên sản phẩm *"
                     className="w-full px-3 py-2.5 border border-gray-200 rounded-lg text-sm"
+                    autoFocus
                   />
                 )}
 
@@ -513,15 +504,19 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
 
                 {/* Checkbox lưu sản phẩm */}
                 {item.selectedProductId === 'custom' && item.product && (
-                  <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={item.saveAsTemplate}
-                      onChange={(e) => updateItem(item.id, 'saveAsTemplate', e.target.checked)}
-                      className="rounded border-gray-300 text-green-500 focus:ring-green-500"
-                    />
-                    Lưu sản phẩm này cho lần sau
-                  </label>
+                  <div className="bg-gray-50 p-2 rounded-lg">
+                    <label className="flex items-center gap-2 text-xs cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={item.saveAsTemplate}
+                        onChange={(e) => updateItem(item.id, 'saveAsTemplate', e.target.checked)}
+                        className="rounded border-gray-300 text-green-500 focus:ring-green-500"
+                      />
+                      <span className={item.saveAsTemplate ? 'text-green-600 font-medium' : 'text-gray-600'}>
+                        {item.saveAsTemplate ? '✓ Lưu vào danh sách sản phẩm' : 'Sản phẩm dùng 1 lần (không lưu)'}
+                      </span>
+                    </label>
+                  </div>
                 )}
               </div>
             ))}
