@@ -470,9 +470,20 @@ function AppContent() {
         order={selectedOrder}
         isOpen={!!selectedOrder}
         onClose={() => setSelectedOrder(null)}
-        onUpdate={() => {
-          loadData()
-          setSelectedOrder(null)
+        onUpdate={async () => {
+          // Reload dữ liệu
+          await loadData()
+          // Cập nhật lại selectedOrder với dữ liệu mới (giữ modal mở)
+          if (selectedOrder?.id) {
+            const updatedOrders = await getOrders()
+            const updatedOrder = updatedOrders?.find(o => o.id === selectedOrder.id)
+            if (updatedOrder) {
+              setSelectedOrder(updatedOrder)
+            } else {
+              // Đơn hàng đã bị xóa, đóng modal
+              setSelectedOrder(null)
+            }
+          }
         }}
       />
 
