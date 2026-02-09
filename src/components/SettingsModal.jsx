@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { 
   Bell, Truck, Wallet, Lock, Save, Trash2, 
   Package, Plus, Users, Edit2, Check, X, Cake,
-  Phone, Percent, ChevronRight
+  Phone, Percent, ChevronRight, Ruler
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
@@ -39,6 +39,9 @@ export default function SettingsModal({
   const [customers, setCustomers] = useState([])
   const [showAddCustomer, setShowAddCustomer] = useState(false)
   const [customerForm, setCustomerForm] = useState({ name: '', phone: '', discount_percent: '', birthday: '' })
+
+  // Units state
+  const [newUnit, setNewUnit] = useState('')
 
   // Load data when modal opens
   useEffect(() => {
@@ -242,6 +245,7 @@ export default function SettingsModal({
 
   const tabs = [
     { id: 'alerts', label: 'Cảnh báo', icon: Bell },
+    { id: 'units', label: 'Đơn vị', icon: Ruler },
     { id: 'products', label: 'Sản phẩm', icon: Package },
     { id: 'customers', label: 'Khách hàng', icon: Users },
     { id: 'security', label: 'Bảo mật', icon: Lock },
@@ -345,6 +349,90 @@ export default function SettingsModal({
           </div>
         )}
 
+        {/* Tab: Units - Quản lý đơn vị */}
+        {activeTab === 'units' && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-500">
+              Danh sách đơn vị tính sử dụng khi tạo đơn hàng
+            </p>
+
+            {/* Unit list */}
+            <div className="space-y-2 max-h-64 overflow-y-auto">
+              {(localSettings.units || []).map((unit, index) => (
+                <div
+                  key={index}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-lg"
+                >
+                  <span className="text-sm font-medium">{unit}</span>
+                  <button
+                    onClick={() => {
+                      const newUnits = localSettings.units.filter((_, i) => i !== index)
+                      setLocalSettings(prev => ({ ...prev, units: newUnits }))
+                    }}
+                    className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded"
+                    title="Xóa"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            {/* Add new unit */}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newUnit}
+                onChange={(e) => setNewUnit(e.target.value)}
+                placeholder="Nhập đơn vị mới (VD: thùng, lọ...)"
+                className="flex-1 px-3 py-2 border border-gray-200 rounded-lg text-sm"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newUnit.trim()) {
+                    const trimmed = newUnit.trim().toLowerCase()
+                    if (!(localSettings.units || []).includes(trimmed)) {
+                      setLocalSettings(prev => ({
+                        ...prev,
+                        units: [...(prev.units || []), trimmed]
+                      }))
+                    }
+                    setNewUnit('')
+                  }
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (newUnit.trim()) {
+                    const trimmed = newUnit.trim().toLowerCase()
+                    if (!(localSettings.units || []).includes(trimmed)) {
+                      setLocalSettings(prev => ({
+                        ...prev,
+                        units: [...(prev.units || []), trimmed]
+                      }))
+                      toast.success(`Đã thêm đơn vị "${trimmed}"`)
+                    } else {
+                      toast.warning('Đơn vị đã tồn tại')
+                    }
+                    setNewUnit('')
+                  }
+                }}
+                disabled={!newUnit.trim()}
+                className="px-4 py-2 bg-green-500 text-white font-medium rounded-lg hover:bg-green-600 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+              >
+                <Plus size={16} />
+                Thêm
+              </button>
+            </div>
+
+            <button
+              onClick={handleSave}
+              className="w-full py-2.5 bg-green-500 text-white font-medium rounded-xl hover:bg-green-600 transition-colors flex items-center justify-center gap-2"
+            >
+              <Save size={18} />
+              Lưu cài đặt
+            </button>
+          </div>
+        )}
+
         {/* Tab: Products */}
         {activeTab === 'products' && (
           <div className="space-y-4">
@@ -381,11 +469,9 @@ export default function SettingsModal({
                           onChange={(e) => setProductForm(prev => ({ ...prev, unit: e.target.value }))}
                           className="px-2 py-1.5 border border-gray-200 rounded text-sm"
                         >
-                          <option value="ngày">ngày</option>
-                          <option value="gói">gói</option>
-                          <option value="hộp">hộp</option>
-                          <option value="chai">chai</option>
-                          <option value="cái">cái</option>
+                          {(localSettings.units || ['ngày', 'gói', 'hộp', 'chai', 'cái']).map(unit => (
+                            <option key={unit} value={unit}>{unit}</option>
+                          ))}
                         </select>
                         <input
                           type="number"
@@ -471,11 +557,9 @@ export default function SettingsModal({
                     onChange={(e) => setProductForm(prev => ({ ...prev, unit: e.target.value }))}
                     className="px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
                   >
-                    <option value="ngày">ngày</option>
-                    <option value="gói">gói</option>
-                    <option value="hộp">hộp</option>
-                    <option value="chai">chai</option>
-                    <option value="cái">cái</option>
+                    {(localSettings.units || ['ngày', 'gói', 'hộp', 'chai', 'cái']).map(unit => (
+                      <option key={unit} value={unit}>{unit}</option>
+                    ))}
                   </select>
                   <input
                     type="number"

@@ -21,7 +21,7 @@ const createEmptyItem = () => ({
   saveAsTemplate: false
 })
 
-export default function CreateOrder({ isOpen, onClose, customers, products, onCreated }) {
+export default function CreateOrder({ isOpen, onClose, customers, products, units = [], onCreated }) {
   const toast = useToast()
   const [loading, setLoading] = useState(false)
   const [showNewCustomer, setShowNewCustomer] = useState(false)
@@ -444,14 +444,9 @@ export default function CreateOrder({ isOpen, onClose, customers, products, onCr
                       onChange={(e) => updateItem(item.id, 'unit', e.target.value)}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm bg-white"
                     >
-                      <option value="ngày">ngày</option>
-                      <option value="gói">gói</option>
-                      <option value="hộp">hộp</option>
-                      <option value="chai">chai</option>
-                      <option value="cái">cái</option>
-                      <option value="kg">kg</option>
-                      <option value="bộ">bộ</option>
-                      <option value="lon">lon</option>
+                      {(units.length > 0 ? units : ['ngày', 'gói', 'hộp', 'chai', 'cái', 'kg', 'bộ', 'lon']).map(unit => (
+                        <option key={unit} value={unit}>{unit}</option>
+                      ))}
                     </select>
                   </div>
                 </div>
