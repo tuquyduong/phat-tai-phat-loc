@@ -1,16 +1,14 @@
 import { useState, useEffect } from 'react'
 import { 
-  Bell, Truck, Wallet, Lock, Save, Trash2, 
+  Bell, Truck, Wallet, Save, Trash2, 
   Package, Plus, Users, Edit2, Check, X, Cake,
-  Phone, Percent, ChevronRight, Ruler, Download, Upload, Database
+  Phone, Percent, ChevronRight, Ruler
 } from 'lucide-react'
 import Modal from './Modal'
 import { useToast } from './Toast'
 import { 
-  setPassword, cleanupOldOrders, 
   getProducts, createProduct, updateProduct, deleteProduct,
-  getCustomers, createCustomer, updateCustomer, deleteCustomer,
-  supabase
+  getCustomers, createCustomer, updateCustomer, deleteCustomer 
 } from '../lib/supabase'
 import { formatMoney, formatBirthday } from '../lib/helpers'
 
@@ -25,11 +23,7 @@ export default function SettingsModal({
   const toast = useToast()
   const [activeTab, setActiveTab] = useState('alerts')
   const [localSettings, setLocalSettings] = useState(settings)
-  const [newPassword, setNewPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [cleanupDays, setCleanupDays] = useState(30)
-  const [backupLoading, setBackupLoading] = useState(false)
 
   // Products state
   const [products, setProducts] = useState([])
@@ -76,55 +70,6 @@ export default function SettingsModal({
     onSaveSettings(localSettings)
     toast.success('Đã lưu cài đặt')
     onClose()
-  }
-
-  const handleChangePassword = async () => {
-    if (!newPassword) {
-      toast.error('Vui lòng nhập mật khẩu mới')
-      return
-    }
-    if (newPassword !== confirmPassword) {
-      toast.error('Mật khẩu xác nhận không khớp')
-      return
-    }
-    if (newPassword.length < 4) {
-      toast.error('Mật khẩu phải có ít nhất 4 ký tự')
-      return
-    }
-
-    setLoading(true)
-    try {
-      await setPassword(newPassword)
-      toast.success('Đã đổi mật khẩu')
-      setNewPassword('')
-      setConfirmPassword('')
-    } catch (err) {
-      toast.error('Lỗi: ' + err.message)
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  // TẠM TẮT: Chức năng dọn dẹp
-  const handleCleanup = async () => {
-    toast.warning('Chức năng này đang tạm thời bị vô hiệu hóa')
-    return
-
-    // Code cũ - giữ lại để sau này dùng
-    /*
-    if (!confirm(`Xóa tất cả đơn đã hoàn thành hơn ${cleanupDays} ngày?`)) return
-
-    setLoading(true)
-    try {
-      await cleanupOldOrders(cleanupDays)
-      toast.success('Đã dọn dẹp đơn cũ')
-      onDataChanged?.()
-    } catch (err) {
-      toast.error('Lỗi: ' + err.message)
-    } finally {
-      setLoading(false)
-    }
-    */
   }
 
   // Product handlers
@@ -245,124 +190,11 @@ export default function SettingsModal({
     onSelectCustomer?.(customer)
   }
 
-  // ============================================
-  // BACKUP & RESTORE
-  // ============================================
-  const BACKUP_TABLES = [
-    'customers', 'orders', 'deliveries', 'payments', 'products', 'settings',
-    'app_config', 'transactions', 'ingredients', 'formulas', 'formula_ingredients',
-    'lab_notes', 'stocks', 'stock_transactions', 'dividends'
-  ]
-
-  const handleBackup = async () => {
-    setBackupLoading(true)
-    try {
-      const backup = { version: '2.4', created_at: new Date().toISOString(), tables: {} }
-
-      for (const table of BACKUP_TABLES) {
-        try {
-          const { data, error } = await supabase.from(table).select('*')
-          if (!error && data) backup.tables[table] = data
-        } catch {
-          // Bỏ qua bảng không tồn tại
-        }
-      }
-
-      // Thêm localStorage settings
-      backup.localStorage = {
-        order_tracker_settings: localStorage.getItem('order_tracker_settings')
-      }
-
-      // Download
-      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `chimai_backup_${new Date().toISOString().split('T')[0]}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      const totalRows = Object.values(backup.tables).reduce((s, t) => s + t.length, 0)
-      toast.success(`Đã tải backup: ${Object.keys(backup.tables).length} bảng, ${totalRows} dòng`)
-    } catch (err) {
-      toast.error('Lỗi backup: ' + err.message)
-    } finally {
-      setBackupLoading(false)
-    }
-  }
-
-  const handleRestore = async () => {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = '.json'
-    input.onchange = async (e) => {
-      const file = e.target.files?.[0]
-      if (!file) return
-
-      if (!confirm('⚠️ CẢNH BÁO: Restore sẽ GHI ĐÈ toàn bộ dữ liệu hiện tại!\n\nBạn chắc chắn muốn tiếp tục?')) return
-
-      setBackupLoading(true)
-      try {
-        const text = await file.text()
-        const backup = JSON.parse(text)
-
-        if (!backup.tables || !backup.version) {
-          toast.error('File backup không hợp lệ')
-          return
-        }
-
-        // Restore theo thứ tự (parent tables trước)
-        const restoreOrder = [
-          'settings', 'app_config', 'customers', 'products',
-          'orders', 'deliveries', 'payments',
-          'ingredients', 'formulas', 'formula_ingredients', 'lab_notes',
-          'stocks', 'stock_transactions', 'dividends', 'transactions'
-        ]
-
-        let restored = 0
-        for (const table of restoreOrder) {
-          const rows = backup.tables[table]
-          if (!rows || rows.length === 0) continue
-
-          try {
-            // Xóa dữ liệu cũ (settings dùng key thay vì id)
-            if (table === 'settings') {
-              await supabase.from(table).delete().neq('key', '')
-            } else {
-              await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
-            }
-            // Insert dữ liệu backup
-            const { error } = await supabase.from(table).insert(rows)
-            if (!error) restored += rows.length
-          } catch {
-            // Bỏ qua lỗi từng bảng
-          }
-        }
-
-        // Restore localStorage
-        if (backup.localStorage?.order_tracker_settings) {
-          localStorage.setItem('order_tracker_settings', backup.localStorage.order_tracker_settings)
-        }
-
-        toast.success(`Đã restore ${restored} dòng dữ liệu. Đang reload...`)
-        setTimeout(() => window.location.reload(), 1500)
-      } catch (err) {
-        toast.error('Lỗi restore: ' + err.message)
-      } finally {
-        setBackupLoading(false)
-      }
-    }
-    input.click()
-  }
-
   const tabs = [
     { id: 'alerts', label: 'Cảnh báo', icon: Bell },
     { id: 'units', label: 'Đơn vị', icon: Ruler },
     { id: 'products', label: 'Sản phẩm', icon: Package },
     { id: 'customers', label: 'Khách hàng', icon: Users },
-    { id: 'security', label: 'Bảo mật', icon: Lock },
   ]
 
   return (
@@ -856,99 +688,6 @@ export default function SettingsModal({
           </div>
         )}
 
-        {/* Tab: Security */}
-        {activeTab === 'security' && (
-          <div className="space-y-6">
-            {/* Change password */}
-            <div>
-              <h3 className="font-semibold text-gray-800 mb-3">Đổi mật khẩu</h3>
-              <div className="space-y-3">
-                <input
-                  type="password"
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Mật khẩu mới"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                />
-                <input
-                  type="password"
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Xác nhận mật khẩu"
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg"
-                />
-                <button
-                  onClick={handleChangePassword}
-                  disabled={loading || !newPassword}
-                  className="w-full py-2 bg-purple-500 text-white font-medium rounded-lg hover:bg-purple-600 disabled:opacity-50 transition-colors"
-                >
-                  {loading ? 'Đang lưu...' : 'Đổi mật khẩu'}
-                </button>
-              </div>
-            </div>
-
-            {/* Cleanup - TẠM TẮT */}
-            <div>
-              <h3 className="font-semibold text-gray-800 mb-3">Dọn dẹp dữ liệu</h3>
-              <div className="p-3 bg-gray-100 rounded-lg">
-                <p className="text-sm text-gray-500 mb-3">
-                  ⚠️ Chức năng này đang tạm thời bị vô hiệu hóa
-                </p>
-                <div className="flex items-center gap-2 mb-3 opacity-50">
-                  <span className="text-sm text-gray-600">Xóa đơn hoàn thành hơn</span>
-                  <input
-                    type="number"
-                    value={cleanupDays}
-                    onChange={(e) => setCleanupDays(Number(e.target.value) || 30)}
-                    className="w-16 px-2 py-1 border border-gray-200 rounded text-center text-sm"
-                    min="7"
-                    disabled
-                  />
-                  <span className="text-sm text-gray-600">ngày</span>
-                </div>
-                <button
-                  onClick={handleCleanup}
-                  disabled={true}
-                  className="px-4 py-2 bg-gray-400 text-white text-sm font-medium rounded-lg cursor-not-allowed"
-                >
-                  Tạm thời vô hiệu
-                </button>
-              </div>
-            </div>
-
-            {/* Backup & Restore */}
-            <div>
-              <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
-                <Database size={16} className="text-blue-500" />
-                Sao lưu & Phục hồi
-              </h3>
-              <div className="space-y-3">
-                <p className="text-sm text-gray-500">
-                  Tải toàn bộ dữ liệu về máy hoặc khôi phục từ file backup
-                </p>
-                <button
-                  onClick={handleBackup}
-                  disabled={backupLoading}
-                  className="w-full py-2.5 bg-blue-500 text-white font-medium rounded-lg hover:bg-blue-600 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Download size={18} />
-                  {backupLoading ? 'Đang xử lý...' : 'Tải backup (.json)'}
-                </button>
-                <button
-                  onClick={handleRestore}
-                  disabled={backupLoading}
-                  className="w-full py-2.5 border-2 border-orange-300 text-orange-600 font-medium rounded-lg hover:bg-orange-50 disabled:opacity-50 transition-colors flex items-center justify-center gap-2"
-                >
-                  <Upload size={18} />
-                  Phục hồi từ backup
-                </button>
-                <p className="text-xs text-red-500">
-                  ⚠️ Phục hồi sẽ ghi đè toàn bộ dữ liệu hiện tại
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </Modal>
   )
