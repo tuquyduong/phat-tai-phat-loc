@@ -527,8 +527,8 @@ function StockForm({ isOpen, onClose, stock, toast, onSaved }) {
           </div>
           <div>
             <label className="text-xs text-gray-500 mb-1 block">Giá hiện tại</label>
-            <input type="number" inputMode="numeric" value={currentPrice}
-              onChange={e => setCurrentPrice(e.target.value)} placeholder="0"
+            <input type="text" inputMode="numeric" value={currentPrice ? Number(currentPrice).toLocaleString('vi-VN') : ''}
+              onChange={e => setCurrentPrice(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
               className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
           </div>
         </div>
@@ -550,16 +550,16 @@ function StockForm({ isOpen, onClose, stock, toast, onSaved }) {
               </div>
               <div>
                 <label className="text-[10px] text-gray-500 mb-0.5 block">Giá mua (đ)</label>
-                <input type="number" inputMode="numeric" value={buyPrice}
-                  onChange={e => setBuyPrice(e.target.value)} placeholder="18900"
+                <input type="text" inputMode="numeric" value={buyPrice ? Number(buyPrice).toLocaleString('vi-VN') : ''}
+                  onChange={e => setBuyPrice(e.target.value.replace(/[^0-9]/g, ''))} placeholder="18900"
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm" />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="text-[10px] text-gray-500 mb-0.5 block">Phí GD (đ)</label>
-                <input type="number" inputMode="numeric" value={buyFee}
-                  onChange={e => setBuyFee(e.target.value)} placeholder="0"
+                <input type="text" inputMode="numeric" value={buyFee ? Number(buyFee).toLocaleString('vi-VN') : ''}
+                  onChange={e => setBuyFee(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0"
                   className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm" />
               </div>
               <div>
@@ -722,7 +722,8 @@ function TxForm({ isOpen, onClose, config, stocks, toast, onSaved }) {
 
         <div>
           <label className="text-xs text-gray-500 mb-1 block">{isDividend ? 'Số tiền cổ tức (đ)' : 'Giá/cp (đ)'}</label>
-          <input type="number" inputMode="numeric" value={price} onChange={e => setPrice(e.target.value)}
+          <input type="text" inputMode="numeric" value={price ? Number(price).toLocaleString('vi-VN') : ''}
+            onChange={e => setPrice(e.target.value.replace(/[^0-9]/g, ''))}
             placeholder="0" autoFocus={isDividend}
             className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
         </div>
@@ -730,7 +731,8 @@ function TxForm({ isOpen, onClose, config, stocks, toast, onSaved }) {
         {!isDividend && (
           <div>
             <label className="text-xs text-gray-500 mb-1 block">Phí giao dịch (đ)</label>
-            <input type="number" inputMode="numeric" value={fee} onChange={e => setFee(e.target.value)}
+            <input type="text" inputMode="numeric" value={fee ? Number(fee).toLocaleString('vi-VN') : ''}
+              onChange={e => setFee(e.target.value.replace(/[^0-9]/g, ''))}
               placeholder="0" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
           </div>
         )}

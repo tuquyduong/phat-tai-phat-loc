@@ -415,7 +415,9 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Số tiền</label>
           <div className="relative">
-            <input type="number" inputMode="numeric" value={amount} onChange={e => setAmount(e.target.value)}
+            <input type="text" inputMode="numeric" 
+              value={amount ? Number(amount).toLocaleString('vi-VN') : ''}
+              onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ''); setAmount(v) }}
               placeholder="0" autoFocus
               className="w-full text-2xl font-bold text-center py-4 border-2 border-gray-200 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200" />
             <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg">đ</span>
