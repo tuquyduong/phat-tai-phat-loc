@@ -266,7 +266,7 @@ export default function Expenses() {
       </div>
 
       {/* FABs */}
-      <div className="fixed bottom-20 right-4 flex flex-col gap-2 z-40">
+      <div className="fixed right-4 flex flex-col gap-2 z-40" style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom, 0px))' }}>
         <button onClick={() => handleAddTx('income')}
           className="w-12 h-12 bg-green-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform">
           <ArrowDownCircle size={24} />

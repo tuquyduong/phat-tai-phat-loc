@@ -1,7 +1,7 @@
 // ============================================
-// INVEST API - FILE MỚI
-// Tương tác: stocks, stock_transactions, dividends
-// KHÔNG đụng bảng cũ
+// INVEST API - AVERAGE COST METHOD
+// Giá vốn bình quân (giống SSI, VPS, TCBS)
+// Xóa/sửa bất kỳ GD → tính lại toàn bộ tự động
 // ============================================
 import { supabase } from './supabase'
 
@@ -12,7 +12,7 @@ export async function getStocks() {
   const { data, error } = await supabase
     .from('stocks').select(`
       *,
-      transactions:stock_transactions(id, type, quantity, price, fee, date, note, lot_status, remaining_qty),
+      transactions:stock_transactions(id, type, quantity, price, fee, date, note, created_at),
       dividends(id, amount, date, note)
     `)
     .eq('is_active', true)
@@ -58,12 +58,16 @@ export async function addStockTransaction(tx) {
       price: tx.price,
       fee: tx.fee || 0,
       date: tx.date || new Date().toISOString().split('T')[0],
-      note: tx.note || '',
-      lot_status: tx.type === 'buy' ? 'open' : null,
-      remaining_qty: tx.type === 'buy' ? tx.quantity : 0
+      note: tx.note || ''
     }]).select().single()
   if (error) throw error
   return data
+}
+
+export async function updateStockTransaction(id, updates) {
+  const { error } = await supabase
+    .from('stock_transactions').update(updates).eq('id', id)
+  if (error) throw error
 }
 
 export async function deleteStockTransaction(id) {
@@ -94,72 +98,115 @@ export async function deleteDividend(id) {
 }
 
 // ============================================
-// TÍNH TOÁN (client-side)
+// TÍNH TOÁN - AVERAGE COST (GIÁ VỐN BÌNH QUÂN)
+// Replay toàn bộ giao dịch theo thứ tự thời gian
+// → Giá vốn TB thay đổi sau mỗi lệnh MUA
+// → Lệnh BÁN tính lãi/lỗ theo giá vốn TB tại thời điểm bán
 // ============================================
-
-// Tính toán cho 1 cổ phiếu
 export function calcStockStats(stock) {
-  const buys = (stock.transactions || []).filter(t => t.type === 'buy')
-  const sells = (stock.transactions || []).filter(t => t.type === 'sell')
+  const txs = (stock.transactions || [])
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.created_at || '').localeCompare(b.created_at || ''))
   const divs = stock.dividends || []
 
-  // Tổng mua
+  let holdingQty = 0       // Số CP đang giữ
+  let holdingCost = 0      // Tổng giá vốn đang giữ (= holdingQty × avgCost)
+  let avgCost = 0          // Giá vốn bình quân hiện tại (gồm phí)
+  let avgBuyPrice = 0      // Giá mua bình quân (không gồm phí, để hiển thị)
+
   let totalQtyBought = 0, totalCostBought = 0, totalFeeBuy = 0
-  buys.forEach(b => {
-    totalQtyBought += b.quantity
-    totalCostBought += b.quantity * Number(b.price)
-    totalFeeBuy += Number(b.fee) || 0
-  })
-
-  // Tổng bán
   let totalQtySold = 0, totalRevenueSold = 0, totalFeeSell = 0
-  sells.forEach(s => {
-    totalQtySold += s.quantity
-    totalRevenueSold += s.quantity * Number(s.price)
-    totalFeeSell += Number(s.fee) || 0
-  })
+  let realizedPL = 0       // Tổng lãi/lỗ đã chốt
 
-  // Số lượng đang giữ
-  const holdingQty = totalQtyBought - totalQtySold
+  // Chi tiết từng giao dịch (để hiển thị)
+  const txDetails = []
 
-  // Giá trung bình mua
-  const avgBuyPrice = totalQtyBought > 0 ? totalCostBought / totalQtyBought : 0
+  for (const tx of txs) {
+    const qty = tx.quantity
+    const price = Number(tx.price)
+    const fee = Number(tx.fee) || 0
+
+    if (tx.type === 'buy') {
+      totalQtyBought += qty
+      totalCostBought += qty * price
+      totalFeeBuy += fee
+
+      // Cập nhật giá vốn bình quân
+      const newTotalCost = holdingCost + qty * price + fee
+      holdingQty += qty
+      holdingCost = newTotalCost
+      avgCost = holdingQty > 0 ? holdingCost / holdingQty : 0
+
+      // Giá mua TB (không gồm phí)
+      avgBuyPrice = totalQtyBought > 0 ? totalCostBought / totalQtyBought : 0
+
+      txDetails.push({
+        ...tx, txType: 'buy',
+        total: qty * price + fee,
+        avgCostAfter: avgCost,
+        holdingAfter: holdingQty,
+        pl: null, plPct: null
+      })
+
+    } else if (tx.type === 'sell') {
+      totalQtySold += qty
+      totalRevenueSold += qty * price
+      totalFeeSell += fee
+
+      // Lãi/lỗ = (giá bán - giá vốn TB) × SL - phí bán
+      const costBasis = qty * avgCost
+      const revenue = qty * price
+      const pl = revenue - costBasis - fee
+      const plPct = costBasis > 0 ? (pl / costBasis) * 100 : 0
+      realizedPL += pl
+
+      // Cập nhật holding
+      holdingQty -= qty
+      holdingCost = holdingQty * avgCost // Giá vốn TB không đổi khi bán
+
+      txDetails.push({
+        ...tx, txType: 'sell',
+        total: qty * price - fee,
+        costBasis,
+        pl, plPct,
+        avgCostAtSell: avgCost,
+        holdingAfter: holdingQty
+      })
+    }
+  }
 
   // Giá trị hiện tại
   const currentPrice = Number(stock.current_price) || 0
   const marketValue = holdingQty * currentPrice
+  const investedInHolding = holdingCost // = holdingQty × avgCost
 
-  // Tổng vốn đã bỏ ra (cho phần đang giữ)
-  const investedInHolding = holdingQty * avgBuyPrice
-
-  // Lãi/lỗ chưa thực hiện (unrealized)
+  // Unrealized
   const unrealizedPL = marketValue - investedInHolding
-  const unrealizedPLPercent = investedInHolding > 0 ? (unrealizedPL / investedInHolding) * 100 : 0
-
-  // Lãi/lỗ đã thực hiện (realized) = doanh thu bán - chi phí mua phần đã bán - phí
-  const costOfSold = totalQtySold * avgBuyPrice
-  const realizedPL = totalRevenueSold - costOfSold - totalFeeBuy - totalFeeSell
+  const unrealizedPLPct = investedInHolding > 0 ? (unrealizedPL / investedInHolding) * 100 : 0
 
   // Cổ tức
-  const totalDividends = divs.reduce((s, d) => s + Number(d.amount), 0)
+  const totalDividends = divs.reduce((sum, d) => sum + Number(d.amount), 0)
 
-  // Tổng lãi/lỗ
+  // Tổng P&L
   const totalPL = unrealizedPL + realizedPL + totalDividends
-
-  // Tổng vốn đã đầu tư
   const totalInvested = totalCostBought + totalFeeBuy
+  const totalFee = totalFeeBuy + totalFeeSell
 
   return {
-    holdingQty, avgBuyPrice, currentPrice, marketValue,
-    investedInHolding, unrealizedPL, unrealizedPLPercent,
+    holdingQty, avgCost, avgBuyPrice, currentPrice, marketValue,
+    investedInHolding, unrealizedPL, unrealizedPLPct,
     realizedPL, totalDividends, totalPL, totalInvested,
     totalQtyBought, totalQtySold, totalCostBought, totalRevenueSold,
-    totalFee: totalFeeBuy + totalFeeSell,
-    buyCount: buys.length, sellCount: sells.length
+    totalFee, totalFeeBuy, totalFeeSell,
+    buyCount: txs.filter(t => t.type === 'buy').length,
+    sellCount: txs.filter(t => t.type === 'sell').length,
+    txDetails // Chi tiết theo thứ tự thời gian
   }
 }
 
-// Tính tổng portfolio
+// ============================================
+// PORTFOLIO
+// ============================================
 export function calcPortfolioStats(stocks) {
   let totalMarketValue = 0, totalInvested = 0
   let totalUnrealized = 0, totalRealized = 0, totalDividends = 0
@@ -174,24 +221,20 @@ export function calcPortfolioStats(stocks) {
     return { ...s, stats }
   })
 
+  const totalPL = totalUnrealized + totalRealized + totalDividends
   return {
-    stocks: details,
-    totalMarketValue,
-    totalInvested,
-    totalUnrealized,
-    totalRealized,
-    totalDividends,
-    totalPL: totalUnrealized + totalRealized + totalDividends,
-    totalPLPercent: totalInvested > 0 ? ((totalUnrealized + totalRealized + totalDividends) / totalInvested) * 100 : 0
+    stocks: details, totalMarketValue, totalInvested,
+    totalUnrealized, totalRealized, totalDividends, totalPL,
+    totalPLPercent: totalInvested > 0 ? (totalPL / totalInvested) * 100 : 0
   }
 }
 
-// Recalc & sync stock fields
+// Sync stock summary fields
 export async function recalcStock(stockId, stock) {
   const stats = calcStockStats(stock)
   await updateStock(stockId, {
     current_qty: stats.holdingQty,
-    avg_price: Math.round(stats.avgBuyPrice),
+    avg_price: Math.round(stats.avgCost),
     total_invested: Math.round(stats.totalCostBought),
     total_realized: Math.round(stats.realizedPL)
   })

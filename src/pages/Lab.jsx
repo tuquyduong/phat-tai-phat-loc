@@ -279,7 +279,7 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
 
       {/* FAB */}
       <button onClick={() => { setEditingFormula(null); setShowForm(true) }}
-        className="fixed bottom-20 right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40">
+        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40" style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))" }}>
         <Plus size={24} />
       </button>
 
@@ -517,7 +517,7 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
 
       {/* FAB */}
       <button onClick={() => { setEditing(null); setShowForm(true) }}
-        className="fixed bottom-20 right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40">
+        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40" style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))" }}>
         <Plus size={24} />
       </button>
 
@@ -709,7 +709,7 @@ function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
 
       {/* FAB */}
       <button onClick={() => { setEditing(null); setShowForm(true) }}
-        className="fixed bottom-20 right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40">
+        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform z-40" style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))" }}>
         <Plus size={24} />
       </button>
 
