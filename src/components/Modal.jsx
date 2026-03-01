@@ -1,10 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import { X } from 'lucide-react'
 
 export default function Modal({ isOpen, onClose, title, children, size = 'md' }) {
-  const [viewportH, setViewportH] = useState('90vh')
-
-  // Lock body scroll when modal is open (iOS-safe)
+  // Lock body scroll (iOS-safe)
   useEffect(() => {
     if (isOpen) {
       const scrollY = window.scrollY
@@ -21,20 +19,6 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
       document.body.style.top = ''
       if (scrollY) window.scrollTo(0, parseInt(scrollY || '0') * -1)
     }
-  }, [isOpen])
-
-  // Track visual viewport (adapts when keyboard opens on iOS)
-  useEffect(() => {
-    if (!isOpen) return
-    const vv = window.visualViewport
-    if (!vv) return
-    const update = () => {
-      const h = vv.height
-      setViewportH(`${Math.min(h * 0.88, h - 40)}px`)
-    }
-    update()
-    vv.addEventListener('resize', update)
-    return () => vv.removeEventListener('resize', update)
   }, [isOpen])
 
   // Close on escape key
@@ -56,22 +40,20 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
   }
 
   return (
-    // z-[70]: luôn trên BottomTabs(z-50), FAB(z-40), sticky headers(z-40)
+    // z-[70]: luôn trên BottomTabs(z-50), FAB(z-40)
     <div className="fixed inset-0 z-[70] flex items-end sm:items-center justify-center p-0 sm:p-4">
-      {/* Backdrop */}
-      <div className="absolute inset-0 bg-black/50 modal-backdrop" onClick={onClose} />
+      {/* Backdrop - chỉ hiện trên desktop */}
+      <div className="absolute inset-0 bg-black/50 modal-backdrop hidden sm:block" onClick={onClose} />
 
-      {/* Modal container */}
+      {/* Mobile: full screen | Desktop: centered card */}
       <div
-        className={`relative w-full ${sizeClasses[size]} bg-white rounded-t-2xl sm:rounded-2xl shadow-modal slide-up flex flex-col`}
-        style={{
-          maxHeight: viewportH,
-          paddingBottom: 'env(safe-area-inset-bottom, 0px)'
-        }}
+        className={`relative w-full ${sizeClasses[size]} bg-white sm:rounded-2xl shadow-modal flex flex-col
+          h-full sm:h-auto sm:max-h-[90vh]`}
       >
-        {/* Header */}
+        {/* Header - sticky */}
         {title && (
-          <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 flex-shrink-0">
+          <div className="flex items-center justify-between px-5 py-3.5 border-b border-gray-100 flex-shrink-0"
+            style={{ paddingTop: 'calc(0.875rem + env(safe-area-inset-top, 0px))' }}>
             <h2 className="text-lg font-semibold text-gray-800 pr-2">{title}</h2>
             <button onClick={onClose}
               className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors flex-shrink-0">
@@ -80,8 +62,9 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
           </div>
         )}
 
-        {/* Body - scrollable, children tự quản padding */}
-        <div className="flex-1 overflow-y-auto overscroll-contain">
+        {/* Body - full scroll area */}
+        <div className="flex-1 overflow-y-auto overscroll-contain"
+          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
           {children}
         </div>
       </div>

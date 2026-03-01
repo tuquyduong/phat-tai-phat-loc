@@ -352,12 +352,18 @@ function SummaryView({ summary, onCategoryClick }) {
 // TRANSACTION FORM
 // ============================================
 function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete }) {
+  const toast = useToast()
   const [formType, setFormType] = useState(type)
   const [amount, setAmount] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [note, setNote] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
   const [saving, setSaving] = useState(false)
+
+  const filteredCats = categories.filter(c => {
+    const isIncome = c.metadata?.is_income === true
+    return formType === 'income' ? isIncome : !isIncome
+  })
 
   useEffect(() => {
     if (isOpen) {
@@ -371,13 +377,17 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
     }
   }, [isOpen, editingTx, type])
 
-  const filteredCats = categories.filter(c => {
-    const isIncome = c.metadata?.is_income === true
-    return formType === 'income' ? isIncome : !isIncome
-  })
+  // Auto-select nếu chỉ có 1 danh mục
+  useEffect(() => {
+    if (!isOpen || editingTx) return
+    if (filteredCats.length === 1) {
+      setCategoryId(filteredCats[0].id)
+    }
+  }, [isOpen, formType, filteredCats.length])
 
   const handleSubmit = async () => {
-    if (!amount || Number(amount) <= 0 || !categoryId) return
+    if (!amount || Number(amount) <= 0) { toast.error('Nhập số tiền'); return }
+    if (!categoryId) { toast.error('Chọn danh mục'); return }
     setSaving(true)
     await onSave({ type: formType, amount: Number(amount), category_id: categoryId, note, date })
     setSaving(false)
@@ -458,7 +468,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
             <button onClick={onDelete} className="px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl"><Trash2 size={18} /></button>
           )}
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm active:scale-98">Hủy</button>
-          <button onClick={handleSubmit} disabled={saving || !amount || !categoryId}
+          <button onClick={handleSubmit} disabled={saving}
             className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md active:scale-98 disabled:opacity-50">
             {saving ? '...' : (editingTx ? 'Cập nhật' : 'Thêm')}
           </button>
