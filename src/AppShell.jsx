@@ -1,10 +1,10 @@
 // ============================================
-// APP SHELL - FILE MỚI
-// Bọc ngoài App.jsx gốc, thêm navigation multi-module
-// App.jsx gốc KHÔNG bị sửa dòng nào
+// APP SHELL - v2 (thêm ToastProvider cho module mới)
+// App.jsx gốc KHÔNG bị sửa
 // ============================================
 import { useState, useEffect, useCallback } from 'react'
 import App from './App'
+import { ToastProvider } from './components/Toast'
 import BottomTabs from './components/shared/BottomTabs'
 import Home from './pages/Home'
 import Expenses from './pages/Expenses'
@@ -22,28 +22,27 @@ export default function AppShell() {
   const [orders, setOrders] = useState([])
   const [customers, setCustomers] = useState([])
 
-  // Kiểm tra auth từ localStorage (giống logic App.jsx cũ)
+  // Kiểm tra auth từ localStorage
   useEffect(() => {
     const checkAuth = () => {
       const auth = localStorage.getItem('order_tracker_auth') === 'true'
       if (auth !== isAuthenticated) setIsAuthenticated(auth)
     }
     checkAuth()
-    // Poll để detect khi App.jsx login thành công
     const interval = setInterval(checkAuth, 500)
     return () => clearInterval(interval)
   }, [isAuthenticated])
 
-  // Load module config từ Supabase
+  // Load module config
   useEffect(() => {
     if (isAuthenticated) {
       getActiveModules()
         .then(m => setActiveModulesState(m))
-        .catch(() => {}) // Nếu chưa có record → dùng default
+        .catch(() => {})
     }
   }, [isAuthenticated])
 
-  // Load data cho Home khi cần
+  // Load data cho Home
   const loadHomeData = useCallback(async () => {
     try {
       const [o, c] = await Promise.all([getOrders(), getCustomers()])
@@ -58,10 +57,7 @@ export default function AppShell() {
     }
   }, [isAuthenticated, activeModule, loadHomeData])
 
-  // ====================================
-  // CHƯA ĐĂNG NHẬP → Hiện App gốc (Login screen)
-  // TAB ORDERS → Hiện App gốc 100% (mọi tính năng giữ nguyên)
-  // ====================================
+  // Chưa login hoặc tab Orders → App gốc 100%
   if (!isAuthenticated || activeModule === 'orders') {
     return (
       <>
@@ -79,9 +75,7 @@ export default function AppShell() {
     )
   }
 
-  // ====================================
-  // CÁC MODULE MỚI
-  // ====================================
+  // Module khác → cần ToastProvider riêng (vì nằm ngoài App.jsx)
   const renderModule = () => {
     switch (activeModule) {
       case 'home':
@@ -106,13 +100,15 @@ export default function AppShell() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pb-16">
-      {renderModule()}
-      <BottomTabs
-        activeTab={activeModule}
-        onTabChange={setActiveModule}
-        activeModules={activeModules}
-      />
-    </div>
+    <ToastProvider>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pb-16">
+        {renderModule()}
+        <BottomTabs
+          activeTab={activeModule}
+          onTabChange={setActiveModule}
+          activeModules={activeModules}
+        />
+      </div>
+    </ToastProvider>
   )
 }
