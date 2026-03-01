@@ -126,7 +126,7 @@ export default function CustomerDetail({ customer, isOpen, onClose, onUpdate, on
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Chi tiết khách hàng" size="lg">
-      <div className="p-4 max-h-[80vh] overflow-y-auto">
+      <div className="p-4">
 
         {/* === HEADER === */}
         <div className="flex items-start justify-between mb-4">

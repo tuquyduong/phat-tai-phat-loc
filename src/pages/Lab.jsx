@@ -374,7 +374,7 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={formula ? 'Sửa công thức' : '🧪 Tạo công thức'}>
-      <div className="space-y-4 max-h-[70vh] overflow-y-auto">
+      <div className="space-y-4 p-5">
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Tên công thức *</label>
           <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="Ví dụ: Nước dưỡng Vitamin C"
@@ -565,7 +565,7 @@ function IngredientForm({ isOpen, onClose, ingredient, onSave }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={ingredient ? 'Sửa nguyên liệu' : '📦 Thêm nguyên liệu'}>
-      <div className="space-y-3">
+      <div className="space-y-3 p-5">
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Tên *</label>
           <input type="text" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })}
@@ -749,7 +749,7 @@ function NoteForm({ isOpen, onClose, note, formulas, onSave }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={note ? 'Sửa ghi chú' : '📝 Thêm ghi chú'}>
-      <div className="space-y-3">
+      <div className="space-y-3 p-5">
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Loại</label>
           <div className="flex gap-2">
@@ -832,7 +832,7 @@ function LabCategoryManager({ isOpen, onClose, categories, onChanged, toast }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Quản lý phân loại công thức">
-      <div className="space-y-4">
+      <div className="space-y-4 p-5">
         <p className="text-xs text-gray-500">Thêm/xóa phân loại hiển thị khi tạo công thức</p>
 
         {/* Danh sách hiện tại */}

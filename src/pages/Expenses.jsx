@@ -388,7 +388,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   return (
     <Modal isOpen={isOpen} onClose={onClose}
       title={editingTx ? 'Sửa giao dịch' : (formType === 'income' ? '💰 Thêm thu' : '💸 Thêm chi')}>
-      <div className="space-y-4">
+      <div className="space-y-4 p-5">
         {/* Type toggle */}
         <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
           <button onClick={() => setFormType('expense')}
@@ -563,12 +563,12 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Quản lý danh mục">
       {!showForm ? (
-        <div>
+        <div className="p-5">
           {renderCatList(expenseCats, '💸 Danh mục chi', false)}
           {renderCatList(incomeCats, '💰 Danh mục thu', true)}
         </div>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-4 p-5">
           <button onClick={() => setShowForm(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
             <ChevronLeft size={16} /> Quay lại
           </button>

@@ -517,7 +517,7 @@ function StockForm({ isOpen, onClose, stock, toast, onSaved }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={stock ? 'Sửa cổ phiếu' : '📈 Thêm cổ phiếu'}>
-      <div className="space-y-3 max-h-[75vh] overflow-y-auto px-1">
+      <div className="space-y-3 p-5">
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-xs text-gray-500 mb-1 block">Mã CP *</label>
@@ -685,7 +685,7 @@ function TxForm({ isOpen, onClose, config, stocks, toast, onSaved }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={titles[type] || ''}>
-      <div className="space-y-3 px-1">
+      <div className="space-y-3 p-5">
         {/* Stock info */}
         {stock && stats && !isDividend && (
           <div className="bg-gray-50 rounded-xl p-3 text-xs text-gray-500 flex flex-wrap gap-x-3 gap-y-1">

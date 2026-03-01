@@ -279,7 +279,7 @@ export default function CreateOrder({ isOpen, onClose, customers, products, unit
 
   return (
     <Modal isOpen={isOpen} onClose={() => { resetForm(); onClose() }} title="Tạo đơn hàng mới" size="lg">
-      <form onSubmit={handleSubmit} className="p-5 space-y-5 max-h-[80vh] overflow-y-auto">
+      <form onSubmit={handleSubmit} className="p-5 space-y-5">
 
         {/* === KHÁCH HÀNG === */}
         <div>

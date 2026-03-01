@@ -74,7 +74,7 @@ export default function ProductDetail({
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Chi tiết sản phẩm" size="lg">
-      <div className="p-4 max-h-[80vh] overflow-y-auto">
+      <div className="p-4">
 
         {/* Header */}
         <div className="flex items-center gap-3 mb-4">
