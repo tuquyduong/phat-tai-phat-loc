@@ -6,7 +6,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   RefreshCw, Plus, Trash2, Edit2, Star, ChevronLeft, ChevronDown, ChevronUp,
-  Copy, Search, X, Pin, FlaskConical, Package, StickyNote, Calculator
+  Copy, Search, X, Pin, FlaskConical, Package, StickyNote, Calculator, Settings
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
@@ -16,7 +16,8 @@ import {
   getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
   addFormulaIngredient, updateFormulaIngredient, deleteFormulaIngredient,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
-  calcFormulaCost, scaleIngredients
+  calcFormulaCost, scaleIngredients,
+  getLabCategories, createLabCategory, deleteLabCategory
 } from '../lib/lab'
 
 // ============================================
@@ -30,14 +31,16 @@ export default function Lab() {
   const [ingredients, setIngredients] = useState([])
   const [formulas, setFormulas] = useState([])
   const [notes, setNotes] = useState([])
+  const [labCategories, setLabCategories] = useState([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [showCategoryMgr, setShowCategoryMgr] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
-      const [ing, frm, nts] = await Promise.all([getIngredients(), getFormulas(), getLabNotes()])
-      setIngredients(ing); setFormulas(frm); setNotes(nts)
+      const [ing, frm, nts, cats] = await Promise.all([getIngredients(), getFormulas(), getLabNotes(), getLabCategories()])
+      setIngredients(ing); setFormulas(frm); setNotes(nts); setLabCategories(cats)
     } catch (err) {
       console.error(err)
       toastRef.current.error('Lỗi tải dữ liệu')
@@ -58,9 +61,15 @@ export default function Lab() {
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <h2 className="text-lg font-bold text-gray-800">🧪 Lab Hub</h2>
-          <button onClick={loadData} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg">
-            <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setShowCategoryMgr(true)}
+              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg" title="Quản lý phân loại">
+              <Settings size={18} />
+            </button>
+            <button onClick={loadData} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg">
+              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
         </div>
         {/* Tabs */}
         <div className="max-w-2xl mx-auto px-4 flex gap-1 pb-2">
@@ -86,8 +95,8 @@ export default function Lab() {
             </div>
           )}</div>
         ) : activeTab === 'formulas' ? (
-          <FormulasTab formulas={formulas} ingredients={ingredients} search={search}
-            setSearch={setSearch} onRefresh={loadData} toast={toast} />
+          <FormulasTab formulas={formulas} ingredients={ingredients} labCategories={labCategories}
+            search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
         ) : activeTab === 'ingredients' ? (
           <IngredientsTab ingredients={ingredients} search={search}
             setSearch={setSearch} onRefresh={loadData} toast={toast} />
@@ -96,6 +105,10 @@ export default function Lab() {
             setSearch={setSearch} onRefresh={loadData} toast={toast} />
         )}
       </div>
+
+      {/* Lab Category Manager */}
+      <LabCategoryManager isOpen={showCategoryMgr} onClose={() => setShowCategoryMgr(false)}
+        categories={labCategories} onChanged={loadData} toast={toast} />
     </div>
   )
 }
@@ -122,7 +135,7 @@ function SearchBar({ value, onChange, placeholder }) {
 // ============================================
 // FORMULAS TAB
 // ============================================
-function FormulasTab({ formulas, ingredients, search, setSearch, onRefresh, toast }) {
+function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, onRefresh, toast }) {
   const [showForm, setShowForm] = useState(false)
   const [editingFormula, setEditingFormula] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
@@ -272,7 +285,8 @@ function FormulasTab({ formulas, ingredients, search, setSearch, onRefresh, toas
 
       {/* Form Modal */}
       <FormulaForm isOpen={showForm} onClose={() => setShowForm(false)}
-        formula={editingFormula} ingredients={ingredients} toast={toast} onSaved={onRefresh} />
+        formula={editingFormula} ingredients={ingredients} labCategories={labCategories}
+        toast={toast} onSaved={onRefresh} />
     </>
   )
 }
@@ -280,7 +294,7 @@ function FormulasTab({ formulas, ingredients, search, setSearch, onRefresh, toas
 // ============================================
 // FORMULA FORM (Create/Edit)
 // ============================================
-function FormulaForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
+function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toast, onSaved }) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [baseServing, setBaseServing] = useState(1)
@@ -358,8 +372,6 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) 
     finally { setSaving(false) }
   }
 
-  const CATEGORIES = ['Nước dưỡng', 'Trà', 'Kem/Serum', 'Mặt nạ', 'Khác']
-
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={formula ? 'Sửa công thức' : '🧪 Tạo công thức'}>
       <div className="space-y-4 max-h-[70vh] overflow-y-auto">
@@ -375,7 +387,7 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) 
             <select value={category} onChange={e => setCategory(e.target.value)}
               className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
               <option value="">-- Chọn --</option>
-              {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+              {labCategories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
             </select>
           </div>
           <div className="w-24">
@@ -782,6 +794,78 @@ function NoteForm({ isOpen, onClose, note, formulas, onSave }) {
             {saving ? '...' : (note ? 'Cập nhật' : 'Thêm')}
           </button>
         </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// LAB CATEGORY MANAGER
+// ============================================
+function LabCategoryManager({ isOpen, onClose, categories, onChanged, toast }) {
+  const [newName, setNewName] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  const handleAdd = async () => {
+    if (!newName.trim()) return
+    if (categories.some(c => c.name.toLowerCase() === newName.trim().toLowerCase())) {
+      toast.error('Phân loại đã tồn tại'); return
+    }
+    setSaving(true)
+    try {
+      await createLabCategory(newName.trim())
+      toast.success(`Đã thêm "${newName.trim()}"`)
+      setNewName('')
+      onChanged()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async (cat) => {
+    if (!confirm(`Xóa phân loại "${cat.name}"?`)) return
+    try {
+      await deleteLabCategory(cat.id)
+      toast.success('Đã xóa')
+      onChanged()
+    } catch { toast.error('Lỗi xóa') }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Quản lý phân loại công thức">
+      <div className="space-y-4">
+        <p className="text-xs text-gray-500">Thêm/xóa phân loại hiển thị khi tạo công thức</p>
+
+        {/* Danh sách hiện tại */}
+        <div className="space-y-2 max-h-48 overflow-y-auto">
+          {categories.length === 0 ? (
+            <p className="text-sm text-gray-400 text-center py-4">Chưa có phân loại nào</p>
+          ) : categories.map(cat => (
+            <div key={cat.id} className="flex items-center justify-between px-3 py-2.5 bg-gray-50 rounded-lg">
+              <span className="text-sm font-medium text-gray-700">{cat.name}</span>
+              <button onClick={() => handleDelete(cat)}
+                className="p-1.5 text-gray-400 hover:text-red-500 active:scale-90">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {/* Thêm mới */}
+        <div className="flex gap-2">
+          <input type="text" value={newName} onChange={e => setNewName(e.target.value)}
+            placeholder="Tên phân loại mới..."
+            className="flex-1 px-4 py-3 border border-gray-200 rounded-xl text-sm"
+            onKeyDown={e => { if (e.key === 'Enter') handleAdd() }} />
+          <button onClick={handleAdd} disabled={saving || !newName.trim()}
+            className="px-4 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm disabled:opacity-50 active:scale-95">
+            {saving ? '...' : '+ Thêm'}
+          </button>
+        </div>
+
+        <button onClick={onClose}
+          className="w-full py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">
+          Đóng
+        </button>
       </div>
     </Modal>
   )

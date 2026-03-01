@@ -6,6 +6,35 @@
 import { supabase } from './supabase'
 
 // ============================================
+// PHÂN LOẠI CÔNG THỨC (app_config)
+// ============================================
+export async function getLabCategories() {
+  const { data, error } = await supabase
+    .from('app_config').select('*')
+    .eq('module', 'lab').eq('type', 'formula_category').eq('is_active', true)
+    .order('sort_order')
+  if (error) throw error
+  return data || []
+}
+
+export async function createLabCategory(name) {
+  const { data, error } = await supabase
+    .from('app_config').insert([{
+      module: 'lab', type: 'formula_category',
+      name: name.trim(), icon: '🏷️', color: '#8B5CF6',
+      sort_order: 99, is_active: true
+    }]).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteLabCategory(id) {
+  const { error } = await supabase
+    .from('app_config').update({ is_active: false }).eq('id', id)
+  if (error) throw error
+}
+
+// ============================================
 // NGUYÊN LIỆU
 // ============================================
 export async function getIngredients() {
