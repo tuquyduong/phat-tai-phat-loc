@@ -10,6 +10,7 @@ import {
   sumBy, calcProgress, getProgressColor, toInputDate
 } from '../lib/helpers'
 import { addDelivery, addPayment, deleteDelivery, deletePayment, updateOrder, deleteOrder, withdrawFromCustomer } from '../lib/supabase'
+import { createTransaction, getExpenseCategories } from '../lib/expenses'
 
 export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
   const toast = useToast()
@@ -24,6 +25,8 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
   const [paymentAmount, setPaymentAmount] = useState('')
   const [paymentDate, setPaymentDate] = useState(toInputDate())
   const [useBalance, setUseBalance] = useState(false)  // MỚI: Trừ từ số dư
+  const [syncToExpense, setSyncToExpense] = useState(false) // MỚI: Ghi vào Thu Chi
+  const [incomeCategoryId, setIncomeCategoryId] = useState(null) // MỚI: ID danh mục "Thu từ khách"
 
   if (!order) return null
 
@@ -126,9 +129,27 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
         toast.success(`Đã ghi nhận thanh toán ${formatMoney(amount)}${useBalance ? ' (từ số dư)' : ''}`)
       }
 
+      // MỚI: Ghi vào Thu Chi nếu toggle bật
+      if (syncToExpense && incomeCategoryId) {
+        try {
+          await createTransaction({
+            type: 'income',
+            amount: amount,
+            category_id: incomeCategoryId,
+            date: useBalance ? new Date().toISOString().split('T')[0] : paymentDate,
+            note: `Thu từ ${order.customer?.name} - ${order.product}`,
+            linked_order_id: order.id
+          })
+        } catch (err) {
+          console.warn('Lỗi ghi Thu Chi:', err)
+          // Không toast.error vì thanh toán đã thành công
+        }
+      }
+
       setShowAddPayment(false)
       setPaymentAmount('')
       setUseBalance(false)
+      setSyncToExpense(false)
       onUpdate()
     } catch (err) {
       toast.error('Lỗi: ' + err.message)
@@ -535,6 +556,27 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
                   />
                 )}
               </div>
+
+              {/* MỚI: Toggle ghi vào Thu Chi */}
+              <label className="flex items-center gap-2 text-sm cursor-pointer bg-white px-3 py-2.5 rounded-lg border border-gray-200">
+                <input
+                  type="checkbox"
+                  checked={syncToExpense}
+                  onChange={async (e) => {
+                    setSyncToExpense(e.target.checked)
+                    // Lấy danh mục Thu (lazy load lần đầu)
+                    if (e.target.checked && !incomeCategoryId) {
+                      try {
+                        const cats = await getExpenseCategories()
+                        const incomeCat = cats.find(c => c.metadata?.is_income === true)
+                        if (incomeCat) setIncomeCategoryId(incomeCat.id)
+                      } catch {}
+                    }
+                  }}
+                  className="rounded border-gray-300 text-green-500 focus:ring-green-500"
+                />
+                <span className="text-gray-700">📝 Ghi nhận vào Thu Chi</span>
+              </label>
               
               {/* Cảnh báo nếu số dư không đủ trả hết */}
               {useBalance && order.customer?.balance < remainingPayment && (
@@ -560,6 +602,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
                   onClick={() => {
                     setShowAddPayment(false)
                     setUseBalance(false)
+                    setSyncToExpense(false)
                   }}
                   className="px-4 py-2 text-gray-600 text-sm font-medium bg-white rounded-lg hover:bg-gray-100"
                 >
