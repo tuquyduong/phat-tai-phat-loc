@@ -1,16 +1,19 @@
 // ============================================
-// EXPENSES PAGE - MODULE THU CHI (Phase 1b)
-// + Quản lý danh mục tùy chỉnh
-// Mobile-first, touch-friendly
+// EXPENSES PAGE - v2
+// + TM/CK, Lũy kế, Chuyển nội bộ, Số dư ban đầu
 // ============================================
 import { useState, useEffect, useMemo, useCallback } from 'react'
-import { RefreshCw, ChevronLeft, ChevronRight, Trash2, ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2 } from 'lucide-react'
+import {
+  RefreshCw, ChevronLeft, ChevronRight, Trash2,
+  ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2, ArrowLeftRight
+} from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoneyFull, formatMoney } from '../lib/helpers'
+import { formatMoney } from '../lib/helpers'
 import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
-  getTransactions, createTransaction, updateTransaction, deleteTransaction, getExpenseSummary
+  getTransactions, createTransaction, updateTransaction, deleteTransaction,
+  getExpenseSummary, getRunningBalance, getInitialBalances, saveInitialBalances
 } from '../lib/expenses'
 
 // ============================================
@@ -18,136 +21,122 @@ import {
 // ============================================
 function getMonthRange(date) {
   const y = date.getFullYear(), m = date.getMonth()
-  return {
-    start: new Date(y, m, 1).toISOString().split('T')[0],
-    end: new Date(y, m + 1, 0).toISOString().split('T')[0]
-  }
+  return { start: new Date(y, m, 1).toISOString().split('T')[0], end: new Date(y, m + 1, 0).toISOString().split('T')[0] }
 }
-
-function formatMonthLabel(date) {
-  return `Tháng ${date.getMonth() + 1}/${date.getFullYear()}`
-}
-
+function formatMonthLabel(date) { return `Tháng ${date.getMonth() + 1}/${date.getFullYear()}` }
 function formatDateLabel(dateStr) {
   const d = new Date(dateStr + 'T00:00:00')
   const today = new Date().toISOString().split('T')[0]
   const y = new Date(); y.setDate(y.getDate() - 1)
   if (dateStr === today) return 'Hôm nay'
   if (dateStr === y.toISOString().split('T')[0]) return 'Hôm qua'
-  const days = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
-  return `${days[d.getDay()]}, ${d.getDate()}/${d.getMonth() + 1}`
+  const days = ['CN','T2','T3','T4','T5','T6','T7']
+  return `${days[d.getDay()]}, ${d.getDate()}/${d.getMonth()+1}`
 }
-
-// Icon + Color options cho category form
+const methodBadge = (m) => m === 'transfer' ? 'bg-blue-50 text-blue-600 border-blue-200' : 'bg-amber-50 text-amber-600 border-amber-200'
 const ICON_OPTIONS = ['🏠','🍜','🚗','💼','🧪','💊','📦','🛒','👕','📱','🎓','🎮','✂️','🧴','💡','🏥','🎁','☕','🍺','💄','👶','🐾','✈️','🎬','📚']
 const COLOR_OPTIONS = ['#3B82F6','#EF4444','#F59E0B','#10B981','#8B5CF6','#EC4899','#14B8A6','#6366F1','#F97316','#06B6D4','#84CC16','#A855F7']
 
 // ============================================
-// MAIN COMPONENT
+// MAIN
 // ============================================
 export default function Expenses() {
   const toast = useToast()
-
   const [categories, setCategories] = useState([])
   const [transactions, setTransactions] = useState([])
-  const [summary, setSummary] = useState({ totalIncome: 0, totalExpense: 0, balance: 0, byCategory: [] })
+  const [summary, setSummary] = useState({ totalIncome:0, totalExpense:0, balance:0, byCategory:[], byMethod:{ cash:{income:0,expense:0}, transfer:{income:0,expense:0} } })
+  const [runningBal, setRunningBal] = useState({ cash:0, transfer:0, total:0 })
+  const [initialBal, setInitialBal] = useState({ cash:0, transfer:0, id:null })
   const [loading, setLoading] = useState(true)
-
   const [currentMonth, setCurrentMonth] = useState(new Date())
   const [showAdd, setShowAdd] = useState(false)
   const [addType, setAddType] = useState('expense')
   const [editingTx, setEditingTx] = useState(null)
   const [activeView, setActiveView] = useState('list')
   const [filterCategory, setFilterCategory] = useState(null)
+  const [filterMethod, setFilterMethod] = useState(null)
   const [showCategoryManager, setShowCategoryManager] = useState(false)
+  const [showTransfer, setShowTransfer] = useState(false)
+  const [showInitialBalance, setShowInitialBalance] = useState(false)
 
-  // ============================================
-  // LOAD DATA
-  // ============================================
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
       const { start, end } = getMonthRange(currentMonth)
-      const [cats, txs, sum] = await Promise.all([
-        getExpenseCategories(),
-        getTransactions({ startDate: start, endDate: end }),
-        getExpenseSummary(start, end)
+      const [cats, txs, sum, running, initBal] = await Promise.all([
+        getExpenseCategories(), getTransactions({ startDate: start, endDate: end }),
+        getExpenseSummary(start, end), getRunningBalance(start), getInitialBalances()
       ])
-      setCategories(cats)
-      setTransactions(txs)
-      setSummary(sum)
-    } catch (err) {
-      console.error(err)
-      toast.error('Lỗi tải dữ liệu')
-    } finally {
-      setLoading(false)
-    }
+      setCategories(cats); setTransactions(txs); setSummary(sum); setRunningBal(running); setInitialBal(initBal)
+    } catch (err) { console.error(err); toast.error('Lỗi tải dữ liệu') }
+    finally { setLoading(false) }
   }, [currentMonth, toast])
 
   useEffect(() => { loadData() }, [loadData])
 
-  // ============================================
-  // MONTH NAV
-  // ============================================
-  const prevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth() - 1))
-  const nextMonth = () => {
-    const next = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1)
-    if (next <= new Date()) setCurrentMonth(next)
-  }
-  const isCurrentMonth = currentMonth.getMonth() === new Date().getMonth() && currentMonth.getFullYear() === new Date().getFullYear()
+  // Computed balances
+  const openBal = useMemo(() => ({
+    cash: initialBal.cash + runningBal.cash,
+    transfer: initialBal.transfer + runningBal.transfer,
+    total: initialBal.cash + initialBal.transfer + runningBal.total
+  }), [initialBal, runningBal])
 
-  // ============================================
-  // GROUP BY DATE
-  // ============================================
+  const monthTransfers = useMemo(() => {
+    let c2t = 0, t2c = 0
+    transactions.filter(t => t.type === 'transfer').forEach(t => {
+      if ((t.payment_method||'cash') === 'cash') c2t += Number(t.amount); else t2c += Number(t.amount)
+    })
+    return { c2t, t2c }
+  }, [transactions])
+
+  const closeBal = useMemo(() => {
+    const m = summary.byMethod || { cash:{income:0,expense:0}, transfer:{income:0,expense:0} }
+    return {
+      cash: openBal.cash + m.cash.income - m.cash.expense - monthTransfers.c2t + monthTransfers.t2c,
+      transfer: openBal.transfer + m.transfer.income - m.transfer.expense - monthTransfers.t2c + monthTransfers.c2t,
+      total: openBal.total + summary.balance
+    }
+  }, [openBal, summary, monthTransfers])
+
+  // Month nav
+  const prevMonth = () => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1))
+  const nextMonth = () => { const n = new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1); if(n<=new Date()) setCurrentMonth(n) }
+  const isCurrentMonth = currentMonth.getMonth()===new Date().getMonth() && currentMonth.getFullYear()===new Date().getFullYear()
+
+  // Group by date
   const groupedTx = useMemo(() => {
     let filtered = transactions
-    if (filterCategory) filtered = transactions.filter(t => t.category_id === filterCategory)
+    if (filterCategory) filtered = filtered.filter(t => t.category_id === filterCategory)
+    if (filterMethod) filtered = filtered.filter(t => (t.payment_method||'cash') === filterMethod)
     const groups = {}
-    filtered.forEach(tx => {
-      if (!groups[tx.date]) groups[tx.date] = []
-      groups[tx.date].push(tx)
-    })
-    return Object.entries(groups).sort(([a], [b]) => b.localeCompare(a))
-  }, [transactions, filterCategory])
+    filtered.forEach(tx => { if(!groups[tx.date]) groups[tx.date]=[]; groups[tx.date].push(tx) })
+    return Object.entries(groups).sort(([a],[b]) => b.localeCompare(a))
+  }, [transactions, filterCategory, filterMethod])
 
-  // ============================================
-  // HANDLERS
-  // ============================================
+  // Handlers
   const handleAddTx = (type) => { setAddType(type); setEditingTx(null); setShowAdd(true) }
-  const handleEditTx = (tx) => { setEditingTx(tx); setAddType(tx.type); setShowAdd(true) }
-
+  const handleEditTx = (tx) => { if(tx.type==='transfer') return; setEditingTx(tx); setAddType(tx.type); setShowAdd(true) }
   const handleDeleteTx = async (tx) => {
-    if (!confirm(`Xóa "${tx.note || tx.category?.name}"?`)) return
-    try { await deleteTransaction(tx.id); toast.success('Đã xóa'); loadData() }
-    catch { toast.error('Lỗi xóa') }
+    if(!confirm(`Xóa "${tx.note||tx.category?.name||'giao dịch'}"?`)) return
+    try { await deleteTransaction(tx.id); toast.success('Đã xóa'); loadData() } catch { toast.error('Lỗi xóa') }
   }
-
   const handleSaveTx = async (formData) => {
     try {
-      if (editingTx) { await updateTransaction(editingTx.id, formData); toast.success('Đã cập nhật') }
+      if(editingTx) { await updateTransaction(editingTx.id, formData); toast.success('Đã cập nhật') }
       else { await createTransaction(formData); toast.success('Đã thêm') }
       setShowAdd(false); loadData()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    } catch(err) { toast.error('Lỗi: '+err.message) }
   }
 
-  // ============================================
-  // RENDER
-  // ============================================
   return (
     <div className="pb-4">
-      {/* HEADER */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-40">
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <h2 className="text-lg font-bold text-gray-800">💰 Thu Chi</h2>
           <div className="flex items-center gap-1">
-            <button onClick={() => setShowCategoryManager(true)}
-              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg" title="Quản lý danh mục">
-              <Settings size={18} />
-            </button>
-            <button onClick={() => loadData()}
-              className="p-2 text-gray-400 hover:text-gray-600 rounded-lg">
-              <RefreshCw size={18} className={loading ? 'animate-spin' : ''} />
-            </button>
+            <button onClick={() => setShowInitialBalance(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg text-base">💰</button>
+            <button onClick={() => setShowCategoryManager(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><Settings size={18} /></button>
+            <button onClick={() => loadData()} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><RefreshCw size={18} className={loading?'animate-spin':''}/></button>
           </div>
         </div>
       </header>
@@ -155,79 +144,86 @@ export default function Expenses() {
       <div className="max-w-2xl mx-auto px-4">
         {/* MONTH NAV */}
         <div className="flex items-center justify-between py-3">
-          <button onClick={prevMonth} className="p-2 hover:bg-gray-100 rounded-full active:scale-90 transition-transform">
-            <ChevronLeft size={22} className="text-gray-600" />
-          </button>
+          <button onClick={prevMonth} className="p-2 hover:bg-gray-100 rounded-full active:scale-90"><ChevronLeft size={22} className="text-gray-600"/></button>
           <span className="font-bold text-gray-700">{formatMonthLabel(currentMonth)}</span>
-          <button onClick={nextMonth} disabled={isCurrentMonth}
-            className={`p-2 rounded-full active:scale-90 transition-transform ${isCurrentMonth ? 'text-gray-300' : 'hover:bg-gray-100 text-gray-600'}`}>
-            <ChevronRight size={22} />
-          </button>
+          <button onClick={nextMonth} disabled={isCurrentMonth} className={`p-2 rounded-full active:scale-90 ${isCurrentMonth?'text-gray-300':'hover:bg-gray-100 text-gray-600'}`}><ChevronRight size={22}/></button>
         </div>
 
-        {/* SUMMARY */}
-        <div className="grid grid-cols-3 gap-2 mb-4">
-          <div className="bg-green-50 border border-green-200 rounded-xl p-3 text-center">
+        {/* BALANCE BAR */}
+        <div className="bg-gradient-to-r from-gray-700 to-gray-800 rounded-xl p-3 mb-3 text-white">
+          <div className="flex items-center justify-between text-xs mb-2">
+            <div><p className="text-gray-400">Đầu kỳ</p><p className={`text-sm font-bold ${openBal.total>=0?'text-white':'text-red-300'}`}>{formatMoney(openBal.total)}</p></div>
+            <div className="text-gray-500">──→</div>
+            <div className="text-right"><p className="text-gray-400">Cuối kỳ</p><p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{formatMoney(closeBal.total)}</p></div>
+          </div>
+          <div className="flex gap-2">
+            <div className="flex-1 bg-white/10 rounded-lg px-2.5 py-1.5 text-center">
+              <p className="text-[9px] text-gray-400">💵 Tiền mặt</p>
+              <p className={`text-xs font-bold ${closeBal.cash>=0?'text-amber-300':'text-red-300'}`}>{formatMoney(closeBal.cash)}</p>
+            </div>
+            <div className="flex-1 bg-white/10 rounded-lg px-2.5 py-1.5 text-center">
+              <p className="text-[9px] text-gray-400">🏦 Chuyển khoản</p>
+              <p className={`text-xs font-bold ${closeBal.transfer>=0?'text-blue-300':'text-red-300'}`}>{formatMoney(closeBal.transfer)}</p>
+            </div>
+          </div>
+        </div>
+
+        {/* THU / CHI / CÂN ĐỐI */}
+        <div className="grid grid-cols-3 gap-2 mb-3">
+          <div className="bg-green-50 border border-green-200 rounded-xl p-2.5 text-center">
             <p className="text-[10px] text-green-600 font-medium">Thu</p>
             <p className="text-sm font-bold text-green-700 mt-0.5">{formatMoney(summary.totalIncome)}</p>
           </div>
-          <div className="bg-red-50 border border-red-200 rounded-xl p-3 text-center">
+          <div className="bg-red-50 border border-red-200 rounded-xl p-2.5 text-center">
             <p className="text-[10px] text-red-600 font-medium">Chi</p>
             <p className="text-sm font-bold text-red-700 mt-0.5">{formatMoney(summary.totalExpense)}</p>
           </div>
-          <div className={`border rounded-xl p-3 text-center ${summary.balance >= 0 ? 'bg-blue-50 border-blue-200' : 'bg-amber-50 border-amber-200'}`}>
-            <p className={`text-[10px] font-medium ${summary.balance >= 0 ? 'text-blue-600' : 'text-amber-600'}`}>Cân đối</p>
-            <p className={`text-sm font-bold mt-0.5 ${summary.balance >= 0 ? 'text-blue-700' : 'text-amber-700'}`}>
-              {summary.balance >= 0 ? '+' : ''}{formatMoney(summary.balance)}
-            </p>
+          <div className={`border rounded-xl p-2.5 text-center ${summary.balance>=0?'bg-blue-50 border-blue-200':'bg-amber-50 border-amber-200'}`}>
+            <p className={`text-[10px] font-medium ${summary.balance>=0?'text-blue-600':'text-amber-600'}`}>Tháng này</p>
+            <p className={`text-sm font-bold mt-0.5 ${summary.balance>=0?'text-blue-700':'text-amber-700'}`}>{summary.balance>=0?'+':''}{formatMoney(summary.balance)}</p>
           </div>
         </div>
 
         {/* TABS */}
         <div className="flex gap-2 mb-3">
-          <button onClick={() => { setActiveView('list'); setFilterCategory(null) }}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeView === 'list' ? 'bg-green-500 text-white shadow-md' : 'bg-white text-gray-600'}`}>
-            Giao dịch
-          </button>
+          <button onClick={() => { setActiveView('list'); setFilterCategory(null); setFilterMethod(null) }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeView==='list'?'bg-green-500 text-white shadow-md':'bg-white text-gray-600'}`}>Giao dịch</button>
           <button onClick={() => setActiveView('summary')}
-            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeView === 'summary' ? 'bg-green-500 text-white shadow-md' : 'bg-white text-gray-600'}`}>
-            Tổng hợp
-          </button>
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeView==='summary'?'bg-green-500 text-white shadow-md':'bg-white text-gray-600'}`}>Tổng hợp</button>
         </div>
 
-        {/* CATEGORY FILTER */}
-        {activeView === 'list' && categories.length > 0 && (
-          <div className="flex gap-1.5 overflow-x-auto pb-2 mb-3 no-scrollbar">
-            <button onClick={() => setFilterCategory(null)}
-              className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${!filterCategory ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}>
-              Tất cả
-            </button>
-            {categories.map(c => (
-              <button key={c.id} onClick={() => setFilterCategory(filterCategory === c.id ? null : c.id)}
-                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${filterCategory === c.id ? 'text-white' : 'bg-gray-100 text-gray-600'}`}
-                style={filterCategory === c.id ? { backgroundColor: c.color } : {}}>
-                {c.icon} {c.name}
-              </button>
-            ))}
+        {/* FILTERS */}
+        {activeView==='list' && (
+          <div className="space-y-2 mb-3">
+            <div className="flex gap-1.5">
+              {[{val:null,label:'Tất cả'},{val:'cash',label:'💵 TM'},{val:'transfer',label:'🏦 CK'}].map(f => (
+                <button key={f.val||'all'} onClick={() => setFilterMethod(f.val)}
+                  className={`px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${filterMethod===f.val?'bg-gray-800 text-white':'bg-gray-100 text-gray-600'}`}>{f.label}</button>
+              ))}
+            </div>
+            {categories.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                <button onClick={() => setFilterCategory(null)}
+                  className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${!filterCategory?'bg-green-600 text-white':'bg-gray-100 text-gray-600'}`}>Tất cả DM</button>
+                {categories.map(c => (
+                  <button key={c.id} onClick={() => setFilterCategory(filterCategory===c.id?null:c.id)}
+                    className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${filterCategory===c.id?'text-white':'bg-gray-100 text-gray-600'}`}
+                    style={filterCategory===c.id?{backgroundColor:c.color}:{}}>{c.icon} {c.name}</button>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
         {/* CONTENT */}
         {loading ? (
-          <div className="space-y-3">
-            {[1,2,3].map(i => (
-              <div key={i} className="bg-white rounded-xl p-4 animate-pulse">
-                <div className="h-4 bg-gray-200 rounded w-1/3 mb-3" />
-                <div className="h-12 bg-gray-100 rounded" />
-              </div>
-            ))}
-          </div>
-        ) : activeView === 'summary' ? (
+          <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse"><div className="h-4 bg-gray-200 rounded w-1/3 mb-3"/><div className="h-12 bg-gray-100 rounded"/></div>)}</div>
+        ) : activeView==='summary' ? (
           <SummaryView summary={summary} onCategoryClick={(id) => { setFilterCategory(id); setActiveView('list') }} />
-        ) : groupedTx.length === 0 ? (
+        ) : groupedTx.length===0 ? (
           <div className="bg-white rounded-xl p-8 text-center">
             <div className="text-4xl mb-2">📝</div>
-            <p className="text-gray-500 text-sm">{filterCategory ? 'Không có giao dịch cho danh mục này' : 'Chưa có giao dịch nào'}</p>
+            <p className="text-gray-500 text-sm">{filterCategory||filterMethod?'Không có giao dịch phù hợp':'Chưa có giao dịch nào'}</p>
             <button onClick={() => handleAddTx('expense')} className="mt-3 text-green-600 font-medium text-sm">+ Thêm giao dịch đầu tiên</button>
           </div>
         ) : (
@@ -237,25 +233,37 @@ export default function Expenses() {
                 <div className="flex items-center justify-between mb-1.5">
                   <span className="text-xs font-bold text-gray-500">{formatDateLabel(date)}</span>
                   <span className="text-xs text-gray-400">
-                    {(() => { const v = txs.reduce((s, t) => s + (t.type === 'income' ? Number(t.amount) : -Number(t.amount)), 0); return (v >= 0 ? '+' : '') + formatMoney(v) })()}
+                    {(() => { const v=txs.reduce((s,t)=>s+(t.type==='income'?Number(t.amount):t.type==='expense'?-Number(t.amount):0),0); return v!==0?((v>=0?'+':'')+formatMoney(v)):'' })()}
                   </span>
                 </div>
                 <div className="bg-white rounded-xl overflow-hidden shadow-sm">
-                  {txs.map((tx, i) => (
-                    <div key={tx.id}
-                      className={`flex items-center gap-3 px-4 py-3 active:bg-gray-50 transition-colors cursor-pointer ${i < txs.length - 1 ? 'border-b border-gray-50' : ''}`}
+                  {txs.map((tx,i) => (
+                    <div key={tx.id} className={`flex items-center gap-3 px-4 py-3 active:bg-gray-50 cursor-pointer ${i<txs.length-1?'border-b border-gray-50':''}`}
                       onClick={() => handleEditTx(tx)}>
                       <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-lg"
-                        style={{ backgroundColor: (tx.category?.color || '#6B7280') + '15' }}>
-                        {tx.category?.icon || '📦'}
+                        style={{ backgroundColor: tx.type==='transfer'?'#E0E7FF':(tx.category?.color||'#6B7280')+'15' }}>
+                        {tx.type==='transfer'?'🔄':(tx.category?.icon||'📦')}
                       </div>
                       <div className="flex-1 min-w-0">
-                        <p className="text-sm font-medium text-gray-800 truncate">{tx.note || tx.category?.name || 'Giao dịch'}</p>
-                        <p className="text-xs text-gray-400">{tx.category?.name}</p>
+                        <p className="text-sm font-medium text-gray-800 truncate">
+                          {tx.type==='transfer' ? `Chuyển ${(tx.payment_method||'cash')==='cash'?'TM → CK':'CK → TM'}` : (tx.note||tx.category?.name||'Giao dịch')}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          {tx.type!=='transfer' && <span className="text-xs text-gray-400">{tx.category?.name}</span>}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${methodBadge(tx.payment_method||'cash')}`}>
+                            {(tx.payment_method||'cash')==='transfer'?'CK':'TM'}
+                          </span>
+                        </div>
                       </div>
-                      <p className={`text-sm font-bold flex-shrink-0 ${tx.type === 'income' ? 'text-green-600' : 'text-red-600'}`}>
-                        {tx.type === 'income' ? '+' : '-'}{formatMoney(tx.amount)}
-                      </p>
+                      <div className="flex items-center gap-1 flex-shrink-0">
+                        <p className={`text-sm font-bold ${tx.type==='income'?'text-green-600':tx.type==='expense'?'text-red-600':'text-indigo-600'}`}>
+                          {tx.type==='income'?'+':tx.type==='expense'?'-':''}{formatMoney(tx.amount)}
+                        </p>
+                        {tx.type==='transfer' && (
+                          <button onClick={(e) => { e.stopPropagation(); handleDeleteTx(tx) }}
+                            className="p-1 text-gray-300 hover:text-red-500 active:scale-90 ml-1"><Trash2 size={14}/></button>
+                        )}
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -267,30 +275,17 @@ export default function Expenses() {
 
       {/* FABs */}
       <div className="fixed right-4 flex flex-col gap-2 z-40" style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom, 0px))' }}>
-        <button onClick={() => handleAddTx('income')}
-          className="w-12 h-12 bg-green-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform">
-          <ArrowDownCircle size={24} />
-        </button>
-        <button onClick={() => handleAddTx('expense')}
-          className="w-12 h-12 bg-red-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform">
-          <ArrowUpCircle size={24} />
-        </button>
+        <button onClick={() => setShowTransfer(true)} className="w-12 h-12 bg-indigo-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform"><ArrowLeftRight size={20}/></button>
+        <button onClick={() => handleAddTx('income')} className="w-12 h-12 bg-green-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform"><ArrowDownCircle size={24}/></button>
+        <button onClick={() => handleAddTx('expense')} className="w-12 h-12 bg-red-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 transition-transform"><ArrowUpCircle size={24}/></button>
       </div>
 
-      {/* TX FORM */}
-      <TransactionForm
-        isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx}
+      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx}
         categories={categories} type={addType} editingTx={editingTx}
-        onDelete={editingTx ? () => { handleDeleteTx(editingTx); setShowAdd(false) } : null}
-      />
-
-      {/* CATEGORY MANAGER */}
-      <CategoryManager
-        isOpen={showCategoryManager}
-        onClose={() => setShowCategoryManager(false)}
-        categories={categories}
-        onChanged={loadData}
-      />
+        onDelete={editingTx ? () => { handleDeleteTx(editingTx); setShowAdd(false) } : null} />
+      <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} />
+      <InitialBalanceForm isOpen={showInitialBalance} onClose={() => setShowInitialBalance(false)} initialBal={initialBal} toast={toast} onSaved={loadData} />
+      <CategoryManager isOpen={showCategoryManager} onClose={() => setShowCategoryManager(false)} categories={categories} onChanged={loadData} />
     </div>
   )
 }
@@ -303,12 +298,12 @@ function SummaryView({ summary, onCategoryClick }) {
   const inc = summary.byCategory.filter(c => c.income > 0)
   const maxE = Math.max(...exp.map(c => c.expense), 1)
   const maxI = Math.max(...inc.map(c => c.income), 1)
+  const m = summary.byMethod || { cash:{income:0,expense:0}, transfer:{income:0,expense:0} }
 
   const renderList = (items, field, max, color) => (
     <div className="space-y-2.5">
       {items.map(c => (
-        <button key={c.category.id || 'x'} className="w-full text-left active:bg-gray-50 rounded-lg p-1 -m-1"
-          onClick={() => onCategoryClick(c.category.id)}>
+        <button key={c.category.id||'x'} className="w-full text-left active:bg-gray-50 rounded-lg p-1 -m-1" onClick={() => onCategoryClick(c.category.id)}>
           <div className="flex items-center gap-2 mb-1">
             <span className="text-base">{c.category.icon}</span>
             <span className="text-xs font-medium text-gray-700 flex-1">{c.category.name}</span>
@@ -316,8 +311,7 @@ function SummaryView({ summary, onCategoryClick }) {
             <span className="text-[10px] text-gray-400">({c.count})</span>
           </div>
           <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-            <div className="h-full rounded-full transition-all"
-              style={{ width: `${(c[field] / max) * 100}%`, backgroundColor: c.category.color || '#EF4444' }} />
+            <div className="h-full rounded-full transition-all" style={{ width: `${(c[field]/max)*100}%`, backgroundColor: c.category.color||'#EF4444' }} />
           </div>
         </button>
       ))}
@@ -326,24 +320,26 @@ function SummaryView({ summary, onCategoryClick }) {
 
   return (
     <div className="space-y-4">
-      {exp.length > 0 && (
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="text-sm font-bold text-gray-700 mb-3">💸 Chi tiêu theo danh mục</h3>
-          {renderList(exp, 'expense', maxE, 'text-red-600')}
+      <div className="bg-white rounded-xl p-4 shadow-sm">
+        <h3 className="text-sm font-bold text-gray-700 mb-3">💳 Theo phương thức</h3>
+        <div className="space-y-2">
+          {[{key:'cash',icon:'💵',label:'Tiền mặt',bg:'bg-amber-50'},{key:'transfer',icon:'🏦',label:'Chuyển khoản',bg:'bg-blue-50'}].map(({key,icon,label,bg}) => (
+            <div key={key} className={`flex items-center gap-3 ${bg} rounded-lg px-3 py-2.5`}>
+              <span className="text-lg">{icon}</span>
+              <span className="text-xs font-medium text-gray-700 flex-1">{label}</span>
+              <div className="text-right">
+                <span className="text-xs text-green-600">+{formatMoney(m[key].income)}</span>
+                <span className="text-xs text-gray-400 mx-1">/</span>
+                <span className="text-xs text-red-600">-{formatMoney(m[key].expense)}</span>
+                <span className="text-xs font-bold ml-1.5" style={{ color: m[key].income-m[key].expense>=0?'#059669':'#DC2626' }}>= {formatMoney(m[key].income-m[key].expense)}</span>
+              </div>
+            </div>
+          ))}
         </div>
-      )}
-      {inc.length > 0 && (
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="text-sm font-bold text-gray-700 mb-3">💰 Thu nhập theo danh mục</h3>
-          {renderList(inc, 'income', maxI, 'text-green-600')}
-        </div>
-      )}
-      {exp.length === 0 && inc.length === 0 && (
-        <div className="bg-white rounded-xl p-8 text-center">
-          <div className="text-4xl mb-2">📊</div>
-          <p className="text-gray-500 text-sm">Chưa có dữ liệu tháng này</p>
-        </div>
-      )}
+      </div>
+      {exp.length>0 && <div className="bg-white rounded-xl p-4 shadow-sm"><h3 className="text-sm font-bold text-gray-700 mb-3">💸 Chi tiêu theo danh mục</h3>{renderList(exp,'expense',maxE,'text-red-600')}</div>}
+      {inc.length>0 && <div className="bg-white rounded-xl p-4 shadow-sm"><h3 className="text-sm font-bold text-gray-700 mb-3">💰 Thu nhập theo danh mục</h3>{renderList(inc,'income',maxI,'text-green-600')}</div>}
+      {exp.length===0 && inc.length===0 && <div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-2">📊</div><p className="text-gray-500 text-sm">Chưa có dữ liệu tháng này</p></div>}
     </div>
   )
 }
@@ -358,92 +354,77 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   const [categoryId, setCategoryId] = useState('')
   const [note, setNote] = useState('')
   const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [paymentMethod, setPaymentMethod] = useState('cash')
   const [saving, setSaving] = useState(false)
 
-  const filteredCats = categories.filter(c => {
-    const isIncome = c.metadata?.is_income === true
-    return formType === 'income' ? isIncome : !isIncome
-  })
+  const filteredCats = categories.filter(c => { const isInc = c.metadata?.is_income===true; return formType==='income'?isInc:!isInc })
 
   useEffect(() => {
     if (isOpen) {
       if (editingTx) {
         setFormType(editingTx.type); setAmount(String(editingTx.amount))
-        setCategoryId(editingTx.category_id || ''); setNote(editingTx.note || ''); setDate(editingTx.date)
+        setCategoryId(editingTx.category_id||''); setNote(editingTx.note||'')
+        setDate(editingTx.date); setPaymentMethod(editingTx.payment_method||'cash')
       } else {
         setFormType(type); setAmount(''); setCategoryId(''); setNote('')
-        setDate(new Date().toISOString().split('T')[0])
+        setDate(new Date().toISOString().split('T')[0]); setPaymentMethod('cash')
       }
     }
   }, [isOpen, editingTx, type])
 
-  // Auto-select nếu chỉ có 1 danh mục
-  useEffect(() => {
-    if (!isOpen || editingTx) return
-    if (filteredCats.length === 1) {
-      setCategoryId(filteredCats[0].id)
-    }
-  }, [isOpen, formType, filteredCats.length])
+  useEffect(() => { if(!isOpen||editingTx) return; if(filteredCats.length===1) setCategoryId(filteredCats[0].id) }, [isOpen, formType, filteredCats.length])
 
   const handleSubmit = async () => {
-    if (!amount || Number(amount) <= 0) { toast.error('Nhập số tiền'); return }
+    if (!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
     if (!categoryId) { toast.error('Chọn danh mục'); return }
     setSaving(true)
-    await onSave({ type: formType, amount: Number(amount), category_id: categoryId, note, date })
+    await onSave({ type:formType, amount:Number(amount), category_id:categoryId, note, date, payment_method:paymentMethod })
     setSaving(false)
   }
 
-  const quickAmounts = [10000, 20000, 50000, 100000, 200000, 500000]
-
   return (
-    <Modal isOpen={isOpen} onClose={onClose}
-      title={editingTx ? 'Sửa giao dịch' : (formType === 'income' ? '💰 Thêm thu' : '💸 Thêm chi')}>
+    <Modal isOpen={isOpen} onClose={onClose} title={editingTx?'Sửa giao dịch':(formType==='income'?'💰 Thêm thu':'💸 Thêm chi')}>
       <div className="space-y-4 p-5">
-        {/* Type toggle */}
         <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-          <button onClick={() => setFormType('expense')}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${formType === 'expense' ? 'bg-red-500 text-white shadow' : 'text-gray-500'}`}>
-            💸 Chi
-          </button>
-          <button onClick={() => setFormType('income')}
-            className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${formType === 'income' ? 'bg-green-500 text-white shadow' : 'text-gray-500'}`}>
-            💰 Thu
-          </button>
+          <button onClick={() => setFormType('expense')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${formType==='expense'?'bg-red-500 text-white shadow':'text-gray-500'}`}>💸 Chi</button>
+          <button onClick={() => setFormType('income')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold transition-all ${formType==='income'?'bg-green-500 text-white shadow':'text-gray-500'}`}>💰 Thu</button>
         </div>
 
-        {/* Amount */}
         <div>
           <label className="text-xs text-gray-500 mb-1 block">Số tiền</label>
           <div className="relative">
-            <input type="text" inputMode="numeric" 
-              value={amount ? Number(amount).toLocaleString('vi-VN') : ''}
-              onChange={e => { const v = e.target.value.replace(/[^0-9]/g, ''); setAmount(v) }}
-              placeholder="0" autoFocus
-              className="w-full text-2xl font-bold text-center py-4 border-2 border-gray-200 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200" />
+            <input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''}
+              onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" autoFocus
+              className="w-full text-2xl font-bold text-center py-4 border-2 border-gray-200 rounded-xl focus:border-green-500 focus:ring-2 focus:ring-green-200"/>
             <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-lg">đ</span>
           </div>
           <div className="grid grid-cols-3 gap-1.5 mt-2">
-            {quickAmounts.map(q => (
-              <button key={q} onClick={() => setAmount(String(q))}
-                className="py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95 transition-transform">
-                {formatMoney(q)}
-              </button>
+            {[10000,20000,50000,100000,200000,500000].map(q => (
+              <button key={q} onClick={() => setAmount(String(q))} className="py-2 bg-gray-50 hover:bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95">{formatMoney(q)}</button>
             ))}
           </div>
         </div>
 
-        {/* Category */}
+        {/* Payment Method */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1.5 block">Phương thức</label>
+          <div className="flex gap-2">
+            <button onClick={() => setPaymentMethod('cash')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all active:scale-95 ${paymentMethod==='cash'?'border-amber-400 bg-amber-50 text-amber-700':'border-gray-200 bg-white text-gray-500'}`}>💵 Tiền mặt</button>
+            <button onClick={() => setPaymentMethod('transfer')}
+              className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 transition-all active:scale-95 ${paymentMethod==='transfer'?'border-blue-400 bg-blue-50 text-blue-700':'border-gray-200 bg-white text-gray-500'}`}>🏦 Chuyển khoản</button>
+          </div>
+        </div>
+
         <div>
           <label className="text-xs text-gray-500 mb-1.5 block">Danh mục</label>
-          {filteredCats.length === 0 ? (
-            <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl">
-              Chưa có danh mục {formType === 'income' ? 'thu' : 'chi'}. Bấm ⚙️ trên header để thêm.
-            </p>
+          {filteredCats.length===0 ? (
+            <p className="text-xs text-amber-600 bg-amber-50 p-3 rounded-xl">Chưa có danh mục {formType==='income'?'thu':'chi'}. Bấm ⚙️ trên header để thêm.</p>
           ) : (
             <div className="grid grid-cols-4 gap-2">
               {filteredCats.map(c => (
                 <button key={c.id} onClick={() => setCategoryId(c.id)}
-                  className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all active:scale-95 ${categoryId === c.id ? 'border-green-500 bg-green-50' : 'border-transparent bg-gray-50'}`}>
+                  className={`flex flex-col items-center gap-1 p-2.5 rounded-xl border-2 transition-all active:scale-95 ${categoryId===c.id?'border-green-500 bg-green-50':'border-transparent bg-gray-50'}`}>
                   <span className="text-xl">{c.icon}</span>
                   <span className="text-[10px] font-medium text-gray-600 truncate w-full text-center">{c.name}</span>
                 </button>
@@ -452,28 +433,115 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
           )}
         </div>
 
-        {/* Date + Note */}
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Ngày</label>
-          <input type="date" value={date} onChange={e => setDate(e.target.value)}
-            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
-        </div>
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
-          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Mua nguyên liệu..."
-            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
-        </div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label>
+          <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
+          <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Mua nguyên liệu..." className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
 
-        {/* Actions */}
         <div className="flex gap-2 pt-2">
-          {onDelete && (
-            <button onClick={onDelete} className="px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl"><Trash2 size={18} /></button>
-          )}
+          {onDelete && <button onClick={onDelete} className="px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl"><Trash2 size={18}/></button>}
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm active:scale-98">Hủy</button>
-          <button onClick={handleSubmit} disabled={saving}
-            className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md active:scale-98 disabled:opacity-50">
-            {saving ? '...' : (editingTx ? 'Cập nhật' : 'Thêm')}
-          </button>
+          <button onClick={handleSubmit} disabled={saving} className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md active:scale-98 disabled:opacity-50">{saving?'...':(editingTx?'Cập nhật':'Thêm')}</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// TRANSFER FORM
+// ============================================
+function TransferForm({ isOpen, onClose, toast, onSaved, closeBal }) {
+  const [amount, setAmount] = useState('')
+  const [direction, setDirection] = useState('cash')
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setDirection('cash'); setDate(new Date().toISOString().split('T')[0]) } }, [isOpen])
+
+  const handleSave = async () => {
+    if (!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
+    setSaving(true)
+    try {
+      await createTransaction({ type:'transfer', amount:Number(amount), payment_method:direction, date, note:note||(direction==='cash'?'Chuyển TM → CK':'Chuyển CK → TM'), category_id:null })
+      toast.success('Đã chuyển'); onClose(); onSaved()
+    } catch(err) { toast.error('Lỗi: '+err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="🔄 Chuyển tiền nội bộ">
+      <div className="space-y-4 p-5">
+        <div className="flex gap-2">
+          <div className="flex-1 bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center">
+            <p className="text-[10px] text-amber-600">💵 Tiền mặt</p>
+            <p className="text-sm font-bold text-amber-700">{formatMoney(closeBal?.cash||0)}</p>
+          </div>
+          <div className="flex-1 bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center">
+            <p className="text-[10px] text-blue-600">🏦 Chuyển khoản</p>
+            <p className="text-sm font-bold text-blue-700">{formatMoney(closeBal?.transfer||0)}</p>
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1.5 block">Hướng chuyển</label>
+          <div className="flex gap-2">
+            <button onClick={() => setDirection('cash')} className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 transition-all active:scale-95 ${direction==='cash'?'border-indigo-400 bg-indigo-50 text-indigo-700':'border-gray-200 text-gray-500'}`}>💵 TM → 🏦 CK</button>
+            <button onClick={() => setDirection('transfer')} className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 transition-all active:scale-95 ${direction==='transfer'?'border-indigo-400 bg-indigo-50 text-indigo-700':'border-gray-200 text-gray-500'}`}>🏦 CK → 💵 TM</button>
+          </div>
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Số tiền chuyển</label>
+          <div className="relative">
+            <input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''} onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))}
+              placeholder="0" autoFocus className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/>
+            <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span>
+          </div>
+        </div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder={direction==='cash'?'Ví dụ: Nạp tiền vào bank':'Ví dụ: Rút ATM'} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        {amount && Number(amount)>0 && (
+          <div className="bg-indigo-50 border border-indigo-200 rounded-xl p-3 text-xs">
+            <p className="text-indigo-700 font-medium">{direction==='cash'?`💵 TM: ${formatMoney(closeBal?.cash||0)} → ${formatMoney((closeBal?.cash||0)-Number(amount))}`:`🏦 CK: ${formatMoney(closeBal?.transfer||0)} → ${formatMoney((closeBal?.transfer||0)-Number(amount))}`}</p>
+            <p className="text-indigo-700 font-medium mt-0.5">{direction==='cash'?`🏦 CK: ${formatMoney(closeBal?.transfer||0)} → ${formatMoney((closeBal?.transfer||0)+Number(amount))}`:`💵 TM: ${formatMoney(closeBal?.cash||0)} → ${formatMoney((closeBal?.cash||0)+Number(amount))}`}</p>
+          </div>
+        )}
+        <div className="flex gap-2 pt-2">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Chuyển'}</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// INITIAL BALANCE FORM
+// ============================================
+function InitialBalanceForm({ isOpen, onClose, initialBal, toast, onSaved }) {
+  const [cash, setCash] = useState('')
+  const [transfer, setTransfer] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { if(isOpen) { setCash(String(initialBal.cash||'')); setTransfer(String(initialBal.transfer||'')) } }, [isOpen, initialBal])
+
+  const handleSave = async () => {
+    setSaving(true)
+    try { await saveInitialBalances(Number(cash)||0, Number(transfer)||0, initialBal.id); toast.success('Đã lưu số dư ban đầu'); onClose(); onSaved() }
+    catch(err) { toast.error('Lỗi: '+err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="💰 Số dư ban đầu">
+      <div className="space-y-4 p-5">
+        <p className="text-xs text-gray-500">Nhập số dư thực tế khi bắt đầu sử dụng app. Số này là gốc để tính lũy kế.</p>
+        <div><label className="text-xs text-gray-500 mb-1 block">💵 Tiền mặt ban đầu</label><div className="relative"><input type="text" inputMode="numeric" value={cash?Number(cash).toLocaleString('vi-VN'):''} onChange={e => setCash(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" className="w-full text-lg font-bold text-center py-3 border-2 border-amber-200 rounded-xl focus:border-amber-400"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">🏦 Chuyển khoản ban đầu</label><div className="relative"><input type="text" inputMode="numeric" value={transfer?Number(transfer).toLocaleString('vi-VN'):''} onChange={e => setTransfer(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" className="w-full text-lg font-bold text-center py-3 border-2 border-blue-200 rounded-xl focus:border-blue-400"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
+        <div className="bg-gray-50 rounded-xl p-3 text-center"><p className="text-xs text-gray-500">Tổng ban đầu</p><p className="text-lg font-bold text-gray-800">{formatMoney((Number(cash)||0)+(Number(transfer)||0))}</p></div>
+        <div className="flex gap-2 pt-2">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Lưu'}</button>
         </div>
       </div>
     </Modal>
@@ -482,89 +550,49 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
 
 // ============================================
 // CATEGORY MANAGER
-// Thêm/Sửa/Xóa danh mục thu chi
 // ============================================
 function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   const toast = useToast()
   const [showForm, setShowForm] = useState(false)
   const [editingCat, setEditingCat] = useState(null)
-  const [formData, setFormData] = useState({ name: '', icon: '📦', color: '#3B82F6', is_income: false })
+  const [formData, setFormData] = useState({ name:'', icon:'📦', color:'#3B82F6', is_income:false })
   const [saving, setSaving] = useState(false)
-
   const expenseCats = categories.filter(c => !c.metadata?.is_income)
-  const incomeCats = categories.filter(c => c.metadata?.is_income === true)
+  const incomeCats = categories.filter(c => c.metadata?.is_income===true)
 
-  const openAdd = (isIncome) => {
-    setEditingCat(null)
-    setFormData({ name: '', icon: '📦', color: '#3B82F6', is_income: isIncome })
-    setShowForm(true)
-  }
-
-  const openEdit = (cat) => {
-    setEditingCat(cat)
-    setFormData({ name: cat.name, icon: cat.icon, color: cat.color, is_income: cat.metadata?.is_income || false })
-    setShowForm(true)
-  }
+  const openAdd = (isIncome) => { setEditingCat(null); setFormData({ name:'', icon:'📦', color:'#3B82F6', is_income:isIncome }); setShowForm(true) }
+  const openEdit = (cat) => { setEditingCat(cat); setFormData({ name:cat.name, icon:cat.icon, color:cat.color, is_income:cat.metadata?.is_income||false }); setShowForm(true) }
 
   const handleSave = async () => {
     if (!formData.name.trim()) return
     setSaving(true)
     try {
-      if (editingCat) {
-        await updateExpenseCategory(editingCat.id, {
-          name: formData.name.trim(), icon: formData.icon, color: formData.color,
-          metadata: { is_income: formData.is_income }
-        })
-        toast.success('Đã cập nhật')
-      } else {
-        await createExpenseCategory({
-          name: formData.name.trim(), icon: formData.icon, color: formData.color,
-          metadata: { is_income: formData.is_income },
-          sort_order: categories.length + 1
-        })
-        toast.success('Đã thêm')
-      }
-      setShowForm(false)
-      onChanged()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+      if (editingCat) { await updateExpenseCategory(editingCat.id, { name:formData.name.trim(), icon:formData.icon, color:formData.color, metadata:{is_income:formData.is_income} }); toast.success('Đã cập nhật') }
+      else { await createExpenseCategory({ name:formData.name.trim(), icon:formData.icon, color:formData.color, metadata:{is_income:formData.is_income}, sort_order:categories.length+1 }); toast.success('Đã thêm') }
+      setShowForm(false); onChanged()
+    } catch(err) { toast.error('Lỗi: '+err.message) }
     finally { setSaving(false) }
   }
 
   const handleDelete = async (cat) => {
     if (!confirm(`Xóa danh mục "${cat.name}"?`)) return
-    try {
-      await deleteExpenseCategory(cat.id)
-      toast.success('Đã xóa')
-      onChanged()
-    } catch { toast.error('Lỗi xóa') }
+    try { await deleteExpenseCategory(cat.id); toast.success('Đã xóa'); onChanged() } catch { toast.error('Lỗi xóa') }
   }
 
   const renderCatList = (list, label, isIncome) => (
     <div className="mb-5">
       <div className="flex items-center justify-between mb-2">
         <h4 className="text-sm font-bold text-gray-700">{label}</h4>
-        <button onClick={() => openAdd(isIncome)}
-          className="flex items-center gap-1 text-xs text-green-600 font-medium px-2 py-1 hover:bg-green-50 rounded-lg active:scale-95">
-          <Plus size={14} /> Thêm
-        </button>
+        <button onClick={() => openAdd(isIncome)} className="flex items-center gap-1 text-xs text-green-600 font-medium px-2 py-1 hover:bg-green-50 rounded-lg active:scale-95"><Plus size={14}/> Thêm</button>
       </div>
-      {list.length === 0 ? (
-        <p className="text-xs text-gray-400 py-3 text-center">Chưa có danh mục nào</p>
-      ) : (
+      {list.length===0 ? <p className="text-xs text-gray-400 py-3 text-center">Chưa có danh mục nào</p> : (
         <div className="space-y-1">
           {list.map(cat => (
             <div key={cat.id} className="flex items-center gap-3 bg-white rounded-xl px-4 py-3 shadow-sm">
-              <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0"
-                style={{ backgroundColor: cat.color + '20' }}>
-                {cat.icon}
-              </div>
+              <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0" style={{ backgroundColor: cat.color+'20' }}>{cat.icon}</div>
               <span className="text-sm font-medium text-gray-800 flex-1">{cat.name}</span>
-              <button onClick={() => openEdit(cat)} className="p-2 text-gray-400 hover:text-blue-500 active:scale-90">
-                <Edit2 size={16} />
-              </button>
-              <button onClick={() => handleDelete(cat)} className="p-2 text-gray-400 hover:text-red-500 active:scale-90">
-                <Trash2 size={16} />
-              </button>
+              <button onClick={() => openEdit(cat)} className="p-2 text-gray-400 hover:text-blue-500 active:scale-90"><Edit2 size={16}/></button>
+              <button onClick={() => handleDelete(cat)} className="p-2 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={16}/></button>
             </div>
           ))}
         </div>
@@ -575,73 +603,22 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Quản lý danh mục">
       {!showForm ? (
-        <div className="p-5">
-          {renderCatList(expenseCats, '💸 Danh mục chi', false)}
-          {renderCatList(incomeCats, '💰 Danh mục thu', true)}
-        </div>
+        <div className="p-5">{renderCatList(expenseCats,'💸 Danh mục chi',false)}{renderCatList(incomeCats,'💰 Danh mục thu',true)}</div>
       ) : (
         <div className="space-y-4 p-5">
-          <button onClick={() => setShowForm(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700">
-            <ChevronLeft size={16} /> Quay lại
-          </button>
-
-          <h4 className="font-bold text-gray-700">
-            {editingCat ? `Sửa "${editingCat.name}"` : `Thêm danh mục ${formData.is_income ? 'thu' : 'chi'}`}
-          </h4>
-
-          {/* Name */}
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Tên danh mục</label>
-            <input type="text" value={formData.name} onChange={e => setFormData({ ...formData, name: e.target.value })}
-              placeholder="Ví dụ: Ăn uống" autoFocus
-              className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
-          </div>
-
-          {/* Icon picker */}
-          <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">Icon</label>
-            <div className="flex flex-wrap gap-2">
-              {ICON_OPTIONS.map(ic => (
-                <button key={ic} onClick={() => setFormData({ ...formData, icon: ic })}
-                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg transition-all active:scale-90 ${formData.icon === ic ? 'bg-green-100 ring-2 ring-green-500' : 'bg-gray-50 hover:bg-gray-100'}`}>
-                  {ic}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Color picker */}
-          <div>
-            <label className="text-xs text-gray-500 mb-1.5 block">Màu</label>
-            <div className="flex flex-wrap gap-2">
-              {COLOR_OPTIONS.map(cl => (
-                <button key={cl} onClick={() => setFormData({ ...formData, color: cl })}
-                  className={`w-9 h-9 rounded-full transition-all active:scale-90 ${formData.color === cl ? 'ring-2 ring-offset-2 ring-gray-400 scale-110' : 'hover:scale-105'}`}
-                  style={{ backgroundColor: cl }} />
-              ))}
-            </div>
-          </div>
-
-          {/* Preview */}
+          <button onClick={() => setShowForm(false)} className="flex items-center gap-1 text-sm text-gray-500 hover:text-gray-700"><ChevronLeft size={16}/> Quay lại</button>
+          <h4 className="font-bold text-gray-700">{editingCat?`Sửa "${editingCat.name}"`:`Thêm danh mục ${formData.is_income?'thu':'chi'}`}</h4>
+          <div><label className="text-xs text-gray-500 mb-1 block">Tên danh mục</label><input type="text" value={formData.name} onChange={e => setFormData({...formData,name:e.target.value})} placeholder="Ví dụ: Ăn uống" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <div><label className="text-xs text-gray-500 mb-1.5 block">Icon</label><div className="flex flex-wrap gap-2">{ICON_OPTIONS.map(ic => <button key={ic} onClick={() => setFormData({...formData,icon:ic})} className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg transition-all active:scale-90 ${formData.icon===ic?'bg-green-100 ring-2 ring-green-500':'bg-gray-50 hover:bg-gray-100'}`}>{ic}</button>)}</div></div>
+          <div><label className="text-xs text-gray-500 mb-1.5 block">Màu</label><div className="flex flex-wrap gap-2">{COLOR_OPTIONS.map(cl => <button key={cl} onClick={() => setFormData({...formData,color:cl})} className={`w-9 h-9 rounded-full transition-all active:scale-90 ${formData.color===cl?'ring-2 ring-offset-2 ring-gray-400 scale-110':'hover:scale-105'}`} style={{backgroundColor:cl}}/>)}</div></div>
           <div className="bg-gray-50 rounded-xl p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg"
-              style={{ backgroundColor: formData.color + '20' }}>
-              {formData.icon}
-            </div>
-            <span className="text-sm font-medium">{formData.name || 'Tên danh mục'}</span>
-            <span className={`text-xs ml-auto px-2 py-0.5 rounded-full ${formData.is_income ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-              {formData.is_income ? 'Thu' : 'Chi'}
-            </span>
+            <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg" style={{backgroundColor:formData.color+'20'}}>{formData.icon}</div>
+            <span className="text-sm font-medium">{formData.name||'Tên danh mục'}</span>
+            <span className={`text-xs ml-auto px-2 py-0.5 rounded-full ${formData.is_income?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{formData.is_income?'Thu':'Chi'}</span>
           </div>
-
-          {/* Save */}
           <div className="flex gap-2">
-            <button onClick={() => setShowForm(false)}
-              className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
-            <button onClick={handleSave} disabled={saving || !formData.name.trim()}
-              className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">
-              {saving ? '...' : (editingCat ? 'Cập nhật' : 'Thêm')}
-            </button>
+            <button onClick={() => setShowForm(false)} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+            <button onClick={handleSave} disabled={saving||!formData.name.trim()} className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':(editingCat?'Cập nhật':'Thêm')}</button>
           </div>
         </div>
       )}
