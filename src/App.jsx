@@ -461,7 +461,7 @@ function AppContent() {
       {/* FAB */}
       <button
         onClick={() => setShowCreateOrder(true)}
-        className="fixed bottom-6 right-6 w-14 h-14 bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center btn-press"
+        className="fixed right-4 w-14 h-14 bg-gradient-to-br from-green-500 to-emerald-600 text-white rounded-2xl shadow-lg hover:shadow-xl hover:scale-105 transition-all flex items-center justify-center btn-press z-40" style={{ bottom: "calc(4.5rem + env(safe-area-inset-bottom, 0px))" }}
       >
         <Plus size={28} />
       </button>
