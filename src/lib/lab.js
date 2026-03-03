@@ -213,20 +213,23 @@ export async function undoDeductStock(batchId, items, ingredients) {
 }
 
 // ============================================
-// GHI CHÚ
+// GHI CHÚ + THÍ NGHIỆM
 // ============================================
 export async function getLabNotes(formulaId = null) {
   let q = supabase.from('lab_notes').select('*')
     .order('is_pinned',{ascending:false}).order('created_at',{ascending:false})
   if (formulaId) q = q.eq('formula_id', formulaId)
   const { data, error } = await q
-  if (error) throw error; return data || []
+  if (error) throw error
+  return (data||[]).map(n => ({ ...n, discoveries:n.discoveries||[], changes:n.changes||'', observation:n.observation||'', rating:n.rating||'' }))
 }
 export async function createLabNote(note) {
   const { data, error } = await supabase.from('lab_notes')
     .insert([{ title:note.title, content:note.content||'', type:note.type||'note',
       formula_id:note.formula_id||null, ingredient_id:note.ingredient_id||null,
-      tags:note.tags||[], is_pinned:note.is_pinned||false }]).select().single()
+      tags:note.tags||[], is_pinned:note.is_pinned||false,
+      changes:note.changes||'', observation:note.observation||'', rating:note.rating||'',
+      discoveries:note.discoveries||[] }]).select().single()
   if (error) throw error; return data
 }
 export async function updateLabNote(id, updates) {

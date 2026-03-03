@@ -5,7 +5,7 @@
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
-  RefreshCw, Plus, Trash2, Edit2, Star, ChevronDown, ChevronUp,
+  RefreshCw, Plus, Trash2, Edit2, Star, ChevronLeft, ChevronDown, ChevronUp,
   Copy, Search, X, Pin, FlaskConical, Package, StickyNote, Calculator, Settings,
   Play, Undo2, CheckCircle, Layers
 } from 'lucide-react'
@@ -117,12 +117,25 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
   const [expandedId, setExpandedId] = useState(null)
   const [servingOverrides, setServingOverrides] = useState({})
   const [showBatchForm, setShowBatchForm] = useState(null) // formula object
+  const [sortBy, setSortBy] = useState('default') // default|name_asc|name_desc|newest|oldest|category
 
   const filtered = useMemo(() => {
-    if (!search) return formulas
-    const s = search.toLowerCase()
-    return formulas.filter(f => f.name.toLowerCase().includes(s) || f.category?.toLowerCase().includes(s))
-  }, [formulas, search])
+    let list = formulas
+    if (search) {
+      const s = search.toLowerCase()
+      list = list.filter(f => f.name.toLowerCase().includes(s) || f.category?.toLowerCase().includes(s))
+    }
+    const sorted = [...list]
+    switch (sortBy) {
+      case 'name_asc': sorted.sort((a,b) => a.name.localeCompare(b.name, 'vi')); break
+      case 'name_desc': sorted.sort((a,b) => b.name.localeCompare(a.name, 'vi')); break
+      case 'newest': sorted.sort((a,b) => new Date(b.updated_at||b.created_at) - new Date(a.updated_at||a.created_at)); break
+      case 'oldest': sorted.sort((a,b) => new Date(a.updated_at||a.created_at) - new Date(b.updated_at||b.created_at)); break
+      case 'category': sorted.sort((a,b) => (a.category||'').localeCompare(b.category||'', 'vi') || a.name.localeCompare(b.name, 'vi')); break
+      default: break // API default: favorite first, then newest
+    }
+    return sorted
+  }, [formulas, search, sortBy])
 
   const handleDelete = async (f) => {
     if(!confirm(`Xóa "${f.name}"?`)) return
@@ -149,7 +162,23 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
 
   return (
     <>
-      <SearchBar value={search} onChange={setSearch} placeholder="Tìm công thức..."/>
+      <div className="flex gap-2 mb-3">
+        <div className="relative flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm công thức..."
+            className="w-full pl-9 pr-8 py-2.5 bg-white border border-gray-200 rounded-xl text-sm"/>
+          {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"><X size={16}/></button>}
+        </div>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="px-2 py-2.5 bg-white border border-gray-200 rounded-xl text-xs text-gray-600 min-w-[90px]">
+          <option value="default">⭐ Mặc định</option>
+          <option value="name_asc">A → Z</option>
+          <option value="name_desc">Z → A</option>
+          <option value="newest">Mới nhất</option>
+          <option value="oldest">Cũ nhất</option>
+          <option value="category">Phân loại</option>
+        </select>
+      </div>
       {filtered.length===0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">🧪</div>
@@ -844,79 +873,303 @@ function IngredientForm({ isOpen, onClose, ingredient, onSave }) {
 }
 
 // ============================================
-// NOTES TAB (giữ nguyên logic)
+// NOTES TAB - v2: Note + Experiment + Discovery
 // ============================================
 function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
-  const [showForm, setShowForm] = useState(false); const [editing, setEditing] = useState(null)
+  const [showForm, setShowForm] = useState(null) // 'note'|'experiment'
+  const [editing, setEditing] = useState(null)
+  const [noteFilter, setNoteFilter] = useState('all') // all|note|experiment|discovery
+  const [expandedId, setExpandedId] = useState(null)
+  const [addingDiscovery, setAddingDiscovery] = useState(null)
+  const [discoveryText, setDiscoveryText] = useState('')
+
+  // All discoveries aggregated
+  const allDiscoveries = useMemo(() => {
+    const ds = []
+    notes.forEach(n => {
+      (n.discoveries||[]).forEach(d => {
+        ds.push({ ...d, sourceId:n.id, sourceTitle:n.title, sourceType:n.type, sourceFormula:n.formula_id ? formulas.find(f=>f.id===n.formula_id)?.name : null })
+      })
+    })
+    return ds.sort((a,b) => new Date(b.created_at)-new Date(a.created_at))
+  }, [notes, formulas])
+
   const filtered = useMemo(() => {
-    if(!search) return notes; const s=search.toLowerCase()
-    return notes.filter(n => n.title.toLowerCase().includes(s)||n.content?.toLowerCase().includes(s))
-  }, [notes, search])
+    let list = notes
+    if (noteFilter==='note') list = list.filter(n => n.type==='note')
+    else if (noteFilter==='experiment') list = list.filter(n => n.type==='experiment')
+    if (search) {
+      const s = search.toLowerCase()
+      list = list.filter(n => n.title.toLowerCase().includes(s)||n.content?.toLowerCase().includes(s)||n.changes?.toLowerCase().includes(s)||n.observation?.toLowerCase().includes(s)||(n.discoveries||[]).some(d => d.text?.toLowerCase().includes(s)))
+    }
+    return list
+  }, [notes, noteFilter, search])
+
+  const counts = useMemo(() => ({
+    all:notes.length, note:notes.filter(n=>n.type==='note').length,
+    experiment:notes.filter(n=>n.type==='experiment').length, discovery:allDiscoveries.length
+  }), [notes, allDiscoveries])
 
   const handleDelete = async (n) => { if(!confirm(`Xóa "${n.title}"?`)) return; try { await deleteLabNote(n.id); toast.success('Đã xóa'); onRefresh() } catch { toast.error('Lỗi') } }
   const handlePin = async (n) => { try { await togglePinNote(n.id, n.is_pinned); onRefresh() } catch { toast.error('Lỗi') } }
-  const handleSave = async (data) => {
-    try { if(editing) { await updateLabNote(editing.id, data); toast.success('Đã cập nhật') } else { await createLabNote(data); toast.success('Đã thêm') }
-      setShowForm(false); onRefresh() } catch(err) { toast.error('Lỗi: '+err.message) }
+
+  const handleSaveNote = async (data) => {
+    try {
+      if (editing) { await updateLabNote(editing.id, data); toast.success('Đã cập nhật') }
+      else { await createLabNote(data); toast.success('Đã thêm') }
+      setShowForm(null); setEditing(null); onRefresh()
+    } catch(err) { toast.error('Lỗi: '+err.message) }
   }
-  const typeLabels = { note:'📝 Ghi chú', experiment:'🔬 Thí nghiệm', discovery:'💡 Phát hiện' }
-  const typeColors = { note:'bg-gray-100 text-gray-600', experiment:'bg-blue-100 text-blue-600', discovery:'bg-amber-100 text-amber-600' }
+
+  const handleAddDiscovery = async (noteId) => {
+    if (!discoveryText.trim()) return
+    const n = notes.find(x => x.id===noteId)
+    if (!n) return
+    const newD = { id:'d_'+Date.now(), text:discoveryText.trim(), created_at:new Date().toISOString() }
+    try {
+      await updateLabNote(noteId, { discoveries:[...(n.discoveries||[]), newD] })
+      toast.success('💡 Đã thêm phát hiện'); setAddingDiscovery(null); setDiscoveryText(''); onRefresh()
+    } catch(err) { toast.error('Lỗi: '+err.message) }
+  }
+
+  const handleRemoveDiscovery = async (noteId, dId) => {
+    if (!confirm('Xóa phát hiện này?')) return
+    const n = notes.find(x => x.id===noteId)
+    if (!n) return
+    try {
+      await updateLabNote(noteId, { discoveries:(n.discoveries||[]).filter(d => d.id!==dId) })
+      toast.success('Đã xóa'); onRefresh()
+    } catch { toast.error('Lỗi') }
+  }
+
+  const ratingCfg = { good:{icon:'⭐',label:'Tốt',cls:'bg-green-50 text-green-600 border-green-200'}, fair:{icon:'😐',label:'Tạm',cls:'bg-amber-50 text-amber-600 border-amber-200'}, bad:{icon:'❌',label:'Kém',cls:'bg-red-50 text-red-500 border-red-200'} }
+
+  const noteFilters = [
+    { id:'all', label:'Tất cả', icon:'📋' }, { id:'note', label:'Ghi chú', icon:'📝' },
+    { id:'experiment', label:'Thí nghiệm', icon:'🔬' }, { id:'discovery', label:'Phát hiện', icon:'💡' }
+  ]
 
   return (
     <>
-      <SearchBar value={search} onChange={setSearch} placeholder="Tìm ghi chú..."/>
-      {filtered.length===0 ? (
-        <div className="bg-white rounded-xl p-8 text-center"><div className="text-4xl mb-2">📝</div>
-          <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có ghi chú'}</p>
-          <button onClick={() => { setEditing(null); setShowForm(true) }} className="mt-3 text-purple-600 font-medium text-sm">+ Thêm</button></div>
+      {/* Sub-filter tabs */}
+      <div className="flex gap-1 mb-3">
+        {noteFilters.map(f => (
+          <button key={f.id} onClick={() => { setNoteFilter(f.id); setExpandedId(null); setSearch('') }}
+            className={`flex-1 py-2 rounded-lg text-[11px] font-semibold flex flex-col items-center gap-0.5 ${noteFilter===f.id?'bg-purple-500 text-white shadow-md':'bg-gray-100 text-gray-500'}`}>
+            <span className="text-sm">{f.icon}</span>
+            <span>{f.label}</span>
+            <span className={`text-[9px] px-1.5 rounded-full ${noteFilter===f.id?'bg-white/20':'bg-gray-200'}`}>{counts[f.id]}</span>
+          </button>
+        ))}
+      </div>
+
+      {noteFilter!=='discovery' && <SearchBar value={search} onChange={setSearch} placeholder="Tìm ghi chú / thí nghiệm..."/>}
+
+      {/* Discovery aggregation tab */}
+      {noteFilter==='discovery' ? (
+        <DiscoveryAggregation discoveries={allDiscoveries} onJumpTo={(srcId) => { setNoteFilter('all'); setTimeout(() => setExpandedId(srcId), 100) }} />
+      ) : filtered.length===0 ? (
+        <div className="bg-white rounded-xl p-8 text-center">
+          <div className="text-4xl mb-2">{noteFilter==='experiment'?'🔬':'📝'}</div>
+          <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có'}</p>
+          <button onClick={() => { setEditing(null); setShowForm(noteFilter==='experiment'?'experiment':'note') }} className="mt-3 text-purple-600 font-medium text-sm">+ Thêm</button>
+        </div>
       ) : (
-        <div className="space-y-2">{filtered.map(n => (
-          <div key={n.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
-            <div className="flex items-start gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-1.5 mb-1">
-                  {n.is_pinned && <Pin size={12} className="text-amber-500"/>}
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${typeColors[n.type]||typeColors.note}`}>{typeLabels[n.type]||'📝 Ghi chú'}</span>
+        <div className="space-y-2.5">
+          {filtered.map(n => {
+            const isExp = n.type==='experiment'
+            const isOpen = expandedId===n.id
+            const dCount = (n.discoveries||[]).length
+            const formulaName = n.formula_id ? formulas.find(f=>f.id===n.formula_id)?.name : null
+            const r = n.rating ? ratingCfg[n.rating] : null
+
+            return (
+              <div key={n.id} className={`bg-white rounded-xl shadow-sm overflow-hidden transition-all ${isOpen?'ring-2 ring-purple-400':''}`}>
+                {/* Header */}
+                <div className="flex items-start gap-2.5 px-4 py-3 cursor-pointer active:bg-gray-50" onClick={() => { setExpandedId(isOpen?null:n.id); setAddingDiscovery(null) }}>
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${isExp?'bg-blue-50':'bg-gray-100'}`}>
+                    {isExp?'🔬':'📝'}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1.5 flex-wrap mb-1">
+                      {n.is_pinned && <Pin size={11} className="text-amber-500"/>}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${isExp?'bg-blue-50 text-blue-600':'bg-gray-100 text-gray-500'}`}>
+                        {isExp?'Thí nghiệm':'Ghi chú'}
+                      </span>
+                      {r && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${r.cls}`}>{r.icon} {r.label}</span>}
+                      {dCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-600 border border-amber-200">💡 {dCount}</span>}
+                    </div>
+                    <p className="text-sm font-semibold text-gray-800 truncate">{n.title}</p>
+                    {formulaName && <p className="text-[11px] text-purple-600 font-medium mt-0.5">🧪 {formulaName}</p>}
+                    {!isOpen && !isExp && n.content && <p className="text-xs text-gray-400 mt-0.5 line-clamp-1">{n.content}</p>}
+                    <p className="text-[10px] text-gray-300 mt-1">{new Date(n.created_at).toLocaleDateString('vi-VN')}</p>
+                  </div>
+                  <div className="flex items-center gap-1 flex-shrink-0 mt-1">
+                    <button onClick={e => { e.stopPropagation(); handlePin(n) }} className={`p-1 rounded active:scale-90 ${n.is_pinned?'text-amber-500':'text-gray-300'}`}><Pin size={13}/></button>
+                    {isOpen ? <ChevronUp size={16} className="text-gray-400"/> : <ChevronDown size={16} className="text-gray-400"/>}
+                  </div>
                 </div>
-                <p className="text-sm font-medium text-gray-800">{n.title}</p>
-                {n.content && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.content}</p>}
-                <p className="text-[10px] text-gray-300 mt-1">{new Date(n.created_at).toLocaleDateString('vi-VN')}</p>
+
+                {/* Expanded */}
+                {isOpen && (
+                  <div className="border-t border-gray-100 px-4 py-3 space-y-3">
+                    {/* Note content */}
+                    {!isExp && n.content && <p className="text-[13px] text-gray-600 leading-relaxed whitespace-pre-wrap">{n.content}</p>}
+
+                    {/* Experiment structured */}
+                    {isExp && (
+                      <div className="space-y-2">
+                        {n.changes && (
+                          <div className="bg-slate-50 rounded-lg p-3">
+                            <p className="text-[10px] font-bold text-slate-400 mb-1 uppercase tracking-wide">🔧 Thay đổi</p>
+                            <p className="text-[13px] text-slate-700 leading-relaxed whitespace-pre-wrap">{n.changes}</p>
+                          </div>
+                        )}
+                        {n.observation && (
+                          <div className="bg-green-50 rounded-lg p-3">
+                            <p className="text-[10px] font-bold text-green-300 mb-1 uppercase tracking-wide">👁️ Quan sát</p>
+                            <p className="text-[13px] text-green-800 leading-relaxed whitespace-pre-wrap">{n.observation}</p>
+                          </div>
+                        )}
+                        {n.content && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">📝 {n.content}</p>}
+                      </div>
+                    )}
+
+                    {/* Discoveries inline */}
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-bold text-amber-600">💡 Phát hiện</span>
+                        {addingDiscovery!==n.id && (
+                          <button onClick={e => { e.stopPropagation(); setAddingDiscovery(n.id); setDiscoveryText('') }}
+                            className="text-[11px] font-bold text-amber-600 bg-amber-50 border border-dashed border-amber-300 rounded-lg px-2.5 py-1 active:scale-95">
+                            💡+ Thêm
+                          </button>
+                        )}
+                      </div>
+
+                      {dCount>0 && (
+                        <div className="space-y-1.5 mb-2">
+                          {n.discoveries.map(d => (
+                            <div key={d.id} className="flex items-start gap-2 bg-amber-50 rounded-lg px-3 py-2.5 border border-amber-200">
+                              <span className="text-sm mt-0.5">💡</span>
+                              <p className="text-[13px] text-amber-900 font-medium flex-1 leading-snug">{d.text}</p>
+                              <button onClick={e => { e.stopPropagation(); handleRemoveDiscovery(n.id, d.id) }} className="text-amber-400 text-xs p-0.5 active:scale-90">✕</button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {dCount===0 && addingDiscovery!==n.id && <p className="text-xs text-gray-300 text-center py-2 italic">Chưa có phát hiện</p>}
+
+                      {addingDiscovery===n.id && (
+                        <div className="bg-amber-50 rounded-lg p-3 border-2 border-amber-300">
+                          <textarea value={discoveryText} onChange={e => setDiscoveryText(e.target.value)} placeholder="VD: Ma Hoàng ≥12g mới đủ tác dụng..."
+                            rows={2} autoFocus className="w-full px-3 py-2 border border-amber-200 rounded-lg text-[13px] resize-none bg-white" onClick={e => e.stopPropagation()}/>
+                          <div className="flex gap-2 mt-2">
+                            <button onClick={e => { e.stopPropagation(); setAddingDiscovery(null) }} className="flex-1 py-2 bg-gray-100 text-gray-500 rounded-lg text-xs font-medium">Hủy</button>
+                            <button onClick={e => { e.stopPropagation(); handleAddDiscovery(n.id) }} disabled={!discoveryText.trim()}
+                              className="flex-1 py-2 bg-amber-500 text-white rounded-lg text-xs font-bold disabled:opacity-50 active:scale-98">💡 Lưu</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => { setEditing(n); setShowForm(n.type==='experiment'?'experiment':'note') }}
+                        className="flex-1 flex items-center justify-center gap-1 px-3 py-2 bg-purple-50 rounded-lg text-xs font-medium text-purple-600 active:scale-95"><Edit2 size={13}/> Sửa</button>
+                      <button onClick={() => handleDelete(n)} className="px-3 py-2 bg-red-50 rounded-lg text-xs font-medium text-red-500 active:scale-95"><Trash2 size={13}/></button>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className="flex gap-1 flex-shrink-0">
-                <button onClick={() => handlePin(n)} className={`p-1.5 rounded-lg active:scale-90 ${n.is_pinned?'text-amber-500':'text-gray-300'}`}><Pin size={14}/></button>
-                <button onClick={() => { setEditing(n); setShowForm(true) }} className="p-1.5 text-gray-400 hover:text-purple-500 active:scale-90"><Edit2 size={14}/></button>
-                <button onClick={() => handleDelete(n)} className="p-1.5 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={14}/></button>
-              </div>
-            </div>
-          </div>
-        ))}</div>
+            )
+          })}
+        </div>
       )}
-      <button onClick={() => { setEditing(null); setShowForm(true) }}
-        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 z-40" style={{bottom:"calc(4.5rem + env(safe-area-inset-bottom, 0px))"}}><Plus size={24}/></button>
-      <NoteForm isOpen={showForm} onClose={() => setShowForm(false)} note={editing} formulas={formulas} onSave={handleSave}/>
+
+      {/* FAB - only note or experiment */}
+      {noteFilter!=='discovery' && (
+        <div className="fixed right-4 z-40 flex flex-col gap-2 items-end" style={{bottom:"calc(4.5rem + env(safe-area-inset-bottom, 0px))"}}>
+          <button onClick={() => { setEditing(null); setShowForm('experiment') }}
+            className="w-11 h-11 bg-blue-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 text-lg">🔬</button>
+          <button onClick={() => { setEditing(null); setShowForm('note') }}
+            className="w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90"><Plus size={24}/></button>
+        </div>
+      )}
+
+      {showForm==='note' && <NoteFormV2 isOpen onClose={() => { setShowForm(null); setEditing(null) }} note={editing?.type!=='experiment'?editing:null} formulas={formulas} onSave={handleSaveNote}/>}
+      {showForm==='experiment' && <ExperimentForm isOpen onClose={() => { setShowForm(null); setEditing(null) }} note={editing?.type==='experiment'?editing:null} formulas={formulas} onSave={handleSaveNote}/>}
     </>
   )
 }
 
 // ============================================
-// NOTE FORM
+// DISCOVERY AGGREGATION
 // ============================================
-function NoteForm({ isOpen, onClose, note, formulas, onSave }) {
-  const [form, setForm] = useState({ title:'', content:'', type:'note', formula_id:'' }); const [saving, setSaving] = useState(false)
-  useEffect(() => { if(isOpen) { if(note) setForm({ title:note.title, content:note.content||'', type:note.type||'note', formula_id:note.formula_id||'' }); else setForm({ title:'', content:'', type:'note', formula_id:'' }) } }, [isOpen, note])
-  const handleSubmit = async () => { if(!form.title.trim()) return; setSaving(true); await onSave({ title:form.title.trim(), content:form.content, type:form.type, formula_id:form.formula_id||null }); setSaving(false) }
+function DiscoveryAggregation({ discoveries, onJumpTo }) {
+  if (discoveries.length===0) return (
+    <div className="bg-white rounded-xl p-8 text-center">
+      <div className="text-4xl mb-2">💡</div>
+      <p className="text-gray-500 text-sm">Chưa có phát hiện nào</p>
+      <p className="text-xs text-gray-300 mt-1">Mở ghi chú hoặc thí nghiệm → bấm "💡+ Thêm"</p>
+    </div>
+  )
+
+  return (
+    <div>
+      <p className="text-xs font-bold text-amber-700 mb-3">💡 Tổng hợp {discoveries.length} phát hiện</p>
+      <div className="space-y-2.5">
+        {discoveries.map(d => (
+          <div key={d.id} className="bg-white rounded-xl shadow-sm overflow-hidden border-l-4 border-amber-400">
+            <div className="px-4 py-3">
+              <p className="text-[13px] font-semibold text-gray-800 leading-snug mb-2">💡 {d.text}</p>
+              <div onClick={() => onJumpTo(d.sourceId)}
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 cursor-pointer active:scale-[0.98] transition-all ${d.sourceType==='experiment'?'bg-blue-50 border border-blue-200':'bg-gray-50 border border-gray-200'}`}>
+                <span className="text-sm">{d.sourceType==='experiment'?'🔬':'📝'}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-[10px] text-gray-400 font-medium">Nguồn: {d.sourceType==='experiment'?'Thí nghiệm':'Ghi chú'}</p>
+                  <p className={`text-xs font-semibold truncate ${d.sourceType==='experiment'?'text-blue-600':'text-gray-700'}`}>{d.sourceTitle}</p>
+                  {d.sourceFormula && <p className="text-[10px] text-purple-500 mt-0.5">🧪 {d.sourceFormula}</p>}
+                </div>
+                <ChevronLeft size={14} className="text-gray-300 rotate-180"/>
+              </div>
+              <p className="text-[10px] text-gray-300 mt-2">{new Date(d.created_at).toLocaleDateString('vi-VN')}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// ============================================
+// NOTE FORM v2 (simple note)
+// ============================================
+function NoteFormV2({ isOpen, onClose, note, formulas, onSave }) {
+  const [form, setForm] = useState({ title:'', content:'', formula_id:'' })
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (isOpen) {
+      if (note) setForm({ title:note.title, content:note.content||'', formula_id:note.formula_id||'' })
+      else setForm({ title:'', content:'', formula_id:'' })
+    }
+  }, [isOpen, note])
+
+  const handleSubmit = async () => {
+    if (!form.title.trim()) return; setSaving(true)
+    await onSave({ title:form.title.trim(), content:form.content, type:'note', formula_id:form.formula_id||null, discoveries:note?.discoveries||[] })
+    setSaving(false)
+  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={note?'Sửa ghi chú':'📝 Thêm ghi chú'}>
       <div className="space-y-3 p-5">
-        <div><label className="text-xs text-gray-500 mb-1 block">Loại</label>
-          <div className="flex gap-2">{[['note','📝 Ghi chú'],['experiment','🔬 Thí nghiệm'],['discovery','💡 Phát hiện']].map(([v,l]) => (
-            <button key={v} onClick={() => setForm({...form,type:v})} className={`flex-1 py-2 rounded-lg text-xs font-medium ${form.type===v?'bg-purple-500 text-white':'bg-gray-100 text-gray-600'}`}>{l}</button>
-          ))}</div></div>
         <div><label className="text-xs text-gray-500 mb-1 block">Tiêu đề *</label>
-          <input type="text" value={form.title} onChange={e => setForm({...form,title:e.target.value})} placeholder="Tiêu đề" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <input type="text" value={form.title} onChange={e => setForm({...form,title:e.target.value})} placeholder="VD: Ma Hoàng - cách dùng" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
         <div><label className="text-xs text-gray-500 mb-1 block">Nội dung</label>
-          <textarea value={form.content} onChange={e => setForm({...form,content:e.target.value})} rows={4} placeholder="Chi tiết..." className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
+          <textarea value={form.content} onChange={e => setForm({...form,content:e.target.value})} rows={4} placeholder="Chi tiết ghi chú, mẹo, lưu ý..."
+            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
         {formulas.length>0 && <div><label className="text-xs text-gray-500 mb-1 block">Liên kết công thức</label>
           <select value={form.formula_id} onChange={e => setForm({...form,formula_id:e.target.value})} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
             <option value="">-- Không --</option>{formulas.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
@@ -924,6 +1177,65 @@ function NoteForm({ isOpen, onClose, note, formulas, onSave }) {
         <div className="flex gap-2 pt-2">
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
           <button onClick={handleSubmit} disabled={saving||!form.title.trim()} className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':(note?'Cập nhật':'Thêm')}</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// EXPERIMENT FORM
+// ============================================
+function ExperimentForm({ isOpen, onClose, note, formulas, onSave }) {
+  const [form, setForm] = useState({ title:'', formula_id:'', changes:'', observation:'', rating:'', content:'' })
+  const [saving, setSaving] = useState(false)
+  useEffect(() => {
+    if (isOpen) {
+      if (note) setForm({ title:note.title, formula_id:note.formula_id||'', changes:note.changes||'', observation:note.observation||'', rating:note.rating||'', content:note.content||'' })
+      else setForm({ title:'', formula_id:'', changes:'', observation:'', rating:'', content:'' })
+    }
+  }, [isOpen, note])
+
+  const handleSubmit = async () => {
+    if (!form.title.trim()) return; setSaving(true)
+    await onSave({ title:form.title.trim(), type:'experiment', formula_id:form.formula_id||null, changes:form.changes, observation:form.observation, rating:form.rating, content:form.content, discoveries:note?.discoveries||[] })
+    setSaving(false)
+  }
+
+  const ratings = [['good','⭐','Tốt','bg-green-50 text-green-600 border-green-300'],['fair','😐','Tạm','bg-amber-50 text-amber-600 border-amber-300'],['bad','❌','Kém','bg-red-50 text-red-500 border-red-300']]
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={note?'Sửa thí nghiệm':'🔬 Thêm thí nghiệm'}>
+      <div className="space-y-3 p-5">
+        <div><label className="text-xs text-gray-500 mb-1 block">Tiêu đề *</label>
+          <input type="text" value={form.title} onChange={e => setForm({...form,title:e.target.value})} placeholder="VD: Giảm Ma Hoàng 14g → 10g" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Công thức</label>
+          <select value={form.formula_id} onChange={e => setForm({...form,formula_id:e.target.value})} className="w-full px-3 py-3 border border-blue-200 rounded-xl text-sm bg-white">
+            <option value="">-- Chọn --</option>{formulas.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+          </select></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">🔧 Thay đổi gì?</label>
+          <textarea value={form.changes} onChange={e => setForm({...form,changes:e.target.value})} rows={2} placeholder="VD: Ma Hoàng từ 14g giảm xuống 10g"
+            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">👁️ Kết quả quan sát</label>
+          <textarea value={form.observation} onChange={e => setForm({...form,observation:e.target.value})} rows={3} placeholder="VD: Vy không toát mồ hôi, M có toát nhẹ..."
+            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1.5 block">Đánh giá</label>
+          <div className="flex gap-2">
+            {ratings.map(([key,icon,label,cls]) => (
+              <button key={key} onClick={() => setForm({...form,rating:form.rating===key?'':key})}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-bold flex flex-col items-center gap-1 border-2 transition-all ${form.rating===key?cls+' shadow-sm':'bg-white text-gray-400 border-gray-200'}`}>
+                <span className="text-lg">{icon}</span>{label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú thêm</label>
+          <input type="text" value={form.content} onChange={e => setForm({...form,content:e.target.value})} placeholder="Ghi chú, mẹo..."
+            className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div className="flex gap-2 pt-2">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSubmit} disabled={saving||!form.title.trim()} className="flex-1 py-3 bg-blue-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':(note?'Cập nhật':'Thêm')}</button>
         </div>
       </div>
     </Modal>
