@@ -446,7 +446,7 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
 
   const addItem = () => {
     if(!ingredients.length) { toast.error('Thêm nguyên liệu trước!'); return }
-    setItems([...items, { ingredient_id:ingredients[0].id, quantity:0, unit:ingredients[0].unit }])
+    setItems([...items, { ingredient_id:ingredients[0].id, quantity:0, unit:'g' }])
   }
   const updateItem = (idx, field, value) => {
     const n = [...items]; n[idx] = {...n[idx],[field]:value}
@@ -886,7 +886,7 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
       <button onClick={() => { setEditing(null); setShowForm(true) }}
         className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 z-40" style={{bottom:"calc(4.5rem + env(safe-area-inset-bottom, 0px))"}}>
         <Plus size={24}/></button>
-      <IngredientForm isOpen={showForm} onClose={() => setShowForm(false)} ingredient={editing} onSave={handleSave}/>
+      <IngredientForm isOpen={showForm} onClose={() => setShowForm(false)} ingredient={editing} ingredients={ingredients} onSave={handleSave}/>
     </>
   )
 }
@@ -894,12 +894,14 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
 // ============================================
 // INGREDIENT FORM
 // ============================================
-function IngredientForm({ isOpen, onClose, ingredient, onSave }) {
+function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
   const [form, setForm] = useState({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', note:'' })
   const [saving, setSaving] = useState(false)
+  const [dupError, setDupError] = useState('')
 
   useEffect(() => {
     if(isOpen) {
+      setDupError('')
       if(ingredient) setForm({ name:ingredient.name, unit:ingredient.unit, price_per_unit:String(ingredient.price_per_unit||''),
         supplier:ingredient.supplier||'', supplier_contact:ingredient.supplier_contact||'', stock_qty:String(ingredient.stock_qty||''), note:ingredient.note||'' })
       else setForm({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', note:'' })
@@ -923,7 +925,11 @@ function IngredientForm({ isOpen, onClose, ingredient, onSave }) {
   }
 
   const handleSubmit = async () => {
-    if(!form.name.trim()) return; setSaving(true)
+    if(!form.name.trim()) return
+    // Check duplicate name (exclude self when editing)
+    const dup = (ingredients||[]).find(i => i.name.trim().toLowerCase()===form.name.trim().toLowerCase() && (!ingredient || i.id!==ingredient.id))
+    if (dup) { setDupError(`"${dup.name}" đã tồn tại`); return }
+    setSaving(true); setDupError('')
     await onSave({ name:form.name.trim(), unit:form.unit, price_per_unit:Number(form.price_per_unit)||0,
       supplier:form.supplier, supplier_contact:form.supplier_contact, stock_qty:Number(form.stock_qty)||0, note:form.note })
     setSaving(false)
@@ -933,7 +939,8 @@ function IngredientForm({ isOpen, onClose, ingredient, onSave }) {
     <Modal isOpen={isOpen} onClose={onClose} title={ingredient?'Sửa nguyên liệu':'📦 Thêm nguyên liệu'}>
       <div className="space-y-3 p-5">
         <div><label className="text-xs text-gray-500 mb-1 block">Tên *</label>
-          <input type="text" value={form.name} onChange={e => setForm({...form,name:e.target.value})} placeholder="Ví dụ: Vitamin C" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <input type="text" value={form.name} onChange={e => { setForm({...form,name:e.target.value}); setDupError('') }} placeholder="Ví dụ: Vitamin C" autoFocus className={`w-full px-4 py-3 border rounded-xl text-sm ${dupError?'border-red-400':'border-gray-200'}`}/>
+          {dupError && <p className="text-xs text-red-500 mt-1">⚠️ {dupError}</p>}</div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="text-xs text-gray-500 mb-1 block">Đơn vị</label>
             <select value={form.unit} onChange={e => handleUnitChange(e.target.value)} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
