@@ -106,16 +106,16 @@ export async function getFormulas() {
   const { data, error } = await supabase.from('formulas').select(`
     *, items:formula_ingredients(id, quantity, unit, note, sort_order,
       ingredient:ingredients(id, name, unit, price_per_unit, stock_qty))
-  `).order('is_favorite',{ascending:false}).order('updated_at',{ascending:false})
+  `).order('is_favorite',{ascending:false}).order('sort_order',{ascending:true}).order('updated_at',{ascending:false})
   if (error) throw error
-  return (data||[]).map(f => ({ ...f, items:(f.items||[]).sort((a,b)=>a.sort_order-b.sort_order), steps:f.steps||[], extra_costs:f.extra_costs||[], selling_price:f.selling_price||0 }))
+  return (data||[]).map(f => ({ ...f, sort_order:f.sort_order||0, items:(f.items||[]).sort((a,b)=>a.sort_order-b.sort_order), steps:f.steps||[], extra_costs:f.extra_costs||[], selling_price:f.selling_price||0 }))
 }
 export async function createFormula(formula) {
   const { data, error } = await supabase.from('formulas')
     .insert([{ name:formula.name, description:formula.description||'', base_serving:formula.base_serving||1,
       category:formula.category||'', note:formula.note||'', steps:formula.steps||[],
       extra_costs:formula.extra_costs||[], selling_price:formula.selling_price||0,
-      linked_product_id:formula.linked_product_id||null }]).select().single()
+      linked_product_id:formula.linked_product_id||null, sort_order:formula.sort_order||0 }]).select().single()
   if (error) throw error; return data
 }
 export async function updateFormula(id, updates) {
@@ -129,6 +129,14 @@ export async function deleteFormula(id) {
 export async function toggleFavorite(id, current) {
   const { error } = await supabase.from('formulas').update({ is_favorite:!current }).eq('id',id)
   if (error) throw error
+}
+// Batch update sort_order for multiple formulas: [{id, sort_order}]
+export async function reorderFormulas(updates) {
+  const results = await Promise.all(
+    updates.map(u => supabase.from('formulas').update({ sort_order:u.sort_order }).eq('id',u.id))
+  )
+  const failed = results.find(r => r.error)
+  if (failed) throw failed.error
 }
 
 // ============================================

@@ -15,7 +15,7 @@ import { formatMoney } from '../lib/helpers'
 import {
   getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock,
   getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
-  addFormulaIngredient, deleteFormulaIngredient,
+  addFormulaIngredient, deleteFormulaIngredient, reorderFormulas,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
   getBatches, createBatch, deleteBatch, deductStock, undoDeductStock,
   calcFormulaCost, scaleIngredients, formatStock, convertUnit, getConvertibleUnits, ALL_UNITS,
@@ -116,26 +116,52 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
   const [editingFormula, setEditingFormula] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
   const [servingOverrides, setServingOverrides] = useState({})
-  const [showBatchForm, setShowBatchForm] = useState(null) // formula object
-  const [sortBy, setSortBy] = useState('default') // default|name_asc|name_desc|newest|oldest|category
+  const [showBatchForm, setShowBatchForm] = useState(null)
+  const [sortBy, setSortBy] = useState('grouped') // grouped|name_asc|name_desc|newest|oldest
+  const [collapsedGroups, setCollapsedGroups] = useState({})
+  const [reordering, setReordering] = useState(false)
 
-  const filtered = useMemo(() => {
+  // Build grouped or flat list
+  const { groups, flatList } = useMemo(() => {
     let list = formulas
     if (search) {
       const s = search.toLowerCase()
       list = list.filter(f => f.name.toLowerCase().includes(s) || f.category?.toLowerCase().includes(s))
     }
+
+    if (sortBy === 'grouped') {
+      // Group by category, sort within group by sort_order then name
+      const map = {}
+      list.forEach(f => {
+        const cat = f.category || ''
+        if (!map[cat]) map[cat] = []
+        map[cat].push(f)
+      })
+      // Sort each group by sort_order then name
+      Object.values(map).forEach(arr => arr.sort((a,b) => (a.sort_order||0)-(b.sort_order||0) || a.name.localeCompare(b.name,'vi')))
+      // Sort groups: named categories first (by labCategories order), then empty
+      const catOrder = labCategories.map(c => c.name)
+      const groupKeys = Object.keys(map).sort((a,b) => {
+        if (!a && b) return 1; if (a && !b) return -1
+        const ia = catOrder.indexOf(a), ib = catOrder.indexOf(b)
+        if (ia>=0 && ib>=0) return ia-ib
+        if (ia>=0) return -1; if (ib>=0) return 1
+        return a.localeCompare(b,'vi')
+      })
+      return { groups: groupKeys.map(k => ({ category:k, items:map[k] })), flatList:null }
+    }
+
+    // Flat sorted list
     const sorted = [...list]
     switch (sortBy) {
       case 'name_asc': sorted.sort((a,b) => a.name.localeCompare(b.name, 'vi')); break
       case 'name_desc': sorted.sort((a,b) => b.name.localeCompare(a.name, 'vi')); break
       case 'newest': sorted.sort((a,b) => new Date(b.updated_at||b.created_at) - new Date(a.updated_at||a.created_at)); break
       case 'oldest': sorted.sort((a,b) => new Date(a.updated_at||a.created_at) - new Date(b.updated_at||b.created_at)); break
-      case 'category': sorted.sort((a,b) => (a.category||'').localeCompare(b.category||'', 'vi') || a.name.localeCompare(b.name, 'vi')); break
-      default: break // API default: favorite first, then newest
+      default: break
     }
-    return sorted
-  }, [formulas, search, sortBy])
+    return { groups:null, flatList:sorted }
+  }, [formulas, search, sortBy, labCategories])
 
   const handleDelete = async (f) => {
     if(!confirm(`Xóa "${f.name}"?`)) return
@@ -160,165 +186,226 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
     navigator.clipboard.writeText(text).then(() => toast.success('Đã copy!')).catch(() => toast.error('Lỗi copy'))
   }
 
+  const toggleGroup = (cat) => setCollapsedGroups(prev => ({...prev,[cat]:!prev[cat]}))
+
+  // Move formula up/down within its group
+  const handleMove = async (groupItems, idx, direction) => {
+    const targetIdx = idx + direction
+    if (targetIdx < 0 || targetIdx >= groupItems.length) return
+    setReordering(true)
+    try {
+      // Build final order: assign sequential, with swapped positions
+      const updates = groupItems.map((f,i) => {
+        let newOrder = i
+        if (i === idx) newOrder = targetIdx
+        else if (i === targetIdx) newOrder = idx
+        return { id:f.id, sort_order:newOrder }
+      })
+      await reorderFormulas(updates)
+      onRefresh()
+    } catch { toast.error('Lỗi sắp xếp') }
+    finally { setReordering(false) }
+  }
+
+  const renderFormulaCard = (f, groupItems, idxInGroup) => {
+    const isExp = expandedId===f.id
+    const serving = servingOverrides[f.id]||f.base_serving
+    const items = scaleIngredients(f.items||[], f.base_serving, serving)
+    const ingCost = calcFormulaCost(items.map(i => ({...i, quantity:i.scaledQty})))
+    const ratio = serving / (f.base_serving||1)
+    const scaledExtra = (f.extra_costs||[]).map(ec => ({...ec, scaled: Math.round((Number(ec.amount)||0)*ratio)}))
+    const extraTotal = scaledExtra.reduce((s,ec) => s+ec.scaled, 0)
+    const totalCost = ingCost + extraTotal
+    const sellPrice = Math.round((f.selling_price||0)*ratio)
+    const profit = sellPrice - totalCost
+
+    return (
+      <div key={f.id} className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="flex items-center gap-2 px-4 py-3 cursor-pointer active:bg-gray-50" onClick={() => setExpandedId(isExp?null:f.id)}>
+          {/* Reorder buttons - only in grouped mode */}
+          {sortBy==='grouped' && groupItems && (
+            <div className="flex flex-col gap-0.5 flex-shrink-0" onClick={e => e.stopPropagation()}>
+              <button onClick={() => handleMove(groupItems, idxInGroup, -1)} disabled={reordering||idxInGroup===0}
+                className="w-5 h-5 flex items-center justify-center text-[10px] text-gray-400 hover:text-purple-600 disabled:opacity-20 active:scale-90 rounded">▲</button>
+              <button onClick={() => handleMove(groupItems, idxInGroup, 1)} disabled={reordering||idxInGroup===groupItems.length-1}
+                className="w-5 h-5 flex items-center justify-center text-[10px] text-gray-400 hover:text-purple-600 disabled:opacity-20 active:scale-90 rounded">▼</button>
+            </div>
+          )}
+          <button onClick={e => { e.stopPropagation(); handleToggleFav(f) }} className={`flex-shrink-0 ${f.is_favorite?'text-yellow-500':'text-gray-300'}`}>
+            <Star size={18} fill={f.is_favorite?'currentColor':'none'}/>
+          </button>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-gray-800 truncate">{f.name}</p>
+            <p className="text-xs text-gray-400">
+              {sortBy!=='grouped' && f.category && <span className="bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded mr-1">{f.category}</span>}
+              {f.items?.length||0} NL {totalCost>0 && <span>• ~{formatMoney(totalCost)}</span>}
+              {f.steps?.length>0 && <span> • {f.steps.length} bước</span>}
+              {sellPrice>0 && totalCost>0 && <span className={profit>=0?'text-green-600':'text-red-500'}> • LN {Math.round(profit/totalCost*100)}%</span>}
+            </p>
+          </div>
+          {isExp ? <ChevronUp size={18} className="text-gray-400"/> : <ChevronDown size={18} className="text-gray-400"/>}
+        </div>
+
+        {isExp && (
+          <div className="border-t border-gray-100 px-4 py-3 space-y-3">
+            {f.description && <p className="text-xs text-gray-500 italic">{f.description}</p>}
+
+            {/* Serving calc */}
+            <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2">
+              <Calculator size={14} className="text-purple-500"/>
+              <span className="text-xs text-purple-700 font-medium">Serving:</span>
+              <button onClick={() => setServingOverrides(s => ({...s,[f.id]:Math.max(1,serving-1)}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">−</button>
+              <span className="text-sm font-bold text-purple-700 w-8 text-center">{serving}</span>
+              <button onClick={() => setServingOverrides(s => ({...s,[f.id]:serving+1}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">+</button>
+              {serving!==f.base_serving && <button onClick={() => setServingOverrides(s => ({...s,[f.id]:f.base_serving}))} className="text-[10px] text-purple-500 ml-auto">Reset</button>}
+            </div>
+
+            {/* Ingredients */}
+            {items.length>0 ? (
+              <div className="space-y-1.5">
+                {items.map(i => {
+                  const ing = i.ingredient
+                  const stockInUnit = ing ? convertUnit(ing.stock_qty, ing.unit, i.unit) : null
+                  return (
+                    <div key={i.id} className="flex items-center justify-between text-sm py-1">
+                      <div className="flex-1 min-w-0">
+                        <span className="text-gray-700">{ing?.name||'?'}</span>
+                        {ing && stockInUnit!==null && <span className="text-[10px] text-gray-400 ml-1.5">(tồn: {formatStock(stockInUnit, i.unit)} {i.unit})</span>}
+                        {ing && stockInUnit===null && i.unit!==ing?.unit && <span className="text-[10px] text-red-400 ml-1.5">(⚠ {ing.unit}≠{i.unit})</span>}
+                      </div>
+                      <span className="font-medium text-gray-800">
+                        {i.scaledQty} {i.unit}
+                        {ing?.price_per_unit>0 && <span className="text-xs text-gray-400 ml-1">({formatMoney(calcFormulaCost([{...i,quantity:i.scaledQty}]))})</span>}
+                      </span>
+                    </div>
+                  )
+                })}
+                {ingCost>0 && <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100 font-bold"><span className="text-gray-700">NL</span><span className="text-purple-600">{formatMoney(ingCost)}</span></div>}
+              </div>
+            ) : <p className="text-xs text-gray-400 italic">Chưa có nguyên liệu</p>}
+
+            {/* Extra costs + Total */}
+            {(scaledExtra.length>0 || sellPrice>0) && (
+              <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg p-3 space-y-1.5">
+                {scaledExtra.length>0 && scaledExtra.map((ec,i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-600">{ec.name}</span>
+                    <span className="font-medium text-gray-700">{formatMoney(ec.scaled)}</span>
+                  </div>
+                ))}
+                {totalCost>0 && (
+                  <div className="flex items-center justify-between text-sm pt-1.5 border-t border-purple-200 font-bold">
+                    <span className="text-gray-700">💰 Tổng giá vốn</span>
+                    <span className="text-purple-700">{formatMoney(totalCost)}</span>
+                  </div>
+                )}
+                {sellPrice>0 && (
+                  <>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600">🏷️ Giá bán</span>
+                      <span className="font-bold text-blue-600">{formatMoney(sellPrice)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-600">📊 Lợi nhuận</span>
+                      <span className={`font-bold ${profit>=0?'text-green-600':'text-red-600'}`}>{profit>=0?'+':''}{formatMoney(profit)} ({totalCost>0?Math.round(profit/totalCost*100):0}%)</span>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Steps */}
+            {f.steps?.length>0 && (
+              <div className="bg-gray-50 rounded-lg p-3">
+                <p className="text-xs font-bold text-gray-600 mb-2">📝 Các bước</p>
+                <div className="space-y-2">
+                  {f.steps.map((s,i) => (
+                    <div key={i} className="flex gap-2">
+                      <span className="w-5 h-5 bg-purple-100 text-purple-600 rounded-full text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium text-gray-700">{s.title}</p>
+                        {s.desc && <p className="text-[11px] text-gray-500">{s.desc}</p>}
+                        {s.note && <p className="text-[10px] text-amber-600 bg-amber-50 px-2 py-1 rounded mt-0.5">💡 {s.note}</p>}
+                        {s.duration>0 && <p className="text-[10px] text-gray-400">⏱ {s.duration} phút</p>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {f.note && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">📝 {f.note}</p>}
+
+            {/* Actions */}
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button onClick={() => setShowBatchForm(f)} className="flex items-center gap-1 px-3 py-2 bg-green-50 rounded-lg text-xs font-medium text-green-600 active:scale-95"><Play size={14}/> Làm lô</button>
+              <button onClick={() => handleCopyList(f, serving)} className="flex items-center gap-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95"><Copy size={14}/> Copy</button>
+              <button onClick={() => { setEditingFormula(f); setShowForm(true) }} className="flex items-center gap-1 px-3 py-2 bg-purple-50 rounded-lg text-xs font-medium text-purple-600 active:scale-95"><Edit2 size={14}/> Sửa</button>
+              <button onClick={() => handleDelete(f)} className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-red-500 ml-auto active:scale-95"><Trash2 size={14}/></button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  const totalFiltered = groups ? groups.reduce((s,g) => s+g.items.length, 0) : (flatList?.length||0)
+
   return (
     <>
       <div className="flex gap-2 mb-3">
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="Tìm công thức..."
+          <input type="text" value={search} onChange={e => { setSearch(e.target.value); setExpandedId(null) }} placeholder="Tìm công thức..."
             className="w-full pl-9 pr-8 py-2.5 bg-white border border-gray-200 rounded-xl text-sm"/>
           {search && <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"><X size={16}/></button>}
         </div>
         <select value={sortBy} onChange={e => setSortBy(e.target.value)}
           className="px-2 py-2.5 bg-white border border-gray-200 rounded-xl text-xs text-gray-600 min-w-[90px]">
-          <option value="default">⭐ Mặc định</option>
+          <option value="grouped">📂 Nhóm</option>
           <option value="name_asc">A → Z</option>
           <option value="name_desc">Z → A</option>
           <option value="newest">Mới nhất</option>
           <option value="oldest">Cũ nhất</option>
-          <option value="category">Phân loại</option>
         </select>
       </div>
-      {filtered.length===0 ? (
+
+      {totalFiltered===0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">🧪</div>
           <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có công thức nào'}</p>
           <button onClick={() => { setEditingFormula(null); setShowForm(true) }} className="mt-3 text-purple-600 font-medium text-sm">+ Tạo công thức đầu tiên</button>
         </div>
-      ) : (
-        <div className="space-y-3">
-          {filtered.map(f => {
-            const isExp = expandedId===f.id
-            const serving = servingOverrides[f.id]||f.base_serving
-            const items = scaleIngredients(f.items||[], f.base_serving, serving)
-            const ingCost = calcFormulaCost(items.map(i => ({...i, quantity:i.scaledQty})))
-            const ratio = serving / (f.base_serving||1)
-            const scaledExtra = (f.extra_costs||[]).map(ec => ({...ec, scaled: Math.round((Number(ec.amount)||0)*ratio)}))
-            const extraTotal = scaledExtra.reduce((s,ec) => s+ec.scaled, 0)
-            const totalCost = ingCost + extraTotal
-            const sellPrice = Math.round((f.selling_price||0)*ratio)
-            const profit = sellPrice - totalCost
-
+      ) : groups ? (
+        /* Grouped view */
+        <div className="space-y-4">
+          {groups.map(g => {
+            const cat = g.category || 'Chưa phân loại'
+            const isCollapsed = collapsedGroups[cat]
             return (
-              <div key={f.id} className="bg-white rounded-xl shadow-sm overflow-hidden">
-                <div className="flex items-center gap-3 px-4 py-3 cursor-pointer active:bg-gray-50" onClick={() => setExpandedId(isExp?null:f.id)}>
-                  <button onClick={e => { e.stopPropagation(); handleToggleFav(f) }} className={`flex-shrink-0 ${f.is_favorite?'text-yellow-500':'text-gray-300'}`}>
-                    <Star size={18} fill={f.is_favorite?'currentColor':'none'}/>
-                  </button>
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-bold text-gray-800 truncate">{f.name}</p>
-                    <p className="text-xs text-gray-400">
-                      {f.category && <span className="bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded mr-1">{f.category}</span>}
-                      {f.items?.length||0} NL {totalCost>0 && <span>• ~{formatMoney(totalCost)}</span>}
-                      {f.steps?.length>0 && <span> • {f.steps.length} bước</span>}
-                      {sellPrice>0 && totalCost>0 && <span className={profit>=0?'text-green-600':'text-red-500'}> • LN {Math.round(profit/totalCost*100)}%</span>}
-                    </p>
-                  </div>
-                  {isExp ? <ChevronUp size={18} className="text-gray-400"/> : <ChevronDown size={18} className="text-gray-400"/>}
-                </div>
-
-                {isExp && (
-                  <div className="border-t border-gray-100 px-4 py-3 space-y-3">
-                    {f.description && <p className="text-xs text-gray-500 italic">{f.description}</p>}
-
-                    {/* Serving calc */}
-                    <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2">
-                      <Calculator size={14} className="text-purple-500"/>
-                      <span className="text-xs text-purple-700 font-medium">Serving:</span>
-                      <button onClick={() => setServingOverrides(s => ({...s,[f.id]:Math.max(1,serving-1)}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">−</button>
-                      <span className="text-sm font-bold text-purple-700 w-8 text-center">{serving}</span>
-                      <button onClick={() => setServingOverrides(s => ({...s,[f.id]:serving+1}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">+</button>
-                      {serving!==f.base_serving && <button onClick={() => setServingOverrides(s => ({...s,[f.id]:f.base_serving}))} className="text-[10px] text-purple-500 ml-auto">Reset</button>}
-                    </div>
-
-                    {/* Ingredients */}
-                    {items.length>0 ? (
-                      <div className="space-y-1.5">
-                        {items.map(i => {
-                          const ing = i.ingredient
-                          const stockInUnit = ing ? convertUnit(ing.stock_qty, ing.unit, i.unit) : null
-                          return (
-                            <div key={i.id} className="flex items-center justify-between text-sm py-1">
-                              <div className="flex-1 min-w-0">
-                                <span className="text-gray-700">{ing?.name||'?'}</span>
-                                {ing && stockInUnit!==null && <span className="text-[10px] text-gray-400 ml-1.5">(tồn: {formatStock(stockInUnit, i.unit)} {i.unit})</span>}
-                                {ing && stockInUnit===null && i.unit!==ing?.unit && <span className="text-[10px] text-red-400 ml-1.5">(⚠ {ing.unit}≠{i.unit})</span>}
-                              </div>
-                              <span className="font-medium text-gray-800">
-                                {i.scaledQty} {i.unit}
-                                {ing?.price_per_unit>0 && <span className="text-xs text-gray-400 ml-1">({formatMoney(calcFormulaCost([{...i,quantity:i.scaledQty}]))})</span>}
-                              </span>
-                            </div>
-                          )
-                        })}
-                        {ingCost>0 && <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100 font-bold"><span className="text-gray-700">NL</span><span className="text-purple-600">{formatMoney(ingCost)}</span></div>}
-                      </div>
-                    ) : <p className="text-xs text-gray-400 italic">Chưa có nguyên liệu</p>}
-
-                    {/* Extra costs + Total */}
-                    {(scaledExtra.length>0 || sellPrice>0) && (
-                      <div className="bg-gradient-to-r from-purple-50 to-blue-50 rounded-lg p-3 space-y-1.5">
-                        {scaledExtra.length>0 && scaledExtra.map((ec,i) => (
-                          <div key={i} className="flex items-center justify-between text-xs">
-                            <span className="text-gray-600">{ec.name}</span>
-                            <span className="font-medium text-gray-700">{formatMoney(ec.scaled)}</span>
-                          </div>
-                        ))}
-                        {totalCost>0 && (
-                          <div className="flex items-center justify-between text-sm pt-1.5 border-t border-purple-200 font-bold">
-                            <span className="text-gray-700">💰 Tổng giá vốn</span>
-                            <span className="text-purple-700">{formatMoney(totalCost)}</span>
-                          </div>
-                        )}
-                        {sellPrice>0 && (
-                          <>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-600">🏷️ Giá bán</span>
-                              <span className="font-bold text-blue-600">{formatMoney(sellPrice)}</span>
-                            </div>
-                            <div className="flex items-center justify-between text-sm">
-                              <span className="text-gray-600">📊 Lợi nhuận</span>
-                              <span className={`font-bold ${profit>=0?'text-green-600':'text-red-600'}`}>{profit>=0?'+':''}{formatMoney(profit)} ({totalCost>0?Math.round(profit/totalCost*100):0}%)</span>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Steps */}
-                    {f.steps?.length>0 && (
-                      <div className="bg-gray-50 rounded-lg p-3">
-                        <p className="text-xs font-bold text-gray-600 mb-2">📝 Các bước</p>
-                        <div className="space-y-2">
-                          {f.steps.map((s,i) => (
-                            <div key={i} className="flex gap-2">
-                              <span className="w-5 h-5 bg-purple-100 text-purple-600 rounded-full text-[10px] font-bold flex items-center justify-center flex-shrink-0 mt-0.5">{i+1}</span>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-xs font-medium text-gray-700">{s.title}</p>
-                                {s.desc && <p className="text-[11px] text-gray-500">{s.desc}</p>}
-                                {s.note && <p className="text-[10px] text-amber-600 bg-amber-50 px-2 py-1 rounded mt-0.5">💡 {s.note}</p>}
-                                {s.duration>0 && <p className="text-[10px] text-gray-400">⏱ {s.duration} phút</p>}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {f.note && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">📝 {f.note}</p>}
-
-                    {/* Actions */}
-                    <div className="flex flex-wrap gap-2 pt-1">
-                      <button onClick={() => setShowBatchForm(f)} className="flex items-center gap-1 px-3 py-2 bg-green-50 rounded-lg text-xs font-medium text-green-600 active:scale-95"><Play size={14}/> Làm lô</button>
-                      <button onClick={() => handleCopyList(f, serving)} className="flex items-center gap-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95"><Copy size={14}/> Copy</button>
-                      <button onClick={() => { setEditingFormula(f); setShowForm(true) }} className="flex items-center gap-1 px-3 py-2 bg-purple-50 rounded-lg text-xs font-medium text-purple-600 active:scale-95"><Edit2 size={14}/> Sửa</button>
-                      <button onClick={() => handleDelete(f)} className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-red-500 ml-auto active:scale-95"><Trash2 size={14}/></button>
-                    </div>
+              <div key={cat}>
+                {/* Group header */}
+                <button onClick={() => toggleGroup(cat)}
+                  className="w-full flex items-center gap-2 px-3 py-2 bg-purple-50 rounded-xl mb-2 active:bg-purple-100 transition-colors">
+                  <span className="text-sm">{g.category ? '📂' : '📁'}</span>
+                  <span className="text-xs font-bold text-purple-700 flex-1 text-left">{cat}</span>
+                  <span className="text-[10px] bg-purple-200 text-purple-700 px-1.5 py-0.5 rounded-full font-bold">{g.items.length}</span>
+                  <span className={`text-xs text-purple-400 transition-transform ${isCollapsed?'':'rotate-180'}`}>▾</span>
+                </button>
+                {/* Group items */}
+                {!isCollapsed && (
+                  <div className="space-y-2 ml-1">
+                    {g.items.map((f,idx) => renderFormulaCard(f, g.items, idx))}
                   </div>
                 )}
               </div>
             )
           })}
+        </div>
+      ) : (
+        /* Flat view */
+        <div className="space-y-3">
+          {flatList.map(f => renderFormulaCard(f, null, null))}
         </div>
       )}
 
