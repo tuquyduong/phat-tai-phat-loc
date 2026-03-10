@@ -15,7 +15,7 @@ import { formatMoney } from '../lib/helpers'
 import {
   getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock,
   getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
-  addFormulaIngredient, deleteFormulaIngredient, reorderFormulas,
+  addFormulaIngredient, deleteFormulaIngredientsByFormula, reorderFormulas,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
   getBatches, createBatch, deleteBatch, deductStock, undoDeductStock,
   calcFormulaCost, scaleIngredients, formatStock, convertUnit, getConvertibleUnits, ALL_UNITS,
@@ -468,7 +468,7 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
       if (formula) {
         await updateFormula(formula.id, { name:name.trim(), description, base_serving:baseServing, category, note, steps:cleanSteps, extra_costs:cleanExtra, selling_price:Number(sellingPrice)||0 })
         fId = formula.id
-        for (const old of (formula.items||[])) await deleteFormulaIngredient(old.id)
+        await deleteFormulaIngredientsByFormula(fId)
       } else {
         const c = await createFormula({ name:name.trim(), description, base_serving:baseServing, category, note, steps:cleanSteps, extra_costs:cleanExtra, selling_price:Number(sellingPrice)||0 })
         fId = c.id

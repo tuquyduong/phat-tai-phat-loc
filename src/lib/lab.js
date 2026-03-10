@@ -157,6 +157,11 @@ export async function deleteFormulaIngredient(id) {
   const { error } = await supabase.from('formula_ingredients').delete().eq('id',id)
   if (error) throw error
 }
+// Delete ALL formula ingredients for a given formula (clean slate before re-insert)
+export async function deleteFormulaIngredientsByFormula(formulaId) {
+  const { error } = await supabase.from('formula_ingredients').delete().eq('formula_id', formulaId)
+  if (error) throw error
+}
 
 // ============================================
 // BATCHES (Lô sản xuất)
