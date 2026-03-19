@@ -255,7 +255,8 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
               <Calculator size={14} className="text-purple-500"/>
               <span className="text-xs text-purple-700 font-medium">Serving:</span>
               <button onClick={() => setServingOverrides(s => ({...s,[f.id]:Math.max(1,serving-1)}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">−</button>
-              <span className="text-sm font-bold text-purple-700 w-8 text-center">{serving}</span>
+              <input type="number" inputMode="numeric" value={serving} onChange={e => { const v = Math.max(1, Number(e.target.value)||1); setServingOverrides(s => ({...s,[f.id]:v})) }}
+                className="w-12 text-sm font-bold text-purple-700 text-center bg-white border border-purple-200 rounded-lg py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"/>
               <button onClick={() => setServingOverrides(s => ({...s,[f.id]:serving+1}))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">+</button>
               {serving!==f.base_serving && <button onClick={() => setServingOverrides(s => ({...s,[f.id]:f.base_serving}))} className="text-[10px] text-purple-500 ml-auto">Reset</button>}
             </div>
@@ -679,7 +680,8 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
         <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2">
           <span className="text-xs text-purple-700 font-medium">Serving:</span>
           <button onClick={() => setServing(Math.max(1,serving-1))} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">−</button>
-          <span className="text-sm font-bold text-purple-700 w-8 text-center">{serving}</span>
+          <input type="number" inputMode="numeric" value={serving} onChange={e => setServing(Math.max(1, Number(e.target.value)||1))}
+            className="w-12 text-sm font-bold text-purple-700 text-center bg-white border border-purple-200 rounded-lg py-1 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"/>
           <button onClick={() => setServing(serving+1)} className="w-7 h-7 bg-white rounded-lg text-purple-600 font-bold active:scale-90">+</button>
         </div>
 
