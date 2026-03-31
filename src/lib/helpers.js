@@ -73,6 +73,20 @@ export function calcOrderTotal(quantity, unitPrice, discountPercent = 0, discoun
 // NGÀY THÁNG
 // ============================================
 
+// LẤY NGÀY HIỆN TẠI DẠNG YYYY-MM-DD (LOCAL TIMEZONE)
+// QUAN TRỌNG: Không dùng toISOString() vì nó chuyển sang UTC!
+export function getLocalDateString(date = new Date()) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, '0')
+  const d = String(date.getDate()).padStart(2, '0')
+  return `${y}-${m}-${d}`
+}
+
+// Alias ngắn gọn hơn
+export function getTodayString() {
+  return getLocalDateString(new Date())
+}
+
 // Format ngày thân thiện
 export function formatDate(dateString) {
   if (!dateString) return ''

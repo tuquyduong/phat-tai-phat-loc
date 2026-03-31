@@ -4,6 +4,7 @@
 // Xóa/sửa bất kỳ GD → tính lại toàn bộ tự động
 // ============================================
 import { supabase } from './supabase'
+import { getLocalDateString } from './helpers'
 
 // ============================================
 // CỔ PHIẾU
@@ -57,7 +58,7 @@ export async function addStockTransaction(tx) {
       quantity: tx.quantity,
       price: tx.price,
       fee: tx.fee || 0,
-      date: tx.date || new Date().toISOString().split('T')[0],
+      date: tx.date || getLocalDateString(),
       note: tx.note || ''
     }]).select().single()
   if (error) throw error
@@ -84,7 +85,7 @@ export async function addDividend(div) {
     .from('dividends').insert([{
       stock_id: div.stock_id,
       amount: div.amount,
-      date: div.date || new Date().toISOString().split('T')[0],
+      date: div.date || getLocalDateString(),
       note: div.note || ''
     }]).select().single()
   if (error) throw error

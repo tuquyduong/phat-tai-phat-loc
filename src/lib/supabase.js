@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { getLocalDateString } from './helpers'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
@@ -87,7 +88,7 @@ export async function depositToCustomer(customerId, amount, note = '') {
       amount: amount,
       type: 'deposit',
       note: note || 'Nạp tiền vào tài khoản',
-      payment_date: new Date().toISOString().split('T')[0]
+      payment_date: getLocalDateString()
     }])
     .select()
     .single()
@@ -108,7 +109,7 @@ export async function withdrawFromCustomer(customerId, amount, orderId = null, n
       amount: amount,
       type: 'balance_used',  // SỬA: Đổi từ 'withdraw' thành 'balance_used'
       note: note || 'Thanh toán từ số dư',
-      payment_date: new Date().toISOString().split('T')[0]
+      payment_date: getLocalDateString()
     }])
     .select()
     .single()
@@ -543,7 +544,7 @@ export async function getDashboardStats() {
 export async function cleanupOldOrders(daysOld = 365) {
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - daysOld)
-  const dateStr = cutoffDate.toISOString().split('T')[0]
+  const dateStr = getLocalDateString(cutoffDate)
 
   const { data, error } = await supabase
     .from('orders')

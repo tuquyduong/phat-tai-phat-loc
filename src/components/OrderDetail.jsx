@@ -7,7 +7,7 @@ import Modal from './Modal'
 import { useToast } from './Toast'
 import {
   formatMoney, formatMoneyFull, formatDate, formatDateShort,
-  sumBy, calcProgress, getProgressColor, toInputDate
+  sumBy, calcProgress, getProgressColor, toInputDate, getLocalDateString
 } from '../lib/helpers'
 import { addDelivery, addPayment, deleteDelivery, deletePayment, updateOrder, deleteOrder, withdrawFromCustomer } from '../lib/supabase'
 import { createTransaction, getExpenseCategories } from '../lib/expenses'
@@ -136,7 +136,7 @@ export default function OrderDetail({ order, isOpen, onClose, onUpdate }) {
             type: 'income',
             amount: amount,
             category_id: incomeCategoryId,
-            date: useBalance ? new Date().toISOString().split('T')[0] : paymentDate,
+            date: useBalance ? getLocalDateString() : paymentDate,
             note: `Thu từ ${order.customer?.name} - ${order.product}`,
             linked_order_id: order.id
           })

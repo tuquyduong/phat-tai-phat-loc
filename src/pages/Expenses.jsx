@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney } from '../lib/helpers'
+import { formatMoney, getLocalDateString } from '../lib/helpers'
 import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
   getTransactions, createTransaction, updateTransaction, deleteTransaction,
@@ -19,14 +19,18 @@ import {
 // Helpers
 function getMonthRange(date) {
   const y = date.getFullYear(), m = date.getMonth()
-  return { start: new Date(y,m,1).toISOString().split('T')[0], end: new Date(y,m+1,0).toISOString().split('T')[0] }
+  return { 
+    start: getLocalDateString(new Date(y, m, 1)), 
+    end: getLocalDateString(new Date(y, m + 1, 0)) 
+  }
 }
 function formatMonthLabel(d) { return `Tháng ${d.getMonth()+1}/${d.getFullYear()}` }
 function formatDateLabel(ds) {
-  const d = new Date(ds+'T00:00:00'), today = new Date().toISOString().split('T')[0]
-  const y = new Date(); y.setDate(y.getDate()-1)
-  if (ds===today) return 'Hôm nay'
-  if (ds===y.toISOString().split('T')[0]) return 'Hôm qua'
+  const d = new Date(ds+'T00:00:00')
+  const today = getLocalDateString(new Date())
+  const yesterday = new Date(); yesterday.setDate(yesterday.getDate()-1)
+  if (ds === today) return 'Hôm nay'
+  if (ds === getLocalDateString(yesterday)) return 'Hôm qua'
   return `${['CN','T2','T3','T4','T5','T6','T7'][d.getDay()]}, ${d.getDate()}/${d.getMonth()+1}`
 }
 const mBadge = (m) => m==='credit'?'bg-purple-50 text-purple-600 border-purple-200':m==='transfer'?'bg-blue-50 text-blue-600 border-blue-200':'bg-amber-50 text-amber-600 border-amber-200'
@@ -372,7 +376,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   const [amount, setAmount] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [note, setNote] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate] = useState(getLocalDateString())
   const [pm, setPm] = useState('cash')
   const [saving, setSaving] = useState(false)
 
@@ -381,7 +385,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   useEffect(() => {
     if(isOpen) {
       if(editingTx) { setFormType(editingTx.type); setAmount(String(editingTx.amount)); setCategoryId(editingTx.category_id||''); setNote(editingTx.note||''); setDate(editingTx.date); setPm(editingTx.payment_method||'cash') }
-      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(new Date().toISOString().split('T')[0]); setPm('cash') }
+      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(getLocalDateString()); setPm('cash') }
     }
   }, [isOpen, editingTx, type])
 
@@ -464,8 +468,8 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
 // ============================================
 function TransferForm({ isOpen, onClose, toast, onSaved, closeBal }) {
   const [amount, setAmount] = useState(''); const [dir, setDir] = useState('cash')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setDir('cash'); setDate(new Date().toISOString().split('T')[0]) } }, [isOpen])
+  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setDir('cash'); setDate(getLocalDateString()) } }, [isOpen])
 
   const handleSave = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
@@ -504,8 +508,8 @@ function TransferForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 // ============================================
 function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
   const [amount, setAmount] = useState(''); const [source, setSource] = useState('transfer')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(new Date().toISOString().split('T')[0]) } }, [isOpen])
+  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()) } }, [isOpen])
 
   const creditDebt = closeBal?.credit||0
 

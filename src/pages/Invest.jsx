@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney } from '../lib/helpers'
+import { formatMoney, getLocalDateString } from '../lib/helpers'
 import {
   getStocks, createStock, updateStock, deleteStock,
   addStockTransaction, updateStockTransaction, deleteStockTransaction,
@@ -462,7 +462,7 @@ function StockForm({ isOpen, onClose, stock, toast, onSaved }) {
   const [buyQty, setBuyQty] = useState('')
   const [buyPrice, setBuyPrice] = useState('')
   const [buyFee, setBuyFee] = useState('')
-  const [buyDate, setBuyDate] = useState(new Date().toISOString().split('T')[0])
+  const [buyDate, setBuyDate] = useState(getLocalDateString())
   const [saving, setSaving] = useState(false)
   const isEdit = !!stock
 
@@ -474,7 +474,7 @@ function StockForm({ isOpen, onClose, stock, toast, onSaved }) {
       } else {
         setSymbol(''); setName(''); setCurrentPrice(''); setNote('')
         setBuyQty(''); setBuyPrice(''); setBuyFee('')
-        setBuyDate(new Date().toISOString().split('T')[0])
+        setBuyDate(getLocalDateString())
       }
     }
   }, [isOpen, stock])
@@ -602,7 +602,7 @@ function TxForm({ isOpen, onClose, config, stocks, toast, onSaved }) {
   const [quantity, setQuantity] = useState('')
   const [price, setPrice] = useState('')
   const [fee, setFee] = useState('')
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0])
+  const [date, setDate] = useState(getLocalDateString())
   const [note, setNote] = useState('')
   const [saving, setSaving] = useState(false)
 
@@ -619,12 +619,12 @@ function TxForm({ isOpen, onClose, config, stocks, toast, onSaved }) {
         setQuantity(String(editTx.quantity))
         setPrice(String(editTx.price))
         setFee(String(editTx.fee || 0))
-        setDate(editTx.date || new Date().toISOString().split('T')[0])
+        setDate(editTx.date || getLocalDateString())
         setNote(editTx.note || '')
       } else {
         setQuantity(''); setFee(''); setNote('')
         setPrice(isDividend ? '' : String(stock?.current_price || ''))
-        setDate(new Date().toISOString().split('T')[0])
+        setDate(getLocalDateString())
       }
     }
   }, [isOpen, stock, isDividend, editTx])

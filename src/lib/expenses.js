@@ -5,6 +5,7 @@
 // + Lũy kế TM, CK, Nợ TD
 // ============================================
 import { supabase } from './supabase'
+import { getLocalDateString } from './helpers'
 
 // ============================================
 // DANH MỤC
@@ -73,7 +74,7 @@ export async function getTransactions({ startDate, endDate } = {}) {
 export async function createTransaction(tx) {
   const { data, error } = await supabase.from('transactions')
     .insert([{ category_id:tx.category_id||null, type:tx.type, amount:tx.amount,
-      date:tx.date||new Date().toISOString().split('T')[0], note:tx.note||'',
+      date:tx.date||getLocalDateString(), note:tx.note||'',
       payment_method:tx.payment_method||'cash', tags:tx.tags||[], linked_order_id:tx.linked_order_id||null }])
     .select('*, category:app_config(id, name, icon, color, metadata)').single()
   if (error) throw error
