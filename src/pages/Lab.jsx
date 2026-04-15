@@ -1000,6 +1000,7 @@ function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
   const filtered = useMemo(() => {
     let list = notes
     if (noteFilter==='note') list = list.filter(n => n.type==='note')
+    else if (noteFilter==='personal') list = list.filter(n => n.type==='personal')
     else if (noteFilter==='experiment') list = list.filter(n => n.type==='experiment')
     if (search) {
       const s = search.toLowerCase()
@@ -1010,6 +1011,7 @@ function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
 
   const counts = useMemo(() => ({
     all:notes.length, note:notes.filter(n=>n.type==='note').length,
+    personal:notes.filter(n=>n.type==='personal').length,
     experiment:notes.filter(n=>n.type==='experiment').length, discovery:allDiscoveries.length
   }), [notes, allDiscoveries])
 
@@ -1049,6 +1051,7 @@ function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
 
   const noteFilters = [
     { id:'all', label:'Tất cả', icon:'📋' }, { id:'note', label:'Ghi chú', icon:'📝' },
+    { id:'personal', label:'Cá nhân', icon:'👤' },
     { id:'experiment', label:'Thí nghiệm', icon:'🔬' }, { id:'discovery', label:'Phát hiện', icon:'💡' }
   ]
 
@@ -1090,14 +1093,14 @@ function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
               <div key={n.id} className={`bg-white rounded-xl shadow-sm overflow-hidden transition-all ${isOpen?'ring-2 ring-purple-400':''}`}>
                 {/* Header */}
                 <div className="flex items-start gap-2.5 px-4 py-3 cursor-pointer active:bg-gray-50" onClick={() => { setExpandedId(isOpen?null:n.id); setAddingDiscovery(null) }}>
-                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${isExp?'bg-blue-50':'bg-gray-100'}`}>
-                    {isExp?'🔬':'📝'}
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center text-lg flex-shrink-0 ${isExp?'bg-blue-50':n.type==='personal'?'bg-pink-50':'bg-gray-100'}`}>
+                    {isExp?'🔬':n.type==='personal'?'👤':'📝'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5 flex-wrap mb-1">
                       {n.is_pinned && <Pin size={11} className="text-amber-500"/>}
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${isExp?'bg-blue-50 text-blue-600':'bg-gray-100 text-gray-500'}`}>
-                        {isExp?'Thí nghiệm':'Ghi chú'}
+                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${isExp?'bg-blue-50 text-blue-600':n.type==='personal'?'bg-pink-50 text-pink-600':'bg-gray-100 text-gray-500'}`}>
+                        {isExp?'Thí nghiệm':n.type==='personal'?'Cá nhân':'Ghi chú'}
                       </span>
                       {r && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold border ${r.cls}`}>{r.icon} {r.label}</span>}
                       {dCount>0 && <span className="text-[10px] px-1.5 py-0.5 rounded-full font-bold bg-amber-50 text-amber-600 border border-amber-200">💡 {dCount}</span>}
@@ -1249,31 +1252,47 @@ function DiscoveryAggregation({ discoveries, onJumpTo }) {
 // ============================================
 // NOTE FORM v2 (simple note)
 // ============================================
-function NoteFormV2({ isOpen, onClose, note, formulas, onSave }) {
-  const [form, setForm] = useState({ title:'', content:'', formula_id:'' })
+function NoteFormV2({ isOpen, onClose, note, formulas, onSave, defaultType = 'note' }) {
+  const [form, setForm] = useState({ title:'', content:'', formula_id:'', noteType:'note' })
   const [saving, setSaving] = useState(false)
   useEffect(() => {
     if (isOpen) {
-      if (note) setForm({ title:note.title, content:note.content||'', formula_id:note.formula_id||'' })
-      else setForm({ title:'', content:'', formula_id:'' })
+      if (note) setForm({ title:note.title, content:note.content||'', formula_id:note.formula_id||'', noteType:note.type||'note' })
+      else setForm({ title:'', content:'', formula_id:'', noteType:defaultType })
     }
-  }, [isOpen, note])
+  }, [isOpen, note, defaultType])
 
   const handleSubmit = async () => {
     if (!form.title.trim()) return; setSaving(true)
-    await onSave({ title:form.title.trim(), content:form.content, type:'note', formula_id:form.formula_id||null, discoveries:note?.discoveries||[] })
+    await onSave({ title:form.title.trim(), content:form.content, type:form.noteType, formula_id:form.formula_id||null, discoveries:note?.discoveries||[] })
     setSaving(false)
   }
+
+  const noteTypes = [
+    { id:'note', label:'📝 Công việc', desc:'Ghi chú liên quan đến công việc, công thức' },
+    { id:'personal', label:'👤 Cá nhân', desc:'Ghi chú riêng tư, nhật ký, suy nghĩ' }
+  ]
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={note?'Sửa ghi chú':'📝 Thêm ghi chú'}>
       <div className="space-y-3 p-5">
+        {/* Note type selector */}
+        <div><label className="text-xs text-gray-500 mb-1.5 block">Loại ghi chú</label>
+          <div className="flex gap-2">
+            {noteTypes.map(t => (
+              <button key={t.id} onClick={() => setForm({...form, noteType:t.id})}
+                className={`flex-1 py-2.5 px-3 rounded-xl text-sm font-medium border-2 transition-all ${form.noteType===t.id ? 'border-purple-400 bg-purple-50 text-purple-700' : 'border-gray-200 text-gray-500 hover:border-gray-300'}`}>
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div><label className="text-xs text-gray-500 mb-1 block">Tiêu đề *</label>
-          <input type="text" value={form.title} onChange={e => setForm({...form,title:e.target.value})} placeholder="VD: Ma Hoàng - cách dùng" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <input type="text" value={form.title} onChange={e => setForm({...form,title:e.target.value})} placeholder={form.noteType==='personal'?'VD: Suy nghĩ hôm nay...':'VD: Ma Hoàng - cách dùng'} autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
         <div><label className="text-xs text-gray-500 mb-1 block">Nội dung</label>
-          <textarea value={form.content} onChange={e => setForm({...form,content:e.target.value})} rows={4} placeholder="Chi tiết ghi chú, mẹo, lưu ý..."
+          <textarea value={form.content} onChange={e => setForm({...form,content:e.target.value})} rows={4} placeholder="Chi tiết ghi chú..."
             className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
-        {formulas.length>0 && <div><label className="text-xs text-gray-500 mb-1 block">Liên kết công thức</label>
+        {form.noteType==='note' && formulas.length>0 && <div><label className="text-xs text-gray-500 mb-1 block">Liên kết công thức</label>
           <select value={form.formula_id} onChange={e => setForm({...form,formula_id:e.target.value})} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
             <option value="">-- Không --</option>{formulas.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
           </select></div>}
