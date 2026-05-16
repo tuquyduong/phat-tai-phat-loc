@@ -98,6 +98,12 @@ export async function updateStock(id, newQty) {
     .update({ stock_qty: newQty, updated_at: new Date().toISOString() }).eq('id',id)
   if (error) throw error
 }
+// Fetch single ingredient (dùng trong detail panel để refresh sau khi nhập)
+export async function getIngredient(id) {
+  const { data, error } = await supabase.from('ingredients').select('*').eq('id',id).single()
+  if (error) throw error
+  return data
+}
 
 // ============================================
 // CÔNG THỨC
@@ -286,4 +292,58 @@ export function scaleIngredients(items, baseServing, targetServing) {
   return items.map(fi => ({
     ...fi, scaledQty: Math.round(fi.quantity * ratio * 10000) / 10000
   }))
+}
+
+// ============================================
+// NHẬP NGUYÊN LIỆU (ingredient_imports)
+// ============================================
+export async function getImports(ingredientId) {
+  const { data, error } = await supabase
+    .from('ingredient_imports')
+    .select('*')
+    .eq('ingredient_id', ingredientId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+export async function createImport(item) {
+  const { data, error } = await supabase
+    .from('ingredient_imports')
+    .insert([{
+      ingredient_id: item.ingredient_id,
+      qty:           item.qty,
+      unit:          item.unit,
+      price_per_unit: item.price_per_unit || null,
+      order_date:    item.order_date,
+      arrived_date:  item.arrived_date || null,
+      note:          item.note || null,
+    }])
+    .select().single()
+  if (error) throw error
+  return data
+}
+
+// Đánh dấu đã về: ghi arrived_date + cộng vào tồn kho
+export async function markImportArrived(importId, ingredientId, qty, importUnit) {
+  const { data: ing, error: ingErr } = await supabase
+    .from('ingredients').select('stock_qty, unit').eq('id', ingredientId).single()
+  if (ingErr) throw ingErr
+
+  const converted = convertUnit(qty, importUnit, ing.unit) ?? qty
+  const newStock   = (Number(ing.stock_qty) || 0) + converted
+  const d          = new Date()
+  const today      = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+
+  const [r1, r2] = await Promise.all([
+    supabase.from('ingredient_imports').update({ arrived_date: today }).eq('id', importId),
+    supabase.from('ingredients').update({ stock_qty: newStock, updated_at: new Date().toISOString() }).eq('id', ingredientId),
+  ])
+  if (r1.error) throw r1.error
+  if (r2.error) throw r2.error
+}
+
+export async function deleteImport(importId) {
+  const { error } = await supabase.from('ingredient_imports').delete().eq('id', importId)
+  if (error) throw error
 }

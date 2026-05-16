@@ -11,9 +11,10 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney } from '../lib/helpers'
+import { formatMoney, getLocalDateString } from '../lib/helpers'
 import {
-  getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock,
+  getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock, getIngredient,
+  getImports, createImport, markImportArrived, deleteImport,
   getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
   addFormulaIngredient, deleteFormulaIngredientsByFormula, reorderFormulas,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
@@ -49,11 +50,13 @@ export default function Lab() {
 
   useEffect(() => { loadData() }, [loadData])
 
+  const alertCount = ingredients.filter(i => Number(i.stock_qty) < (Number(i.alert_threshold) || 500)).length
+
   const tabs = [
-    { id:'formulas', icon:<FlaskConical size={16}/>, label:'Công thức', count:formulas.length },
-    { id:'ingredients', icon:<Package size={16}/>, label:'Nguyên liệu', count:ingredients.length },
-    { id:'batches', icon:<Layers size={16}/>, label:'Lô SX', count:batches.length },
-    { id:'notes', icon:<StickyNote size={16}/>, label:'Ghi chú', count:notes.length },
+    { id:'formulas',     icon:<FlaskConical size={16}/>, label:'Công thức',   count:formulas.length },
+    { id:'ingredients',  icon:<Package size={16}/>,      label:'Nguyên liệu', count:ingredients.length, alert:alertCount },
+    { id:'batches',      icon:<Layers size={16}/>,       label:'Lô SX',       count:batches.length },
+    { id:'notes',        icon:<StickyNote size={16}/>,   label:'Ghi chú',     count:notes.length },
   ]
 
   return (
@@ -69,9 +72,10 @@ export default function Lab() {
         <div className="max-w-2xl mx-auto px-4 flex gap-1 pb-2">
           {tabs.map(t => (
             <button key={t.id} onClick={() => { setActiveTab(t.id); setSearch('') }}
-              className={`flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium flex-1 justify-center ${activeTab===t.id?'bg-purple-500 text-white shadow-md':'bg-gray-100 text-gray-600'}`}>
+              className={`relative flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs font-medium flex-1 justify-center ${activeTab===t.id?'bg-purple-500 text-white shadow-md':'bg-gray-100 text-gray-600'}`}>
               {t.icon} {t.label}
               <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${activeTab===t.id?'bg-white/20':'bg-gray-200'}`}>{t.count}</span>
+              {t.alert>0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center leading-none">{t.alert}</span>}
             </button>
           ))}
         </div>
@@ -819,88 +823,143 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
 // INGREDIENTS TAB - Quick edit stock
 // ============================================
 function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
-  const [showForm, setShowForm] = useState(false); const [editing, setEditing] = useState(null)
+  const [showForm, setShowForm]   = useState(false)
+  const [editing, setEditing]     = useState(null)
   const [editStock, setEditStock] = useState(null) // { id, qty }
+  const [selectedIng, setSelectedIng] = useState(null)
 
   const filtered = useMemo(() => {
     if (!search) return ingredients
     const s = search.toLowerCase()
-    return ingredients.filter(i => i.name.toLowerCase().includes(s)||i.supplier?.toLowerCase().includes(s))
+    return ingredients.filter(i => i.name.toLowerCase().includes(s) || i.supplier?.toLowerCase().includes(s))
   }, [ingredients, search])
 
+  const alertOut  = ingredients.filter(i => Number(i.stock_qty) <= 0)
+  const alertWarn = ingredients.filter(i => Number(i.stock_qty) > 0 && Number(i.stock_qty) < (Number(i.alert_threshold) || 500))
+
   const handleDelete = async (i) => {
-    if(!confirm(`Xóa "${i.name}"?`)) return
+    if (!confirm(`Xóa "${i.name}"?`)) return
     try { await deleteIngredient(i.id); toast.success('Đã xóa'); onRefresh() } catch { toast.error('Lỗi') }
   }
   const handleSave = async (data) => {
     try {
-      if(editing) { await updateIngredient(editing.id, data); toast.success('Đã cập nhật') }
-      else { await createIngredient(data); toast.success('Đã thêm') }
-      setShowForm(false); onRefresh()
-    } catch(err) { toast.error('Lỗi: '+err.message) }
+      if (editing) { await updateIngredient(editing.id, data); toast.success('Đã cập nhật') }
+      else         { await createIngredient(data);             toast.success('Đã thêm') }
+      setShowForm(false); setEditing(null); onRefresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
   }
   const handleQuickStock = async (id) => {
-    if(editStock?.id!==id) return
-    try { await updateStock(id, Number(editStock.qty)||0); toast.success('Đã cập nhật tồn'); setEditStock(null); onRefresh() }
+    if (editStock?.id !== id) return
+    try { await updateStock(id, Number(editStock.qty) || 0); toast.success('Đã cập nhật tồn'); setEditStock(null); onRefresh() }
     catch { toast.error('Lỗi') }
+  }
+
+  // Khi chọn NL → hiện detail panel (giữ nguyên search/scroll)
+  if (selectedIng) {
+    return (
+      <IngredientDetailPanel
+        ing={selectedIng}
+        onBack={() => { setSelectedIng(null); onRefresh() }}
+        onEdit={i => { setSelectedIng(null); setEditing(i); setShowForm(true) }}
+        toast={toast}
+      />
+    )
   }
 
   return (
     <>
-      <SearchBar value={search} onChange={setSearch} placeholder="Tìm nguyên liệu..."/>
-      {filtered.length===0 ? (
+      <SearchBar value={search} onChange={setSearch} placeholder="Tìm nguyên liệu..." />
+
+      {/* Alert banner — chỉ hiện khi có vấn đề */}
+      {(alertOut.length > 0 || alertWarn.length > 0) && (
+        <div className={`mb-3 px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm
+          ${alertOut.length > 0 ? 'bg-red-50 border border-red-200' : 'bg-amber-50 border border-amber-200'}`}>
+          <span>{alertOut.length > 0 ? '🔴' : '🟡'}</span>
+          <span className={alertOut.length > 0 ? 'text-red-700' : 'text-amber-700'}>
+            {alertOut.length > 0 && <><b>{alertOut.length} NL hết hàng</b>{alertWarn.length > 0 && ' · '}</>}
+            {alertWarn.length > 0 && <span>{alertWarn.length} NL sắp hết (&lt; 500g)</span>}
+          </span>
+        </div>
+      )}
+
+      {filtered.length === 0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">📦</div>
-          <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có nguyên liệu'}</p>
+          <p className="text-gray-500 text-sm">{search ? 'Không tìm thấy' : 'Chưa có nguyên liệu'}</p>
           <button onClick={() => { setEditing(null); setShowForm(true) }} className="mt-3 text-purple-600 font-medium text-sm">+ Thêm</button>
         </div>
       ) : (
         <div className="space-y-2">
-          {filtered.map(i => (
-            <div key={i.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
-              <div className="flex items-center gap-3">
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-gray-800 truncate">{i.name}</p>
-                  <p className="text-xs text-gray-400">
-                    {i.price_per_unit>0 && <span>{formatMoney(i.price_per_unit)}/{i.unit}</span>}
-                    {i.supplier && <span className="ml-2">• {i.supplier}</span>}
-                  </p>
+          {filtered.map(i => {
+            const stockNum  = Number(i.stock_qty)
+            const threshold = Number(i.alert_threshold) || 500
+            const level     = stockNum <= 0 ? 'out' : stockNum < threshold ? 'warn' : 'ok'
+            return (
+              <div key={i.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
+                <div className="flex items-center gap-2">
+                  {/* Dot trạng thái */}
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0
+                    ${level === 'out' ? 'bg-red-500 animate-pulse' : level === 'warn' ? 'bg-amber-400' : 'bg-green-400'}`} />
+
+                  {/* Tên — click để vào detail */}
+                  <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setSelectedIng(i)}>
+                    <p className="text-sm font-medium text-gray-800 truncate">{i.name}</p>
+                    <p className="text-xs text-gray-400">
+                      {i.price_per_unit > 0 && <span>{formatMoney(i.price_per_unit)}/{i.unit}</span>}
+                      {i.supplier && <span className="ml-2">• {i.supplier}</span>}
+                    </p>
+                  </div>
+
+                  {/* Quick edit tồn kho */}
+                  <div className="flex items-center gap-1">
+                    {editStock?.id === i.id ? (
+                      <>
+                        <input type="number" inputMode="decimal" value={editStock.qty}
+                          onChange={e => setEditStock({ ...editStock, qty: e.target.value })}
+                          className="w-20 px-2 py-1.5 border border-purple-300 rounded-lg text-xs text-center" autoFocus
+                          onKeyDown={e => { if (e.key === 'Enter') handleQuickStock(i.id); if (e.key === 'Escape') setEditStock(null) }} />
+                        <span className="text-xs text-gray-400">{i.unit}</span>
+                        <button onClick={() => handleQuickStock(i.id)} className="p-1 text-green-500 active:scale-90"><CheckCircle size={16} /></button>
+                        <button onClick={() => setEditStock(null)} className="p-1 text-gray-400 active:scale-90"><X size={14} /></button>
+                      </>
+                    ) : (
+                      <button onClick={() => setEditStock({ id: i.id, qty: String(i.stock_qty || 0) })}
+                        className={`px-2 py-1 rounded-lg text-xs font-bold
+                          ${level === 'out'  ? 'bg-red-50 text-red-600 border border-red-200'
+                          : level === 'warn' ? 'bg-amber-50 text-amber-700 border border-amber-200'
+                                             : 'bg-green-50 text-green-700 border border-green-200'}`}>
+                        {formatStock(i.stock_qty, i.unit)} {i.unit}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Nút Nhập NL */}
+                  <button onClick={() => setSelectedIng(i)}
+                    className="flex items-center gap-0.5 px-2 py-1 bg-purple-50 text-purple-600 border border-purple-200 rounded-lg text-xs font-medium active:scale-90">
+                    <Plus size={11} /> Nhập
+                  </button>
+
+                  <button onClick={() => { setEditing(i); setShowForm(true) }} className="p-1.5 text-gray-400 hover:text-purple-500 active:scale-90"><Edit2 size={15} /></button>
+                  <button onClick={() => handleDelete(i)} className="p-1.5 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={15} /></button>
                 </div>
-                {/* Quick stock edit */}
-                <div className="flex items-center gap-1">
-                  {editStock?.id===i.id ? (
-                    <>
-                      <input type="number" inputMode="decimal" value={editStock.qty}
-                        onChange={e => setEditStock({...editStock, qty:e.target.value})}
-                        className="w-20 px-2 py-1.5 border border-purple-300 rounded-lg text-xs text-center" autoFocus
-                        onKeyDown={e => { if(e.key==='Enter') handleQuickStock(i.id); if(e.key==='Escape') setEditStock(null) }}/>
-                      <span className="text-xs text-gray-400">{i.unit}</span>
-                      <button onClick={() => handleQuickStock(i.id)} className="p-1 text-green-500 active:scale-90"><CheckCircle size={16}/></button>
-                      <button onClick={() => setEditStock(null)} className="p-1 text-gray-400 active:scale-90"><X size={14}/></button>
-                    </>
-                  ) : (
-                    <button onClick={() => setEditStock({id:i.id, qty:String(i.stock_qty||0)})}
-                      className={`px-2 py-1 rounded-lg text-xs font-bold ${Number(i.stock_qty)>0?'bg-green-50 text-green-700 border border-green-200':'bg-gray-50 text-gray-400 border border-gray-200'}`}>
-                      {formatStock(i.stock_qty, i.unit)} {i.unit}
-                    </button>
-                  )}
-                </div>
-                <button onClick={() => { setEditing(i); setShowForm(true) }} className="p-2 text-gray-400 hover:text-purple-500 active:scale-90"><Edit2 size={16}/></button>
-                <button onClick={() => handleDelete(i)} className="p-2 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={16}/></button>
               </div>
-            </div>
-          ))}
+            )
+          })}
         </div>
       )}
+
       <button onClick={() => { setEditing(null); setShowForm(true) }}
-        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 z-40" style={{bottom:"calc(4.5rem + env(safe-area-inset-bottom, 0px))"}}>
-        <Plus size={24}/></button>
-      <IngredientForm isOpen={showForm} onClose={() => setShowForm(false)} ingredient={editing} ingredients={ingredients} onSave={handleSave}/>
+        className="fixed right-4 w-12 h-12 bg-purple-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90 z-40"
+        style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom, 0px))' }}>
+        <Plus size={24} />
+      </button>
+
+      <IngredientForm isOpen={showForm} onClose={() => { setShowForm(false); setEditing(null) }}
+        ingredient={editing} ingredients={ingredients} onSave={handleSave} />
     </>
   )
 }
 
-// ============================================
 // INGREDIENT FORM
 // ============================================
 function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
@@ -976,6 +1035,345 @@ function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
 }
 
 // ============================================
+
+// ============================================
+// INGREDIENT DETAIL PANEL
+// ============================================
+function IngredientDetailPanel({ ing, onBack, onEdit, toast }) {
+  const [ingData, setIngData]           = useState(ing)
+  const [imports, setImports]           = useState([])
+  const [loadingImports, setLoadingImports] = useState(true)
+  const [showImportForm, setShowImportForm] = useState(false)
+  const [detailTab, setDetailTab]       = useState('history')
+
+  // Load imports + fresh ingredient data mỗi khi mở / sau khi thay đổi
+  const refresh = useCallback(async () => {
+    setLoadingImports(true)
+    try {
+      const [fresh, imps] = await Promise.all([getIngredient(ing.id), getImports(ing.id)])
+      setIngData(fresh)
+      setImports(imps)
+    } catch { /* silent */ }
+    finally { setLoadingImports(false) }
+  }, [ing.id])
+
+  useEffect(() => { refresh() }, [refresh])
+
+  const pending    = imports.filter(i => !i.arrived_date)
+  const arrived    = imports.filter(i =>  i.arrived_date)
+  const pendingQty = pending.reduce((s, i) => s + Number(i.qty), 0)
+
+  const stockNum  = Number(ingData.stock_qty)
+  const threshold = Number(ingData.alert_threshold) || 500
+  const level     = stockNum <= 0 ? 'out' : stockNum < threshold ? 'warn' : 'ok'
+
+  const handleMarkArrived = async (imp) => {
+    try {
+      await markImportArrived(imp.id, ing.id, imp.qty, imp.unit)
+      toast.success('Đã nhận hàng — tồn kho đã cộng')
+      refresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+
+  const handleDeleteImport = async (imp) => {
+    if (!confirm('Xóa lô nhập này?')) return
+    try { await deleteImport(imp.id); toast.success('Đã xóa'); refresh() }
+    catch { toast.error('Lỗi') }
+  }
+
+  const handleSaveImport = async (data) => {
+    try {
+      await createImport({ ...data, ingredient_id: ing.id })
+      // Nếu nhập kho ngay → cộng tồn
+      if (data.arrived_date) {
+        const converted = convertUnit(data.qty, data.unit, ingData.unit) ?? data.qty
+        await updateStock(ing.id, (Number(ingData.stock_qty) || 0) + converted)
+        toast.success('Đã nhập kho — tồn kho đã cộng')
+      } else {
+        toast.success('Đã ghi đơn đặt hàng')
+      }
+      setShowImportForm(false)
+      refresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+
+  return (
+    <div>
+      {/* Header */}
+      <div className="flex items-center gap-2 mb-3">
+        <button onClick={onBack} className="p-2 -ml-2 text-gray-400 hover:text-purple-500 active:scale-90">
+          <ChevronLeft size={20} />
+        </button>
+        <h3 className="flex-1 text-base font-semibold text-gray-800 truncate">{ingData.name}</h3>
+        <button onClick={() => setShowImportForm(true)}
+          className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded-xl text-sm font-medium active:scale-90">
+          <Plus size={14} /> Nhập NL
+        </button>
+        <button onClick={() => onEdit(ingData)} className="p-2 text-gray-400 hover:text-purple-500 active:scale-90">
+          <Edit2 size={16} />
+        </button>
+      </div>
+
+      {/* Thông tin tổng quan */}
+      <div className="bg-white rounded-xl px-4 py-3 mb-3 shadow-sm space-y-2">
+        <div className="flex justify-between items-center">
+          <span className="text-xs text-gray-500">Tồn kho</span>
+          <span className={`text-sm font-bold ${level==='out'?'text-red-600':level==='warn'?'text-amber-600':'text-green-600'}`}>
+            {formatStock(ingData.stock_qty, ingData.unit)} {ingData.unit}
+            {level === 'out'  && ' 🔴'}
+            {level === 'warn' && ' 🟡'}
+          </span>
+        </div>
+        {pendingQty > 0 && (
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-gray-500">Đang trên đường về</span>
+            <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
+              +{pendingQty} {ingData.unit}
+            </span>
+          </div>
+        )}
+        {ingData.price_per_unit > 0 && (
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-gray-500">Giá mặc định</span>
+            <span className="text-sm text-gray-700">{formatMoney(ingData.price_per_unit)}/{ingData.unit}</span>
+          </div>
+        )}
+        {ingData.supplier && (
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-gray-500">Nhà cung cấp</span>
+            <span className="text-sm text-gray-700">{ingData.supplier}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Tabs */}
+      <div className="flex bg-gray-100 rounded-xl p-1 mb-3 gap-1">
+        {[['history', 'Lịch sử nhập'], ['note', 'Ghi chú NL']].map(([id, label]) => (
+          <button key={id} onClick={() => setDetailTab(id)}
+            className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
+              ${detailTab === id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {detailTab === 'history' && (
+        loadingImports
+          ? <div className="text-center py-8 text-gray-400 text-sm">Đang tải...</div>
+          : (
+            <div className="space-y-2">
+              {pending.length > 0 && (
+                <>
+                  <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide px-1">Đang chờ về</p>
+                  {pending.map(imp => (
+                    <ImportRow key={imp.id} imp={imp} ingUnit={ingData.unit}
+                      onMarkArrived={handleMarkArrived} onDelete={handleDeleteImport} />
+                  ))}
+                </>
+              )}
+              {arrived.length > 0 && (
+                <>
+                  <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide px-1 mt-3">Đã nhận</p>
+                  {arrived.map(imp => (
+                    <ImportRow key={imp.id} imp={imp} ingUnit={ingData.unit} onDelete={handleDeleteImport} />
+                  ))}
+                </>
+              )}
+              {imports.length === 0 && (
+                <div className="bg-white rounded-xl p-6 text-center text-gray-400 text-sm">
+                  Chưa có lịch sử nhập
+                </div>
+              )}
+            </div>
+          )
+      )}
+
+      {detailTab === 'note' && (
+        <div className="bg-white rounded-xl px-4 py-3 min-h-[80px] text-sm text-gray-700">
+          {ingData.note || <span className="text-gray-400">Chưa có ghi chú</span>}
+        </div>
+      )}
+
+      <ImportForm isOpen={showImportForm} onClose={() => setShowImportForm(false)}
+        ing={ingData} onSave={handleSaveImport} />
+    </div>
+  )
+}
+
+// ============================================
+// IMPORT ROW — một dòng lịch sử nhập
+// ============================================
+function ImportRow({ imp, ingUnit, onMarkArrived, onDelete }) {
+  const [expanded, setExpanded] = useState(false)
+  const isPending = !imp.arrived_date
+
+  // Số ngày lead time thực tế
+  const leadDays = (imp.arrived_date && imp.order_date)
+    ? Math.round((new Date(imp.arrived_date) - new Date(imp.order_date)) / 86400000)
+    : null
+
+  const fmtDate = d => {
+    if (!d) return ''
+    const [y, m, day] = d.split('-')
+    return `${day}/${m}/${y.slice(2)}`
+  }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(v => !v)}>
+        <Package size={14} className="text-gray-400 flex-shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-800">{imp.qty} {imp.unit}</p>
+          <p className="text-xs text-gray-400">
+            Đặt {fmtDate(imp.order_date)}
+            {imp.arrived_date && ` · Về ${fmtDate(imp.arrived_date)}`}
+            {leadDays != null && <span className="ml-1 text-gray-400">({leadDays} ngày)</span>}
+          </p>
+        </div>
+        {imp.price_per_unit && (
+          <span className="text-xs text-gray-500 flex-shrink-0">
+            {formatMoney(imp.price_per_unit)}/{imp.unit}
+          </span>
+        )}
+        <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0
+          ${isPending ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+          {isPending ? 'Đang về' : 'Đã về'}
+        </span>
+        <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </div>
+
+      {expanded && (
+        <div className="px-4 pb-3 pt-2 border-t border-gray-100 space-y-2">
+          {imp.note && <p className="text-xs text-gray-500">{imp.note}</p>}
+          {imp.price_per_unit && (
+            <p className="text-xs text-gray-500">
+              Giá lô: <b className="text-gray-700">{formatMoney(imp.price_per_unit)}/{imp.unit}</b>
+              {' · '}Tổng: <b className="text-gray-700">{formatMoney(imp.price_per_unit * imp.qty)}</b>
+            </p>
+          )}
+          <div className="flex gap-2 pt-1">
+            {isPending && onMarkArrived && (
+              <button onClick={() => onMarkArrived(imp)}
+                className="flex-1 py-2 bg-green-50 text-green-700 border border-green-200 rounded-lg text-xs font-medium active:scale-98 flex items-center justify-center gap-1">
+                <CheckCircle size={13} /> Đánh dấu đã về
+              </button>
+            )}
+            <button onClick={() => onDelete(imp)} className="px-3 py-2 text-gray-400 hover:text-red-500 active:scale-90">
+              <Trash2 size={14} />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// IMPORT FORM — modal nhập nguyên liệu
+// ============================================
+function ImportForm({ isOpen, onClose, ing, onSave }) {
+  const [mode, setMode]   = useState('order') // 'order' | 'arrived'
+  const [form, setForm]   = useState({ qty: '', unit: 'g', price_per_unit: '', order_date: '', note: '' })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (isOpen) {
+      setMode('order')
+      setForm({ qty: '', unit: ing?.unit || 'g', price_per_unit: '', order_date: getLocalDateString(), note: '' })
+    }
+  }, [isOpen, ing])
+
+  const handleSubmit = async () => {
+    if (!form.qty) return
+    setSaving(true)
+    try {
+      await onSave({
+        qty:           Number(form.qty),
+        unit:          form.unit,
+        price_per_unit: form.price_per_unit ? Number(form.price_per_unit) : null,
+        order_date:    form.order_date,
+        arrived_date:  mode === 'arrived' ? getLocalDateString() : null,
+        note:          form.note.trim() || null,
+      })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="📦 Nhập nguyên liệu">
+      <div className="space-y-3 p-5">
+
+        {/* Mode toggle */}
+        <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+          {[['order', 'Đặt hàng (chưa về)'], ['arrived', 'Nhập kho (đã về)']].map(([m, label]) => (
+            <button key={m} onClick={() => setMode(m)}
+              className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
+                ${mode === m ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-400">
+          {mode === 'order'
+            ? 'Chưa cộng vào tồn kho. Bấm "đã về" khi hàng đến.'
+            : 'Cộng ngay vào tồn kho sau khi lưu.'}
+        </p>
+
+        {/* Số lượng + đơn vị */}
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Số lượng *</label>
+            <input type="number" inputMode="decimal" placeholder="500" autoFocus
+              value={form.qty} onChange={e => setForm({ ...form, qty: e.target.value })}
+              className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">Đơn vị</label>
+            <select value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}
+              className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
+              {ALL_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+            </select>
+          </div>
+        </div>
+
+        {/* Giá lô (tùy chọn) */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">
+            Giá lô này (đ/{form.unit}) — tùy chọn
+          </label>
+          <input type="number" inputMode="numeric" placeholder="Để trống = dùng giá mặc định"
+            value={form.price_per_unit} onChange={e => setForm({ ...form, price_per_unit: e.target.value })}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
+        </div>
+
+        {/* Ngày đặt */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Ngày đặt hàng</label>
+          <input type="date" value={form.order_date} onChange={e => setForm({ ...form, order_date: e.target.value })}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
+        </div>
+
+        {/* Ghi chú */}
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
+          <textarea placeholder="Nhà cung cấp, chất lượng, ship chung đơn..." rows={2}
+            value={form.note} onChange={e => setForm({ ...form, note: e.target.value })}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm resize-none" />
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">
+            Hủy
+          </button>
+          <button onClick={handleSubmit} disabled={saving || !form.qty}
+            className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">
+            {saving ? '...' : mode === 'arrived' ? 'Nhập kho' : 'Lưu đơn'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 // NOTES TAB - v2: Note + Experiment + Discovery
 // ============================================
 function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
