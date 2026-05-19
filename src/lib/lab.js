@@ -33,6 +33,13 @@ export function convertUnit(qty, fromUnit, toUnit) {
 // All units available
 export const ALL_UNITS = ['g','kg','ml','lít','thìa cà phê','thìa canh','giọt','viên','gói','cái']
 
+// Ngưỡng mặc định theo đơn vị — 0 = không cảnh báo (đơn vị đếm)
+export const UNIT_THRESHOLDS = { g:500, kg:0.5, ml:500, 'lít':0.5 }
+export function getAlertThreshold(ing) {
+  if (ing.alert_threshold != null && ing.alert_threshold !== '') return Number(ing.alert_threshold)
+  return UNIT_THRESHOLDS[ing.unit] ?? 0
+}
+
 // Convertible units for a given unit
 export function getConvertibleUnits(unit) {
   const g = getUnitGroup(unit)
@@ -98,7 +105,7 @@ export async function updateStock(id, newQty) {
     .update({ stock_qty: newQty, updated_at: new Date().toISOString() }).eq('id',id)
   if (error) throw error
 }
-// Fetch single ingredient (dùng trong detail panel để refresh sau khi nhập)
+// Fetch single ingredient (dùng trong detail panel để refresh)
 export async function getIngredient(id) {
   const { data, error } = await supabase.from('ingredients').select('*').eq('id',id).single()
   if (error) throw error
@@ -346,4 +353,57 @@ export async function markImportArrived(importId, ingredientId, qty, importUnit)
 export async function deleteImport(importId) {
   const { error } = await supabase.from('ingredient_imports').delete().eq('id', importId)
   if (error) throw error
+}
+
+// ============================================
+// XUẤT NGUYÊN LIỆU (ingredient_exports)
+// ============================================
+export async function getExports(ingredientId) {
+  const { data, error } = await supabase
+    .from('ingredient_exports')
+    .select('*')
+    .eq('ingredient_id', ingredientId)
+    .order('created_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+export async function createExport(item) {
+  const { data: ing, error: ingErr } = await supabase
+    .from('ingredients').select('stock_qty, unit').eq('id', item.ingredient_id).single()
+  if (ingErr) throw ingErr
+
+  const converted = convertUnit(item.qty, item.unit, ing.unit) ?? item.qty
+  const newStock   = (Number(ing.stock_qty) || 0) - converted
+
+  const [r1, r2] = await Promise.all([
+    supabase.from('ingredient_exports').insert([{
+      ingredient_id: item.ingredient_id,
+      qty:           item.qty,
+      unit:          item.unit,
+      reason:        item.reason || 'other',
+      note:          item.note   || null,
+      exported_at:   item.exported_at,
+    }]).select().single(),
+    supabase.from('ingredients').update({ stock_qty: newStock, updated_at: new Date().toISOString() })
+      .eq('id', item.ingredient_id),
+  ])
+  if (r1.error) throw r1.error
+  if (r2.error) throw r2.error
+  return r1.data
+}
+
+export async function deleteExport(exportId) {
+  const { error } = await supabase.from('ingredient_exports').delete().eq('id', exportId)
+  if (error) throw error
+}
+
+// Cập nhật ngưỡng hàng loạt — chỉ gửi những item thực sự thay đổi
+export async function updateThresholds(updates) {
+  if (!updates.length) return
+  await Promise.all(
+    updates.map(u => supabase.from('ingredients')
+      .update({ alert_threshold: u.alert_threshold, updated_at: new Date().toISOString() })
+      .eq('id', u.id))
+  )
 }

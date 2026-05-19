@@ -5,7 +5,7 @@
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
-  RefreshCw, Plus, Trash2, Edit2, Star, ChevronLeft, ChevronDown, ChevronUp,
+  RefreshCw, Plus, Minus, Trash2, Edit2, Star, ChevronLeft, ChevronDown, ChevronUp,
   Copy, Search, X, Pin, FlaskConical, Package, StickyNote, Calculator, Settings,
   Play, Undo2, CheckCircle, Layers
 } from 'lucide-react'
@@ -15,6 +15,8 @@ import { formatMoney, getLocalDateString } from '../lib/helpers'
 import {
   getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock, getIngredient,
   getImports, createImport, markImportArrived, deleteImport,
+  getExports, createExport, deleteExport, updateThresholds,
+  UNIT_THRESHOLDS, getAlertThreshold,
   getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
   addFormulaIngredient, deleteFormulaIngredientsByFormula, reorderFormulas,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
@@ -50,7 +52,10 @@ export default function Lab() {
 
   useEffect(() => { loadData() }, [loadData])
 
-  const alertCount = ingredients.filter(i => Number(i.stock_qty) < (Number(i.alert_threshold) || 500)).length
+  const alertCount = ingredients.filter(i => {
+    const t = getAlertThreshold(i)
+    return t > 0 && Number(i.stock_qty) < t
+  }).length
 
   const tabs = [
     { id:'formulas',     icon:<FlaskConical size={16}/>, label:'Công thức',   count:formulas.length },
@@ -827,6 +832,7 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
   const [editing, setEditing]     = useState(null)
   const [editStock, setEditStock] = useState(null) // { id, qty }
   const [selectedIng, setSelectedIng] = useState(null)
+  const [showThreshold, setShowThreshold] = useState(false)
 
   const filtered = useMemo(() => {
     if (!search) return ingredients
@@ -835,7 +841,10 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
   }, [ingredients, search])
 
   const alertOut  = ingredients.filter(i => Number(i.stock_qty) <= 0)
-  const alertWarn = ingredients.filter(i => Number(i.stock_qty) > 0 && Number(i.stock_qty) < (Number(i.alert_threshold) || 500))
+  const alertWarn = ingredients.filter(i => {
+    const t = getAlertThreshold(i)
+    return t > 0 && Number(i.stock_qty) > 0 && Number(i.stock_qty) < t
+  })
 
   const handleDelete = async (i) => {
     if (!confirm(`Xóa "${i.name}"?`)) return
@@ -870,6 +879,14 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
     <>
       <SearchBar value={search} onChange={setSearch} placeholder="Tìm nguyên liệu..." />
 
+      {/* Nút cài ngưỡng */}
+      <div className="flex justify-end mb-1">
+        <button onClick={() => setShowThreshold(true)}
+          className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-gray-500 hover:text-purple-600 active:scale-90">
+          <Settings size={13} /> Cài ngưỡng cảnh báo
+        </button>
+      </div>
+
       {/* Alert banner — chỉ hiện khi có vấn đề */}
       {(alertOut.length > 0 || alertWarn.length > 0) && (
         <div className={`mb-3 px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm
@@ -892,8 +909,8 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
         <div className="space-y-2">
           {filtered.map(i => {
             const stockNum  = Number(i.stock_qty)
-            const threshold = Number(i.alert_threshold) || 500
-            const level     = stockNum <= 0 ? 'out' : stockNum < threshold ? 'warn' : 'ok'
+            const threshold = getAlertThreshold(i)
+            const level     = stockNum <= 0 ? 'out' : (threshold > 0 && stockNum < threshold) ? 'warn' : 'ok'
             return (
               <div key={i.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-2">
@@ -956,6 +973,8 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
 
       <IngredientForm isOpen={showForm} onClose={() => { setShowForm(false); setEditing(null) }}
         ingredient={editing} ingredients={ingredients} onSave={handleSave} />
+      <ThresholdManager isOpen={showThreshold} onClose={() => setShowThreshold(false)}
+        ingredients={ingredients} onSaved={onRefresh} toast={toast} />
     </>
   )
 }
@@ -963,7 +982,7 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
 // INGREDIENT FORM
 // ============================================
 function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
-  const [form, setForm] = useState({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', note:'' })
+  const [form, setForm] = useState({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', alert_threshold:'', note:'' })
   const [saving, setSaving] = useState(false)
   const [dupError, setDupError] = useState('')
 
@@ -971,8 +990,8 @@ function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
     if(isOpen) {
       setDupError('')
       if(ingredient) setForm({ name:ingredient.name, unit:ingredient.unit, price_per_unit:String(ingredient.price_per_unit||''),
-        supplier:ingredient.supplier||'', supplier_contact:ingredient.supplier_contact||'', stock_qty:String(ingredient.stock_qty||''), note:ingredient.note||'' })
-      else setForm({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', note:'' })
+        supplier:ingredient.supplier||'', supplier_contact:ingredient.supplier_contact||'', stock_qty:String(ingredient.stock_qty||''), alert_threshold:ingredient.alert_threshold!=null?String(ingredient.alert_threshold):'', note:ingredient.note||'' })
+      else setForm({ name:'', unit:'g', price_per_unit:'', supplier:'', supplier_contact:'', stock_qty:'', alert_threshold:'', note:'' })
     }
   }, [isOpen, ingredient])
 
@@ -999,7 +1018,7 @@ function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
     if (dup) { setDupError(`"${dup.name}" đã tồn tại`); return }
     setSaving(true); setDupError('')
     await onSave({ name:form.name.trim(), unit:form.unit, price_per_unit:Number(form.price_per_unit)||0,
-      supplier:form.supplier, supplier_contact:form.supplier_contact, stock_qty:Number(form.stock_qty)||0, note:form.note })
+      supplier:form.supplier, supplier_contact:form.supplier_contact, stock_qty:Number(form.stock_qty)||0, alert_threshold:form.alert_threshold!==''?Number(form.alert_threshold):null, note:form.note })
     setSaving(false)
   }
 
@@ -1016,6 +1035,8 @@ function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
             </select></div>
           <div><label className="text-xs text-gray-500 mb-1 block">Giá/đơn vị (đ)</label>
             <input type="number" inputMode="numeric" value={form.price_per_unit} onChange={e => setForm({...form,price_per_unit:e.target.value})} placeholder="0" className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ngưỡng cảnh báo ({form.unit}) — mặc định: {String(UNIT_THRESHOLDS[form.unit] ?? 0)}</label>
+          <input type="number" inputMode="decimal" value={form.alert_threshold} onChange={e => setForm({...form,alert_threshold:e.target.value})} placeholder={String(UNIT_THRESHOLDS[form.unit] ?? 0)} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div><label className="text-xs text-gray-500 mb-1 block">Nhà cung cấp</label><input type="text" value={form.supplier} onChange={e => setForm({...form,supplier:e.target.value})} placeholder="Tên NCC" className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
@@ -1040,96 +1061,114 @@ function IngredientForm({ isOpen, onClose, ingredient, ingredients, onSave }) {
 // INGREDIENT DETAIL PANEL
 // ============================================
 function IngredientDetailPanel({ ing, onBack, onEdit, toast }) {
-  const [ingData, setIngData]           = useState(ing)
-  const [imports, setImports]           = useState([])
-  const [loadingImports, setLoadingImports] = useState(true)
+  const [ingData, setIngData]               = useState(ing)
+  const [imports, setImports]               = useState([])
+  const [exports, setExports]               = useState([])
+  const [loading, setLoading]               = useState(true)
   const [showImportForm, setShowImportForm] = useState(false)
-  const [detailTab, setDetailTab]       = useState('history')
+  const [showExportForm, setShowExportForm] = useState(false)
+  const [detailTab, setDetailTab]           = useState('history')
+  const [histFilter, setHistFilter]         = useState('all')
 
-  // Load imports + fresh ingredient data mỗi khi mở / sau khi thay đổi
   const refresh = useCallback(async () => {
-    setLoadingImports(true)
+    setLoading(true)
     try {
-      const [fresh, imps] = await Promise.all([getIngredient(ing.id), getImports(ing.id)])
-      setIngData(fresh)
-      setImports(imps)
+      const [fresh, imps, exps] = await Promise.all([
+        getIngredient(ing.id), getImports(ing.id), getExports(ing.id)
+      ])
+      setIngData(fresh); setImports(imps); setExports(exps)
     } catch { /* silent */ }
-    finally { setLoadingImports(false) }
+    finally { setLoading(false) }
   }, [ing.id])
 
   useEffect(() => { refresh() }, [refresh])
 
   const pending    = imports.filter(i => !i.arrived_date)
-  const arrived    = imports.filter(i =>  i.arrived_date)
   const pendingQty = pending.reduce((s, i) => s + Number(i.qty), 0)
 
+  const history = useMemo(() => {
+    const imps = imports.map(i => ({ ...i, _type: 'import' }))
+    const exps = exports.map(e => ({ ...e, _type: 'export' }))
+    const all  = [...imps, ...exps].sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    if (histFilter === 'all') return all
+    return all.filter(h => h._type === histFilter)
+  }, [imports, exports, histFilter])
+
   const stockNum  = Number(ingData.stock_qty)
-  const threshold = Number(ingData.alert_threshold) || 500
-  const level     = stockNum <= 0 ? 'out' : stockNum < threshold ? 'warn' : 'ok'
+  const threshold = getAlertThreshold(ingData)
+  const level     = stockNum <= 0 ? 'out' : (threshold > 0 && stockNum < threshold) ? 'warn' : 'ok'
 
   const handleMarkArrived = async (imp) => {
-    try {
-      await markImportArrived(imp.id, ing.id, imp.qty, imp.unit)
-      toast.success('Đã nhận hàng — tồn kho đã cộng')
-      refresh()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    try { await markImportArrived(imp.id, ing.id, imp.qty, imp.unit); toast.success('Đã nhận hàng — tồn kho đã cộng'); refresh() }
+    catch (err) { toast.error('Lỗi: ' + err.message) }
   }
-
   const handleDeleteImport = async (imp) => {
     if (!confirm('Xóa lô nhập này?')) return
     try { await deleteImport(imp.id); toast.success('Đã xóa'); refresh() }
     catch { toast.error('Lỗi') }
   }
-
+  const handleDeleteExport = async (exp) => {
+    if (!confirm('Xóa lần xuất này? Tồn kho sẽ không được hoàn lại tự động.')) return
+    try { await deleteExport(exp.id); toast.success('Đã xóa'); refresh() }
+    catch { toast.error('Lỗi') }
+  }
   const handleSaveImport = async (data) => {
     try {
       await createImport({ ...data, ingredient_id: ing.id })
-      // Nếu nhập kho ngay → cộng tồn
       if (data.arrived_date) {
         const converted = convertUnit(data.qty, data.unit, ingData.unit) ?? data.qty
         await updateStock(ing.id, (Number(ingData.stock_qty) || 0) + converted)
         toast.success('Đã nhập kho — tồn kho đã cộng')
-      } else {
-        toast.success('Đã ghi đơn đặt hàng')
-      }
-      setShowImportForm(false)
-      refresh()
+      } else { toast.success('Đã ghi đơn đặt hàng') }
+      setShowImportForm(false); refresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+  const handleSaveExport = async (data) => {
+    try {
+      await createExport({ ...data, ingredient_id: ing.id })
+      toast.success('Đã xuất kho')
+      setShowExportForm(false); refresh()
     } catch (err) { toast.error('Lỗi: ' + err.message) }
   }
 
   return (
     <div>
-      {/* Header */}
       <div className="flex items-center gap-2 mb-3">
         <button onClick={onBack} className="p-2 -ml-2 text-gray-400 hover:text-purple-500 active:scale-90">
           <ChevronLeft size={20} />
         </button>
         <h3 className="flex-1 text-base font-semibold text-gray-800 truncate">{ingData.name}</h3>
+        <button onClick={() => setShowExportForm(true)}
+          className="flex items-center gap-1 px-2.5 py-1.5 bg-red-50 text-red-600 border border-red-200 rounded-xl text-xs font-medium active:scale-90">
+          <Minus size={12} /> Xuất
+        </button>
         <button onClick={() => setShowImportForm(true)}
-          className="flex items-center gap-1 px-3 py-2 bg-purple-500 text-white rounded-xl text-sm font-medium active:scale-90">
-          <Plus size={14} /> Nhập NL
+          className="flex items-center gap-1 px-2.5 py-1.5 bg-purple-500 text-white rounded-xl text-xs font-medium active:scale-90">
+          <Plus size={12} /> Nhập
         </button>
         <button onClick={() => onEdit(ingData)} className="p-2 text-gray-400 hover:text-purple-500 active:scale-90">
           <Edit2 size={16} />
         </button>
       </div>
 
-      {/* Thông tin tổng quan */}
       <div className="bg-white rounded-xl px-4 py-3 mb-3 shadow-sm space-y-2">
         <div className="flex justify-between items-center">
           <span className="text-xs text-gray-500">Tồn kho</span>
           <span className={`text-sm font-bold ${level==='out'?'text-red-600':level==='warn'?'text-amber-600':'text-green-600'}`}>
             {formatStock(ingData.stock_qty, ingData.unit)} {ingData.unit}
-            {level === 'out'  && ' 🔴'}
-            {level === 'warn' && ' 🟡'}
+            {level === 'out' && ' 🔴'}{level === 'warn' && ' 🟡'}
           </span>
         </div>
+        {threshold > 0 && (
+          <div className="flex justify-between items-center">
+            <span className="text-xs text-gray-500">Ngưỡng cảnh báo</span>
+            <span className="text-xs text-gray-600">{threshold} {ingData.unit}</span>
+          </div>
+        )}
         {pendingQty > 0 && (
           <div className="flex justify-between items-center">
             <span className="text-xs text-gray-500">Đang trên đường về</span>
-            <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">
-              +{pendingQty} {ingData.unit}
-            </span>
+            <span className="text-xs font-medium text-blue-600 bg-blue-50 px-2 py-0.5 rounded-full">+{pendingQty} {ingData.unit}</span>
           </div>
         )}
         {ingData.price_per_unit > 0 && (
@@ -1146,46 +1185,42 @@ function IngredientDetailPanel({ ing, onBack, onEdit, toast }) {
         )}
       </div>
 
-      {/* Tabs */}
       <div className="flex bg-gray-100 rounded-xl p-1 mb-3 gap-1">
-        {[['history', 'Lịch sử nhập'], ['note', 'Ghi chú NL']].map(([id, label]) => (
+        {[['history','Lịch sử'],['note','Ghi chú']].map(([id,label]) => (
           <button key={id} onClick={() => setDetailTab(id)}
             className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
-              ${detailTab === id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
+              ${detailTab===id?'bg-white text-purple-600 shadow-sm':'text-gray-500'}`}>
             {label}
           </button>
         ))}
       </div>
 
       {detailTab === 'history' && (
-        loadingImports
-          ? <div className="text-center py-8 text-gray-400 text-sm">Đang tải...</div>
-          : (
-            <div className="space-y-2">
-              {pending.length > 0 && (
-                <>
-                  <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide px-1">Đang chờ về</p>
-                  {pending.map(imp => (
-                    <ImportRow key={imp.id} imp={imp} ingUnit={ingData.unit}
-                      onMarkArrived={handleMarkArrived} onDelete={handleDeleteImport} />
-                  ))}
-                </>
-              )}
-              {arrived.length > 0 && (
-                <>
-                  <p className="text-[11px] text-gray-400 font-medium uppercase tracking-wide px-1 mt-3">Đã nhận</p>
-                  {arrived.map(imp => (
-                    <ImportRow key={imp.id} imp={imp} ingUnit={ingData.unit} onDelete={handleDeleteImport} />
-                  ))}
-                </>
-              )}
-              {imports.length === 0 && (
-                <div className="bg-white rounded-xl p-6 text-center text-gray-400 text-sm">
-                  Chưa có lịch sử nhập
+        <>
+          <div className="flex gap-1.5 mb-3">
+            {[['all','Tất cả'],['import','Nhập'],['export','Xuất']].map(([f,label]) => (
+              <button key={f} onClick={() => setHistFilter(f)}
+                className={`text-xs px-3 py-1 rounded-full border transition-colors
+                  ${histFilter===f?'bg-purple-500 text-white border-purple-500':'border-gray-200 text-gray-500 bg-white'}`}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {loading
+            ? <div className="text-center py-8 text-gray-400 text-sm">Đang tải...</div>
+            : history.length === 0
+              ? <div className="bg-white rounded-xl p-6 text-center text-gray-400 text-sm">Chưa có lịch sử</div>
+              : (
+                <div className="space-y-2">
+                  {history.map(h => h._type === 'import'
+                    ? <ImportRow key={'i'+h.id} imp={h} ingUnit={ingData.unit}
+                        onMarkArrived={handleMarkArrived} onDelete={handleDeleteImport} />
+                    : <ExportRow key={'e'+h.id} exp={h} onDelete={handleDeleteExport} />
+                  )}
                 </div>
-              )}
-            </div>
-          )
+              )
+          }
+        </>
       )}
 
       {detailTab === 'note' && (
@@ -1196,52 +1231,43 @@ function IngredientDetailPanel({ ing, onBack, onEdit, toast }) {
 
       <ImportForm isOpen={showImportForm} onClose={() => setShowImportForm(false)}
         ing={ingData} onSave={handleSaveImport} />
+      <ExportForm isOpen={showExportForm} onClose={() => setShowExportForm(false)}
+        ing={ingData} onSave={handleSaveExport} />
     </div>
   )
 }
 
 // ============================================
-// IMPORT ROW — một dòng lịch sử nhập
+// IMPORT ROW
 // ============================================
 function ImportRow({ imp, ingUnit, onMarkArrived, onDelete }) {
   const [expanded, setExpanded] = useState(false)
   const isPending = !imp.arrived_date
-
-  // Số ngày lead time thực tế
-  const leadDays = (imp.arrived_date && imp.order_date)
-    ? Math.round((new Date(imp.arrived_date) - new Date(imp.order_date)) / 86400000)
-    : null
-
-  const fmtDate = d => {
-    if (!d) return ''
-    const [y, m, day] = d.split('-')
-    return `${day}/${m}/${y.slice(2)}`
-  }
+  const leadDays  = (imp.arrived_date && imp.order_date)
+    ? Math.round((new Date(imp.arrived_date) - new Date(imp.order_date)) / 86400000) : null
+  const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
 
   return (
     <div className="bg-white rounded-xl shadow-sm overflow-hidden">
       <div className="px-4 py-3 flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(v => !v)}>
-        <Package size={14} className="text-gray-400 flex-shrink-0" />
+        <div className="w-7 h-7 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
+          <Plus size={13} className="text-green-600" />
+        </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-800">{imp.qty} {imp.unit}</p>
+          <p className="text-sm font-medium text-gray-800">+{imp.qty} {imp.unit}</p>
           <p className="text-xs text-gray-400">
             Đặt {fmtDate(imp.order_date)}
             {imp.arrived_date && ` · Về ${fmtDate(imp.arrived_date)}`}
-            {leadDays != null && <span className="ml-1 text-gray-400">({leadDays} ngày)</span>}
+            {leadDays != null && <span className="ml-1">({leadDays} ngày)</span>}
           </p>
         </div>
-        {imp.price_per_unit && (
-          <span className="text-xs text-gray-500 flex-shrink-0">
-            {formatMoney(imp.price_per_unit)}/{imp.unit}
-          </span>
-        )}
+        {imp.price_per_unit && <span className="text-xs text-gray-500 flex-shrink-0">{formatMoney(imp.price_per_unit)}/{imp.unit}</span>}
         <span className={`text-xs px-2 py-0.5 rounded-full font-medium flex-shrink-0
-          ${isPending ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
-          {isPending ? 'Đang về' : 'Đã về'}
+          ${isPending?'bg-amber-50 text-amber-700':'bg-green-50 text-green-700'}`}>
+          {isPending?'Đang về':'Đã về'}
         </span>
-        <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${expanded?'rotate-180':''}`} />
       </div>
-
       {expanded && (
         <div className="px-4 pb-3 pt-2 border-t border-gray-100 space-y-2">
           {imp.note && <p className="text-xs text-gray-500">{imp.note}</p>}
@@ -1258,9 +1284,7 @@ function ImportRow({ imp, ingUnit, onMarkArrived, onDelete }) {
                 <CheckCircle size={13} /> Đánh dấu đã về
               </button>
             )}
-            <button onClick={() => onDelete(imp)} className="px-3 py-2 text-gray-400 hover:text-red-500 active:scale-90">
-              <Trash2 size={14} />
-            </button>
+            <button onClick={() => onDelete(imp)} className="px-3 py-2 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={14} /></button>
           </div>
         </div>
       )}
@@ -1269,17 +1293,50 @@ function ImportRow({ imp, ingUnit, onMarkArrived, onDelete }) {
 }
 
 // ============================================
-// IMPORT FORM — modal nhập nguyên liệu
+// EXPORT ROW
+// ============================================
+function ExportRow({ exp, onDelete }) {
+  const [expanded, setExpanded] = useState(false)
+  const REASON_LABEL = { retail:'Bán lẻ', waste:'Hao hụt', gift:'Cho tặng', other:'Khác' }
+  const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+      <div className="px-4 py-3 flex items-center gap-3 cursor-pointer" onClick={() => setExpanded(v => !v)}>
+        <div className="w-7 h-7 rounded-full bg-red-50 flex items-center justify-center flex-shrink-0">
+          <Minus size={13} className="text-red-500" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-gray-800">−{exp.qty} {exp.unit}</p>
+          <p className="text-xs text-gray-400">{fmtDate(exp.exported_at)} · {REASON_LABEL[exp.reason]||exp.reason}</p>
+        </div>
+        <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-50 text-red-600 flex-shrink-0">Xuất</span>
+        <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${expanded?'rotate-180':''}`} />
+      </div>
+      {expanded && (
+        <div className="px-4 pb-3 pt-2 border-t border-gray-100 space-y-2">
+          {exp.note && <p className="text-xs text-gray-500">{exp.note}</p>}
+          <div className="flex gap-2 pt-1">
+            <button onClick={() => onDelete(exp)} className="px-3 py-2 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={14} /></button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ============================================
+// IMPORT FORM
 // ============================================
 function ImportForm({ isOpen, onClose, ing, onSave }) {
-  const [mode, setMode]   = useState('order') // 'order' | 'arrived'
-  const [form, setForm]   = useState({ qty: '', unit: 'g', price_per_unit: '', order_date: '', note: '' })
+  const [mode, setMode]     = useState('order')
+  const [form, setForm]     = useState({ qty:'', unit:'g', price_per_unit:'', order_date:'', note:'' })
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (isOpen) {
       setMode('order')
-      setForm({ qty: '', unit: ing?.unit || 'g', price_per_unit: '', order_date: getLocalDateString(), note: '' })
+      setForm({ qty:'', unit:ing?.unit||'g', price_per_unit:'', order_date:getLocalDateString(), note:'' })
     }
   }, [isOpen, ing])
 
@@ -1301,72 +1358,207 @@ function ImportForm({ isOpen, onClose, ing, onSave }) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="📦 Nhập nguyên liệu">
       <div className="space-y-3 p-5">
-
-        {/* Mode toggle */}
         <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-          {[['order', 'Đặt hàng (chưa về)'], ['arrived', 'Nhập kho (đã về)']].map(([m, label]) => (
+          {[['order','Đặt hàng (chưa về)'],['arrived','Nhập kho (đã về)']].map(([m,label]) => (
             <button key={m} onClick={() => setMode(m)}
               className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
-                ${mode === m ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
-              {label}
-            </button>
+                ${mode===m?'bg-white text-purple-600 shadow-sm':'text-gray-500'}`}>{label}</button>
           ))}
         </div>
         <p className="text-xs text-gray-400">
-          {mode === 'order'
-            ? 'Chưa cộng vào tồn kho. Bấm "đã về" khi hàng đến.'
-            : 'Cộng ngay vào tồn kho sau khi lưu.'}
+          {mode==='order'?'Chưa cộng vào tồn kho. Bấm "đã về" khi hàng đến.':'Cộng ngay vào tồn kho sau khi lưu.'}
         </p>
-
-        {/* Số lượng + đơn vị */}
         <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Số lượng *</label>
-            <input type="number" inputMode="decimal" placeholder="500" autoFocus
-              value={form.qty} onChange={e => setForm({ ...form, qty: e.target.value })}
-              className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
-          </div>
-          <div>
-            <label className="text-xs text-gray-500 mb-1 block">Đơn vị</label>
-            <select value={form.unit} onChange={e => setForm({ ...form, unit: e.target.value })}
+          <div><label className="text-xs text-gray-500 mb-1 block">Số lượng *</label>
+            <input type="number" inputMode="decimal" placeholder="500" autoFocus value={form.qty}
+              onChange={e => setForm({...form,qty:e.target.value})} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <div><label className="text-xs text-gray-500 mb-1 block">Đơn vị</label>
+            <select value={form.unit} onChange={e => setForm({...form,unit:e.target.value})}
               className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
               {ALL_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
-            </select>
+            </select></div>
+        </div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Giá lô này (đ/{form.unit}) — tùy chọn</label>
+          <input type="number" inputMode="numeric" placeholder="Để trống = dùng giá mặc định"
+            value={form.price_per_unit} onChange={e => setForm({...form,price_per_unit:e.target.value})}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ngày đặt hàng</label>
+          <input type="date" value={form.order_date} onChange={e => setForm({...form,order_date:e.target.value})}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
+          <textarea placeholder="Nhà cung cấp, chất lượng, ship chung đơn..." rows={2}
+            value={form.note} onChange={e => setForm({...form,note:e.target.value})}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSubmit} disabled={saving||!form.qty}
+            className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">
+            {saving?'...':mode==='arrived'?'Nhập kho':'Lưu đơn'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// EXPORT FORM
+// ============================================
+const EXPORT_REASONS = [
+  { key:'retail', label:'Bán lẻ' },
+  { key:'waste',  label:'Hao hụt' },
+  { key:'gift',   label:'Cho tặng' },
+  { key:'other',  label:'Khác' },
+]
+
+function ExportForm({ isOpen, onClose, ing, onSave }) {
+  const [form, setForm]     = useState({ qty:'', unit:'g', reason:'retail', note:'' })
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (isOpen) setForm({ qty:'', unit:ing?.unit||'g', reason:'retail', note:'' })
+  }, [isOpen, ing])
+
+  const previewStock = (form.qty && ing)
+    ? (Number(ing.stock_qty)||0) - (convertUnit(Number(form.qty), form.unit, ing.unit) ?? Number(form.qty))
+    : null
+
+  const handleSubmit = async () => {
+    if (!form.qty) return
+    setSaving(true)
+    try {
+      await onSave({
+        qty:         Number(form.qty),
+        unit:        form.unit,
+        reason:      form.reason,
+        note:        form.note.trim() || null,
+        exported_at: getLocalDateString(),
+      })
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="📤 Xuất nguyên liệu">
+      <div className="space-y-3 p-5">
+        <div><label className="text-xs text-gray-500 mb-2 block">Lý do xuất</label>
+          <div className="grid grid-cols-2 gap-2">
+            {EXPORT_REASONS.map(r => (
+              <button key={r.key} onClick={() => setForm({...form,reason:r.key})}
+                className={`py-2 text-xs rounded-xl border transition-colors
+                  ${form.reason===r.key?'bg-purple-50 text-purple-600 border-purple-300 font-medium':'border-gray-200 text-gray-500'}`}>
+                {r.label}
+              </button>
+            ))}
           </div>
         </div>
-
-        {/* Giá lô (tùy chọn) */}
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">
-            Giá lô này (đ/{form.unit}) — tùy chọn
-          </label>
-          <input type="number" inputMode="numeric" placeholder="Để trống = dùng giá mặc định"
-            value={form.price_per_unit} onChange={e => setForm({ ...form, price_per_unit: e.target.value })}
-            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
+        <div className="grid grid-cols-2 gap-2">
+          <div><label className="text-xs text-gray-500 mb-1 block">Số lượng *</label>
+            <input type="number" inputMode="decimal" placeholder="50" autoFocus value={form.qty}
+              onChange={e => setForm({...form,qty:e.target.value})} className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+          <div><label className="text-xs text-gray-500 mb-1 block">Đơn vị</label>
+            <select value={form.unit} onChange={e => setForm({...form,unit:e.target.value})}
+              className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm bg-white">
+              {ALL_UNITS.map(u => <option key={u} value={u}>{u}</option>)}
+            </select></div>
         </div>
-
-        {/* Ngày đặt */}
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Ngày đặt hàng</label>
-          <input type="date" value={form.order_date} onChange={e => setForm({ ...form, order_date: e.target.value })}
-            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm" />
-        </div>
-
-        {/* Ghi chú */}
-        <div>
-          <label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
-          <textarea placeholder="Nhà cung cấp, chất lượng, ship chung đơn..." rows={2}
-            value={form.note} onChange={e => setForm({ ...form, note: e.target.value })}
-            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm resize-none" />
-        </div>
-
+        {previewStock !== null && (
+          <p className="text-xs text-gray-500 bg-gray-50 px-3 py-2 rounded-lg">
+            Tồn hiện tại: <b className="text-gray-700">{formatStock(ing.stock_qty, ing.unit)} {ing.unit}</b>
+            {' → '}sau xuất: <b className={previewStock < 0 ? 'text-red-600' : 'text-gray-700'}>
+              {formatStock(previewStock, ing.unit)} {ing.unit}
+            </b>
+            {previewStock < 0 && <span className="text-red-500 ml-1">⚠ âm tồn</span>}
+          </p>
+        )}
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú — tùy chọn</label>
+          <input type="text" placeholder="Khách lẻ, lý do..." value={form.note}
+            onChange={e => setForm({...form,note:e.target.value})}
+            className="w-full px-3 py-3 border border-gray-200 rounded-xl text-sm"/></div>
         <div className="flex gap-2 pt-1">
-          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">
-            Hủy
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSubmit} disabled={saving||!form.qty}
+            className="flex-1 py-3 bg-red-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">
+            {saving?'...':'Xuất kho'}
           </button>
-          <button onClick={handleSubmit} disabled={saving || !form.qty}
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// THRESHOLD MANAGER
+// ============================================
+function ThresholdManager({ isOpen, onClose, ingredients, onSaved, toast }) {
+  const [search, setSearch]   = useState('')
+  const [values, setValues]   = useState({})
+  const [saving, setSaving]   = useState(false)
+
+  useEffect(() => {
+    if (isOpen) {
+      setSearch('')
+      const init = {}
+      ingredients.forEach(i => { init[i.id] = i.alert_threshold != null ? String(i.alert_threshold) : '' })
+      setValues(init)
+    }
+  }, [isOpen, ingredients])
+
+  const filtered = useMemo(() => {
+    if (!search) return ingredients
+    return ingredients.filter(i => i.name.toLowerCase().includes(search.toLowerCase()))
+  }, [ingredients, search])
+
+  const applyDefaults = () => {
+    const next = { ...values }
+    ingredients.forEach(i => { next[i.id] = String(UNIT_THRESHOLDS[i.unit] ?? 0) })
+    setValues(next)
+  }
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      const updates = ingredients
+        .filter(i => {
+          const v = values[i.id]
+          const current = i.alert_threshold != null ? String(i.alert_threshold) : ''
+          return v !== current
+        })
+        .map(i => ({ id: i.id, alert_threshold: values[i.id] !== '' ? Number(values[i.id]) : null }))
+      await updateThresholds(updates)
+      toast.success(`Đã lưu ngưỡng cho ${updates.length} nguyên liệu`)
+      onSaved(); onClose()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Cài đặt ngưỡng cảnh báo">
+      <div className="p-5 space-y-3">
+        <button onClick={applyDefaults}
+          className="w-full py-2.5 bg-purple-50 text-purple-600 border border-purple-200 rounded-xl text-sm font-medium active:scale-98">
+          Áp dụng mặc định cho tất cả (g→500 · kg→0.5 · ml→500 · lít→0.5)
+        </button>
+        <input type="text" placeholder="Tìm nguyên liệu..." value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        <div className="max-h-64 overflow-y-auto space-y-1 -mx-1 px-1">
+          {filtered.map(i => (
+            <div key={i.id} className="flex items-center gap-3 py-2 border-b border-gray-100 last:border-0">
+              <span className="flex-1 text-sm text-gray-700 truncate">{i.name}</span>
+              <input type="number" inputMode="decimal"
+                placeholder={String(UNIT_THRESHOLDS[i.unit] ?? 0)}
+                value={values[i.id] ?? ''}
+                onChange={e => setValues({...values,[i.id]:e.target.value})}
+                className="w-20 px-2 py-1.5 border border-gray-200 rounded-lg text-xs text-center"/>
+              <span className="text-xs text-gray-400 w-8">{i.unit}</span>
+            </div>
+          ))}
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSave} disabled={saving}
             className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">
-            {saving ? '...' : mode === 'arrived' ? 'Nhập kho' : 'Lưu đơn'}
+            {saving?'...':'Lưu tất cả'}
           </button>
         </div>
       </div>
