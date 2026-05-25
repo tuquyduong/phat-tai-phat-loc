@@ -652,15 +652,13 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
   }, [batchItems, ingredients, serving, formula])
 
   const handleSave = async () => {
-    // Check negative stock before production
-    if (type === 'production') {
-      const negatives = batchItems.filter(bi => {
-        const conv = convertUnit(bi.quantity, bi.unit, bi.stockUnit)
-        return conv !== null && (bi.stockQty - conv) < 0
-      }).map(bi => bi.name)
-      if (negatives.length > 0) {
-        if (!confirm(`⚠️ Tồn kho sẽ âm cho: ${negatives.join(', ')}\n\nVẫn tiếp tục trừ kho?`)) return
-      }
+    // Check âm tồn kho — cả Thử và Thật đều trừ kho
+    const negatives = batchItems.filter(bi => {
+      const conv = convertUnit(bi.quantity, bi.unit, bi.stockUnit)
+      return conv !== null && (bi.stockQty - conv) < 0
+    }).map(bi => bi.name)
+    if (negatives.length > 0) {
+      if (!confirm(`⚠️ Tồn kho sẽ âm cho: ${negatives.join(', ')}\n\nVẫn tiếp tục trừ kho?`)) return
     }
     setSaving(true)
     try {
@@ -669,11 +667,9 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
         items:batchItems.map(bi => ({ingredient_id:bi.ingredient_id, quantity:bi.quantity, unit:bi.unit})),
         cost, note, result
       })
-      if (type==='production') {
-        const errs = await deductStock(batch.id, batchItems, ingredients)
-        if (errs.length>0) toast.error('Lỗi convert: '+errs.join(', '))
-        else toast.success('Đã tạo lô + trừ kho')
-      } else { toast.success('Đã tạo lô thử nghiệm') }
+      const errs = await deductStock(batch.id, batchItems, ingredients)
+      if (errs.length>0) toast.error('Lỗi convert: '+errs.join(', '))
+      else toast.success(type==='production' ? 'Đã tạo lô + trừ kho' : 'Đã tạo lô thử — đã trừ kho')
       onClose(); onSaved()
     } catch(err) { toast.error('Lỗi: '+err.message) }
     finally { setSaving(false) }
@@ -688,7 +684,7 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
           <button onClick={() => setType('production')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${type==='production'?'bg-green-500 text-white shadow':'text-gray-500'}`}>🏭 Làm thật</button>
         </div>
 
-        {type==='production' && <p className="text-xs text-amber-600 bg-amber-50 p-2.5 rounded-lg">⚠️ Làm thật sẽ tự động trừ tồn kho nguyên liệu</p>}
+        <p className="text-xs text-amber-600 bg-amber-50 p-2.5 rounded-lg">⚠️ Cả Thử và Thật đều tự động trừ tồn kho nguyên liệu</p>
 
         {/* Serving */}
         <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2">
