@@ -12,7 +12,8 @@ import { useToast } from '../components/Toast'
 const BACKUP_TABLES = [
   'customers', 'orders', 'deliveries', 'payments', 'products', 'settings',
   'app_config', 'transactions', 'ingredients', 'formulas', 'formula_ingredients',
-  'lab_notes', 'stocks', 'stock_transactions', 'dividends'
+  'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
+  'stocks', 'stock_transactions', 'dividends'
 ]
 
 export default function Home({ orders = [], customers = [], onNavigate, onRefresh, activeModules }) {
@@ -146,7 +147,8 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
         const restoreOrder = [
           'settings', 'app_config', 'customers', 'products',
           'orders', 'deliveries', 'payments',
-          'ingredients', 'formulas', 'formula_ingredients', 'lab_notes',
+          'ingredients', 'formulas', 'formula_ingredients',
+          'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
           'stocks', 'stock_transactions', 'dividends', 'transactions'
         ]
 

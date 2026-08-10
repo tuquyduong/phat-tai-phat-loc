@@ -17,7 +17,7 @@ import {
   getImports, createImport, markImportArrived, deleteImport,
   getExports, createExport, deleteExport, updateThresholds,
   UNIT_THRESHOLDS, getAlertThreshold,
-  getFormulas, createFormula, updateFormula, deleteFormula, toggleFavorite,
+  getFormulas, createFormula, updateFormula, deleteFormula, duplicateFormula, toggleFavorite,
   addFormulaIngredient, deleteFormulaIngredientsByFormula, reorderFormulas,
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
   getBatches, createBatch, deleteBatch, deductStock, undoDeductStock,
@@ -70,7 +70,7 @@ export default function Lab() {
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <h2 className="text-lg font-bold text-gray-800">🧪 Lab Hub</h2>
           <div className="flex items-center gap-1">
-            <button onClick={() => setShowCategoryMgr(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><Settings size={18}/></button>
+<button onClick={() => setShowCategoryMgr(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg" title="Cài đặt danh mục"><Settings size={18}/></button>
             <button onClick={loadData} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><RefreshCw size={18} className={loading?'animate-spin':''}/></button>
           </div>
         </div>
@@ -126,7 +126,16 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
   const [expandedId, setExpandedId] = useState(null)
   const [servingOverrides, setServingOverrides] = useState({})
   const [showBatchForm, setShowBatchForm] = useState(null)
-  const [sortBy, setSortBy] = useState('grouped') // grouped|name_asc|name_desc|newest|oldest
+  const [sortBy, setSortBy] = useState('grouped')
+
+  const handleDuplicate = async (f) => {
+    if (!confirm(`Sao chép công thức "${f.name}"?`)) return
+    try {
+      await duplicateFormula(f.id)
+      toast.success('Đã sao chép — xem cuối danh sách')
+      onRefresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  } // grouped|name_asc|name_desc|newest|oldest
   const [collapsedGroups, setCollapsedGroups] = useState({})
   const [reordering, setReordering] = useState(false)
 
@@ -350,8 +359,9 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
 
             {/* Actions */}
             <div className="flex flex-wrap gap-2 pt-1">
-              <button onClick={() => setShowBatchForm(f)} className="flex items-center gap-1 px-3 py-2 bg-green-50 rounded-lg text-xs font-medium text-green-600 active:scale-95"><Play size={14}/> Làm lô</button>
+              <button onClick={() => setShowBatchForm({ ...f, _initServing: serving })} className="flex items-center gap-1 px-3 py-2 bg-green-50 rounded-lg text-xs font-medium text-green-600 active:scale-95"><Play size={14}/> Làm lô</button>
               <button onClick={() => handleCopyList(f, serving)} className="flex items-center gap-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95"><Copy size={14}/> Copy</button>
+              <button onClick={() => handleDuplicate(f)} className="flex items-center gap-1 px-3 py-2 bg-blue-50 rounded-lg text-xs font-medium text-blue-600 active:scale-95"><Copy size={14}/> Sao chép CT</button>
               <button onClick={() => { setEditingFormula(f); setShowForm(true) }} className="flex items-center gap-1 px-3 py-2 bg-purple-50 rounded-lg text-xs font-medium text-purple-600 active:scale-95"><Edit2 size={14}/> Sửa</button>
               <button onClick={() => handleDelete(f)} className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-red-500 ml-auto active:scale-95"><Trash2 size={14}/></button>
             </div>
@@ -618,14 +628,14 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
 // ============================================
 function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
   const [type, setType] = useState('test')
-  const [serving, setServing] = useState(formula?.base_serving||1)
+  const [serving, setServing] = useState(formula?._initServing || formula?.base_serving || 1)
   const [batchItems, setBatchItems] = useState([])
   const [note, setNote] = useState(''); const [result, setResult] = useState('')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (isOpen && formula) {
-      setServing(formula.base_serving||1); setNote(''); setResult(''); setType('test')
+      setServing(formula._initServing || formula.base_serving || 1); setNote(''); setResult(''); setType('test')
       const scaled = scaleIngredients(formula.items||[], formula.base_serving, formula.base_serving)
       setBatchItems(scaled.map(i => ({ ingredient_id:i.ingredient?.id||i.ingredient_id, name:i.ingredient?.name||'?', quantity:i.scaledQty, unit:i.unit, stockUnit:i.ingredient?.unit, stockQty:i.ingredient?.stock_qty||0 })))
     }
@@ -1949,6 +1959,7 @@ function ExperimentForm({ isOpen, onClose, note, formulas, onSave }) {
     </Modal>
   )
 }
+
 
 // ============================================
 // LAB CATEGORY MANAGER

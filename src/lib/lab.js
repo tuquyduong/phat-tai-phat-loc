@@ -139,6 +139,38 @@ export async function deleteFormula(id) {
   const { error } = await supabase.from('formulas').delete().eq('id',id)
   if (error) throw error
 }
+
+export async function duplicateFormula(formulaId) {
+  // 1. Lấy formula gốc
+  const { data: orig, error: e1 } = await supabase
+    .from('formulas').select('*').eq('id', formulaId).single()
+  if (e1) throw e1
+
+  // 2. Lấy ingredients của formula gốc
+  const { data: origItems, error: e2 } = await supabase
+    .from('formula_ingredients')
+    .select('ingredient_id, quantity, unit, note')
+    .eq('formula_id', formulaId)
+  if (e2) throw e2
+
+  // 3. Tạo formula mới — bỏ id/timestamp, đổi tên
+  const { id, created_at, updated_at, ...rest } = orig
+  const { data: newF, error: e3 } = await supabase
+    .from('formulas')
+    .insert([{ ...rest, name: orig.name + ' (bản sao)', is_favorite: false, sort_order: null }])
+    .select().single()
+  if (e3) throw e3
+
+  // 4. Insert lại toàn bộ ingredients
+  if (origItems && origItems.length > 0) {
+    const { error: e4 } = await supabase
+      .from('formula_ingredients')
+      .insert(origItems.map(i => ({ ...i, formula_id: newF.id })))
+    if (e4) throw e4
+  }
+
+  return newF
+}
 export async function toggleFavorite(id, current) {
   const { error } = await supabase.from('formulas').update({ is_favorite:!current }).eq('id',id)
   if (error) throw error
