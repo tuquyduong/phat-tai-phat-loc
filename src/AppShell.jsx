@@ -9,13 +9,14 @@ import BottomTabs from './components/shared/BottomTabs'
 import Home from './pages/Home'
 import Expenses from './pages/Expenses'
 import Lab from './pages/Lab'
+import Jewelry from './pages/Jewelry'
 import { getOrders, getCustomers } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
   const [activeModule, setActiveModule] = useState('orders')
   const [isAuthenticated, setIsAuthenticated] = useState(false)
-  const [activeModules, setActiveModulesState] = useState(['orders', 'expenses', 'lab'])
+  const [activeModules, setActiveModulesState] = useState(['orders', 'expenses', 'lab', 'jewelry'])
 
   // Data cho Home page
   const [orders, setOrders] = useState([])
@@ -91,6 +92,8 @@ export default function AppShell() {
         return <Expenses />
       case 'lab':
         return <Lab />
+      case 'jewelry':
+        return <Jewelry />
       default:
         return null
     }

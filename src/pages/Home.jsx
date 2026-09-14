@@ -13,6 +13,7 @@ const BACKUP_TABLES = [
   'customers', 'orders', 'deliveries', 'payments', 'products', 'settings',
   'app_config', 'transactions', 'ingredients', 'formulas', 'formula_ingredients',
   'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
+  'jewelry', 'jewelry_sales',
   'stocks', 'stock_transactions', 'dividends'
 ]
 
@@ -149,6 +150,7 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
           'orders', 'deliveries', 'payments',
           'ingredients', 'formulas', 'formula_ingredients',
           'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
+          'jewelry', 'jewelry_sales',
           'stocks', 'stock_transactions', 'dividends', 'transactions'
         ]
 

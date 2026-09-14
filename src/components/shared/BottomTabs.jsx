@@ -8,6 +8,7 @@ const ALL_TABS = [
   { id: 'orders', icon: '📦', label: 'Đơn hàng' },
   { id: 'expenses', icon: '💰', label: 'Thu Chi' },
   { id: 'lab', icon: '🧪', label: 'Lab' },
+  { id: 'jewelry', icon: '💎', label: 'Trang sức' },
 ]
 
 export default function BottomTabs({ activeTab, onTabChange, activeModules = [] }) {

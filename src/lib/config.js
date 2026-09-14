@@ -41,9 +41,9 @@ export async function getActiveModules() {
   try {
     const { data } = await supabase
       .from('settings').select('value').eq('key', 'active_modules').single()
-    return JSON.parse(data?.value || '["orders","expenses","lab"]')
+    return JSON.parse(data?.value || '["orders","expenses","lab","jewelry"]')
   } catch {
-    return ['orders', 'expenses', 'lab']
+    return ['orders', 'expenses', 'lab', 'jewelry']
   }
 }
 
