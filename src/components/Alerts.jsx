@@ -42,7 +42,7 @@ export default function Alerts({ orders, customers, settings, onSelectOrder, onS
           type: 'delivery',
           order,
           severity: daysSinceOrder >= settings.deliveryAlertDays * 2 ? 'high' : 'medium',
-          message: `Đơn của ${order.customer?.name} đã ${daysSinceOrder} ngày chưa giao đủ`,
+          message: `Đơn của ${order.customer?.name || 'Khách'} đã ${daysSinceOrder} ngày chưa giao đủ`,
           detail: `Còn ${remainingDelivery} ${order.unit || 'cái'} chưa giao`,
           daysOverdue: daysSinceOrder - settings.deliveryAlertDays
         })
@@ -58,7 +58,7 @@ export default function Alerts({ orders, customers, settings, onSelectOrder, onS
           type: 'payment',
           order,
           severity: daysSinceOrder >= settings.paymentAlertDays * 2 ? 'high' : 'medium',
-          message: `${order.customer?.name} còn nợ ${formatMoney(remainingPayment)}`,
+          message: `${order.customer?.name || 'Khách'} còn nợ ${formatMoney(remainingPayment)}`,
           detail: `Đã ${daysSinceOrder} ngày kể từ ngày đặt`,
           daysOverdue: daysSinceOrder - settings.paymentAlertDays
         })
