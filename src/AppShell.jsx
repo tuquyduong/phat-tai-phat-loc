@@ -10,7 +10,7 @@ import Home from './pages/Home'
 import Expenses from './pages/Expenses'
 import Lab from './pages/Lab'
 import Jewelry from './pages/Jewelry'
-import { getOrders, getCustomers } from './lib/supabase'
+import { getOrders, getCustomers, verifySessionDetailed } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
@@ -24,13 +24,21 @@ export default function AppShell() {
 
   // Kiểm tra auth từ localStorage
   useEffect(() => {
-    const checkAuth = () => {
-      const auth = localStorage.getItem('order_tracker_auth') === 'true'
-      if (auth !== isAuthenticated) setIsAuthenticated(auth)
+    let alive = true
+    const checkAuth = async () => {
+      try {
+        const r = await verifySessionDetailed()
+        if (!alive) return
+        // 'offline' → giữ nguyên trạng thái, không tự logout khi mất mạng
+        if (r === 'offline') return
+        const valid = r === 'valid'
+        if (valid !== isAuthenticated) setIsAuthenticated(valid)
+      } catch { /* im lặng, giữ trạng thái hiện tại */ }
     }
     checkAuth()
-    const interval = setInterval(checkAuth, 500)
-    return () => clearInterval(interval)
+    // Kiểm tra lại mỗi 60s
+    const interval = setInterval(checkAuth, 60000)
+    return () => { alive = false; clearInterval(interval) }
   }, [isAuthenticated])
 
   // Load module config

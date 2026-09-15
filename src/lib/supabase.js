@@ -561,24 +561,206 @@ export async function cleanupOldOrders(daysOld = 365) {
 // AUTHENTICATION
 // ============================================
 
+// ============================================
+// Hash mật khẩu bằng SHA-256 + salt (Web Crypto API)
+// ============================================
+const PW_SALT = 'ptpl_v1_'
+
+// SHA-256 thuần JS — dùng khi crypto.subtle không khả dụng (HTTP, WebView cũ)
+function sha256Fallback(str) {
+  const K = [
+    0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+    0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+    0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+    0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+    0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+    0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+    0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+    0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2]
+  let H = [0x6a09e667,0xbb67ae85,0x3c6ef372,0xa54ff53a,0x510e527f,0x9b05688c,0x1f83d9ab,0x5be0cd19]
+  const bytes = []
+  for (let i = 0; i < str.length; i++) {
+    let c = str.charCodeAt(i)
+    if (c < 128) bytes.push(c)
+    else if (c < 2048) bytes.push(192|(c>>6), 128|(c&63))
+    else bytes.push(224|(c>>12), 128|((c>>6)&63), 128|(c&63))
+  }
+  const bitLen = bytes.length * 8
+  bytes.push(0x80)
+  while (bytes.length % 64 !== 56) bytes.push(0)
+  for (let i = 7; i >= 0; i--) bytes.push((bitLen / Math.pow(2, i*8)) & 0xff)
+
+  const rotr = (x,n) => (x>>>n)|(x<<(32-n))
+  for (let i = 0; i < bytes.length; i += 64) {
+    const w = new Array(64)
+    for (let t = 0; t < 16; t++)
+      w[t] = (bytes[i+t*4]<<24)|(bytes[i+t*4+1]<<16)|(bytes[i+t*4+2]<<8)|bytes[i+t*4+3]
+    for (let t = 16; t < 64; t++) {
+      const s0 = rotr(w[t-15],7)^rotr(w[t-15],18)^(w[t-15]>>>3)
+      const s1 = rotr(w[t-2],17)^rotr(w[t-2],19)^(w[t-2]>>>10)
+      w[t] = (w[t-16]+s0+w[t-7]+s1)|0
+    }
+    let [a,b,c,d,e,f,g,hh] = H
+    for (let t = 0; t < 64; t++) {
+      const S1 = rotr(e,6)^rotr(e,11)^rotr(e,25)
+      const ch = (e&f)^(~e&g)
+      const t1 = (hh+S1+ch+K[t]+w[t])|0
+      const S0 = rotr(a,2)^rotr(a,13)^rotr(a,22)
+      const maj = (a&b)^(a&c)^(b&c)
+      const t2 = (S0+maj)|0
+      hh=g; g=f; f=e; e=(d+t1)|0; d=c; c=b; b=a; a=(t1+t2)|0
+    }
+    H = [(H[0]+a)|0,(H[1]+b)|0,(H[2]+c)|0,(H[3]+d)|0,
+         (H[4]+e)|0,(H[5]+f)|0,(H[6]+g)|0,(H[7]+hh)|0]
+  }
+  return H.map(x => (x>>>0).toString(16).padStart(8,'0')).join('')
+}
+
+async function sha256(str) {
+  // Ưu tiên Web Crypto (nhanh, native) — fallback JS thuần khi không có
+  if (typeof crypto !== 'undefined' && crypto.subtle && window.isSecureContext) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
+      return Array.from(new Uint8Array(buf))
+        .map(b => b.toString(16).padStart(2, '0')).join('')
+    } catch { /* rơi xuống fallback */ }
+  }
+  return sha256Fallback(str)
+}
+
+async function hashPassword(password) {
+  return sha256(PW_SALT + password)
+}
+
+// Rate limiting — chặn brute force
+const LOGIN_ATTEMPTS_KEY = 'ptpl_login_attempts'
+const MAX_ATTEMPTS   = 5
+const LOCKOUT_MS     = 15 * 60 * 1000  // 15 phút
+
+function getAttempts() {
+  try {
+    const raw = localStorage.getItem(LOGIN_ATTEMPTS_KEY)
+    return raw ? JSON.parse(raw) : { count: 0, lockedUntil: 0 }
+  } catch { return { count: 0, lockedUntil: 0 } }
+}
+
+function setAttempts(obj) {
+  try { localStorage.setItem(LOGIN_ATTEMPTS_KEY, JSON.stringify(obj)) } catch {}
+}
+
+export function clearLoginAttempts() {
+  try { localStorage.removeItem(LOGIN_ATTEMPTS_KEY) } catch {}
+}
+
+export function getLockoutRemaining() {
+  const a = getAttempts()
+  const remain = a.lockedUntil - Date.now()
+  return remain > 0 ? Math.ceil(remain / 60000) : 0   // số phút còn lại
+}
+
 export async function checkPassword(password) {
+  // Đang bị khoá?
+  const attempts = getAttempts()
+  if (attempts.lockedUntil > Date.now()) {
+    const mins = Math.ceil((attempts.lockedUntil - Date.now()) / 60000)
+    throw new Error(`Đã nhập sai quá nhiều lần. Thử lại sau ${mins} phút.`)
+  }
+
   const { data, error } = await supabase
     .from('settings')
     .select('value')
     .eq('key', 'app_password')
-    .single()
+    .maybeSingle()
 
-  if (error) {
-    if (error.code === 'PGRST116') return true
-    throw error
+  // Lỗi mạng / DB → KHÔNG cho vào (fail-closed)
+  if (error) throw new Error('Không kết nối được máy chủ. Kiểm tra mạng và thử lại.')
+
+  // Chưa đặt mật khẩu → cho vào để user có thể vào Cài đặt đặt mật khẩu
+  if (!data?.value) { clearLoginAttempts(); return true }
+
+  const stored = data.value
+  const hashed = await hashPassword(password)
+
+  // Hỗ trợ mật khẩu cũ lưu plain text → tự nâng cấp sang hash
+  let ok = false
+  if (stored.length === 64 && /^[0-9a-f]+$/.test(stored)) {
+    ok = stored === hashed
+  } else {
+    ok = stored === password
+    if (ok) { try { await setPassword(password) } catch {} }  // migrate sang hash
   }
 
-  return data.value === password
+  if (ok) {
+    clearLoginAttempts()
+    return true
+  }
+
+  // Sai → tăng bộ đếm
+  const count = attempts.count + 1
+  setAttempts({
+    count,
+    lockedUntil: count >= MAX_ATTEMPTS ? Date.now() + LOCKOUT_MS : 0,
+  })
+  if (count >= MAX_ATTEMPTS) {
+    throw new Error(`Đã nhập sai ${MAX_ATTEMPTS} lần. Khoá 15 phút.`)
+  }
+  return false
 }
 
 export async function setPassword(password) {
+  const hashed = await hashPassword(password)
   const { error } = await supabase
     .from('settings')
-    .upsert([{ key: 'app_password', value: password }])
+    .upsert([{ key: 'app_password', value: hashed }], { onConflict: 'key' })
   if (error) throw error
+}
+
+// ============================================
+// Session token — chặn bypass bằng localStorage
+// ============================================
+const SESSION_KEY  = 'order_tracker_auth'
+const SESSION_DAYS = 30
+
+export async function createSession() {
+  const { data } = await supabase
+    .from('settings').select('value').eq('key', 'app_password').maybeSingle()
+  const pwHash = data?.value || 'nopw'
+  // token = hash(pwHash + expiry) — không thể tự chế nếu không biết pwHash
+  const expiry = Date.now() + SESSION_DAYS * 86400000
+  const sig    = await sha256(pwHash + '|' + expiry)
+  const token  = `${expiry}.${sig}`
+  try { localStorage.setItem(SESSION_KEY, token) } catch {}
+  return token
+}
+
+// Trả về: 'valid' | 'invalid' | 'offline'
+export async function verifySessionDetailed() {
+  let token
+  try { token = localStorage.getItem(SESSION_KEY) } catch { return 'invalid' }
+  if (!token || !token.includes('.')) return 'invalid'
+
+  const [expiryStr, sig] = token.split('.')
+  const expiry = Number(expiryStr)
+  if (!expiry || Date.now() > expiry) { clearSession(); return 'invalid' }
+
+  const { data, error } = await supabase
+    .from('settings').select('value').eq('key', 'app_password').maybeSingle()
+
+  // Lỗi mạng → KHÔNG xoá session, báo offline để caller tự quyết
+  if (error) return 'offline'
+
+  const pwHash   = data?.value || 'nopw'
+  const expected = await sha256(pwHash + '|' + expiry)
+
+  if (sig !== expected) { clearSession(); return 'invalid' }
+  return 'valid'
+}
+
+export async function verifySession() {
+  const r = await verifySessionDetailed()
+  return r === 'valid'
+}
+
+export function clearSession() {
+  try { localStorage.removeItem(SESSION_KEY) } catch {}
 }

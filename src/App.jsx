@@ -3,7 +3,7 @@ import {
   Package, Plus, Search, Filter, X,
   RefreshCw, LogOut, Settings, BarChart3
 } from 'lucide-react'
-import { getOrders, getCustomers, getProducts, checkPassword } from './lib/supabase'
+import { getOrders, getCustomers, getProducts, checkPassword, createSession, verifySessionDetailed, clearSession } from './lib/supabase'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import OrderCard from './components/OrderCard'
@@ -69,11 +69,13 @@ function AppContent() {
 
   // Check auth on mount
   useEffect(() => {
-    const savedAuth = localStorage.getItem('order_tracker_auth')
-    if (savedAuth === 'true') {
-      setIsAuthenticated(true)
-    }
-    setCheckingAuth(false)
+    verifySessionDetailed()
+      .then(r => {
+        // 'offline' + có token cũ → cho vào (đã đăng nhập trước đó, chỉ mất mạng)
+        if (r === 'valid' || r === 'offline') setIsAuthenticated(true)
+      })
+      .catch(() => {})
+      .finally(() => setCheckingAuth(false))
   }, [])
 
   // Load data
@@ -107,26 +109,20 @@ function AppContent() {
 
   // Handle login
   const handleLogin = async (password) => {
-    try {
-      const success = await checkPassword(password)
-      if (success) {
-        setIsAuthenticated(true)
-        localStorage.setItem('order_tracker_auth', 'true')
-        return true
-      }
-      return false
-    } catch (err) {
-      console.error('Login error:', err)
+    // Lỗi được ném lên cho Login.jsx hiển thị — KHÔNG tự cho vào app
+    const success = await checkPassword(password)
+    if (success) {
+      await createSession()
       setIsAuthenticated(true)
-      localStorage.setItem('order_tracker_auth', 'true')
       return true
     }
+    return false
   }
 
   // Handle logout
   const handleLogout = () => {
     setIsAuthenticated(false)
-    localStorage.removeItem('order_tracker_auth')
+    clearSession()
     setOrders([])
     setCustomers([])
   }
