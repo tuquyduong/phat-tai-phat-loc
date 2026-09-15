@@ -15,6 +15,7 @@ import {
   getJewelrySales, createSale, deleteSale,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
+  getCustomerNotes, saveCustomerNote,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, CATEGORIES,
@@ -36,11 +37,13 @@ export default function Jewelry() {
   const [sellItem, setSellItem] = useState(null)
   const [activeTrip, setActiveTripState] = useState(() => getActiveTrip())
   const [showTripPicker, setShowTripPicker] = useState(false)
-  const [categories, setCategories] = useState(DEFAULT_CATEGORIES)
-  const [showCatMgr,  setShowCatMgr]  = useState(false)
+  const [categories,    setCategories]    = useState(DEFAULT_CATEGORIES)
+  const [showCatMgr,    setShowCatMgr]    = useState(false)
+  const [customerNotes, setCustomerNotes] = useState({})
 
   useEffect(() => {
     getJewelryCategories().then(setCategories).catch(() => {})
+    getCustomerNotes().then(setCustomerNotes).catch(() => {})
   }, [])
 
   const loadData = useCallback(async () => {
@@ -136,7 +139,16 @@ export default function Jewelry() {
       ) : modTab === 'ban' ? (
         <BanTab sales={sales}/>
       ) : modTab === 'khach' ? (
-        <KhachTab customers={stats.customers}/>
+        <KhachTab customers={stats.customers}
+          sales={sales}
+          customerNotes={customerNotes}
+          onNoteSaved={async (name, note) => {
+            try {
+              await saveCustomerNote(name, note)
+              const updated = await getCustomerNotes()
+              setCustomerNotes(updated)
+            } catch { toast.error('Lỗi lưu ghi chú') }
+          }}/>
       ) : modTab === 'trips' ? (
         <TripsTab trips={trips} jewelry={jewelry}
           activeTrip={activeTrip}
@@ -365,9 +377,16 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                 <div className="px-2 pt-2 pb-1 cursor-pointer" onClick={() => onSelect(item)}>
                   <div className="text-[11px] font-semibold text-gray-800">{item.code}</div>
                   {item.name && <div className="text-[10px] text-gray-500 truncate">{item.name}</div>}
-                  {item.sell_price > 0 && (
-                    <div className="text-[10px] text-purple-600 font-medium mt-0.5">{fmtMoney(item.sell_price)}</div>
-                  )}
+                  <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
+                    {item.sell_price > 0 && (
+                      <span className="text-[10px] text-purple-600 font-medium">{fmtMoney(item.sell_price)}</span>
+                    )}
+                    {item.size && (
+                      <span className="text-[9px] px-1.5 py-0.5 bg-gray-100 text-gray-500 rounded-full">
+                        {item.size}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div className="flex border-t border-gray-100">
                   <button onClick={() => onEdit(item)}
@@ -446,32 +465,66 @@ function BanTab({ sales }) {
 // ============================================
 // KHÁCH HÀNG TAB
 // ============================================
-function KhachTab({ customers }) {
-  const [sort, setSort] = useState('revenue')
-  const [open, setOpen] = useState(null)
+function KhachTab({ customers, sales, customerNotes, onNoteSaved }) {
+  const [sort,       setSort]       = useState('revenue')
+  const [search,     setSearch]     = useState('')
+  const [openCust,   setOpenCust]   = useState(null)  // tên khách đang xem chi tiết
+  const [editNote,   setEditNote]   = useState(null)  // tên khách đang sửa note
+  const [noteVal,    setNoteVal]    = useState('')
+  const [savingNote, setSavingNote] = useState(false)
+
   const sorted = useMemo(() => {
-    const list = [...customers]
+    let list = [...customers]
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      list = list.filter(c => c.name.toLowerCase().includes(q))
+    }
     switch(sort) {
       case 'count':    return list.sort((a,b) => b.count - a.count)
       case 'recent':   return list.sort((a,b) => a.daysSinceLast - b.daysSinceLast)
       case 'inactive': return list.sort((a,b) => b.daysSinceLast - a.daysSinceLast)
       default:         return list.sort((a,b) => b.revenue - a.revenue)
     }
-  }, [customers, sort])
+  }, [customers, sort, search])
+
   const initials = name => name.split(' ').slice(-2).map(w=>w[0]).join('').toUpperCase().slice(0,2)
+  const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
+
+  const custSales = (name) => sales
+    .filter(s => s.customer_name === name)
+    .sort((a,b) => (b.sold_at||'').localeCompare(a.sold_at||''))
+
+  const handleSaveNote = async (name) => {
+    setSavingNote(true)
+    try { await onNoteSaved(name, noteVal); setEditNote(null) }
+    catch {}
+    finally { setSavingNote(false) }
+  }
 
   return (
     <>
-      <div className="flex items-center justify-between px-3 py-2 bg-white border-b border-gray-100">
-        <span className="text-[10px] text-gray-400">Sắp xếp:</span>
-        <select value={sort} onChange={e=>setSort(e.target.value)}
-          className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-white text-gray-600">
-          <option value="revenue">Doanh thu cao nhất</option>
-          <option value="count">Mua nhiều đơn nhất</option>
-          <option value="recent">Mới mua gần nhất</option>
-          <option value="inactive">Lâu chưa quay lại</option>
-        </select>
+      {/* Sort + Search */}
+      <div className="bg-white border-b border-gray-100">
+        <div className="flex items-center justify-between px-3 py-2">
+          <span className="text-[10px] text-gray-400">Sắp xếp:</span>
+          <select value={sort} onChange={e=>setSort(e.target.value)}
+            className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-white text-gray-600">
+            <option value="revenue">Chi tiêu nhiều nhất</option>
+            <option value="count">Mua nhiều đơn nhất</option>
+            <option value="recent">Mới mua gần nhất</option>
+            <option value="inactive">Lâu chưa quay lại</option>
+          </select>
+        </div>
+        <div className="px-3 pb-2 relative">
+          <Search size={14} className="absolute left-6 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Tìm tên khách..."
+            className="w-full pl-8 pr-3 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50
+              focus:outline-none focus:border-purple-400"/>
+        </div>
       </div>
+
+      {/* Stats */}
       <div className="grid grid-cols-2 gap-2 p-3">
         <div className="bg-white rounded-xl border border-gray-100 p-3">
           <div className="text-[10px] text-gray-500">Tổng khách</div>
@@ -482,39 +535,96 @@ function KhachTab({ customers }) {
           <div className="text-lg font-semibold text-green-600 mt-0.5">{customers.filter(c=>c.count>=2).length}</div>
         </div>
       </div>
+
       {sorted.length === 0 ? (
-        <div className="text-center py-10 text-gray-400 text-sm">Chưa có dữ liệu khách</div>
-      ) : sorted.map(c => (
-        <div key={c.name}>
-          <div className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3 cursor-pointer"
-            onClick={() => setOpen(open===c.name ? null : c.name)}>
-            <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0
-              ${c.daysSinceLast >= 30 ? 'bg-amber-50 text-amber-700' : 'bg-purple-50 text-purple-700'}`}>
-              {initials(c.name)}
+        <div className="text-center py-10 text-gray-400 text-sm">Không tìm thấy khách</div>
+      ) : sorted.map(c => {
+        const isOpen = openCust === c.name
+        const note   = customerNotes[c.name] || ''
+        const cSales = isOpen ? custSales(c.name) : []
+
+        return (
+          <div key={c.name} className="border-b border-gray-100">
+            {/* Khách row */}
+            <div className="bg-white px-4 py-2.5 flex items-center gap-3 cursor-pointer"
+              onClick={() => setOpenCust(isOpen ? null : c.name)}>
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-semibold flex-shrink-0
+                ${c.daysSinceLast >= 30 ? 'bg-amber-50 text-amber-700' : 'bg-purple-50 text-purple-700'}`}>
+                {initials(c.name)}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-gray-800">{c.name}</div>
+                <div className="text-[10px] text-gray-400">
+                  {c.count} đơn · {fmtDate(c.lastDate)}
+                  {note && <span className="ml-1 text-purple-400">· 📝</span>}
+                </div>
+              </div>
+              <div className="text-right flex-shrink-0 mr-1">
+                <div className="text-sm font-bold text-green-600">{fmtMoney(c.revenue)}</div>
+                {c.daysSinceLast >= 30 && (
+                  <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
+                    {c.daysSinceLast}n
+                  </span>
+                )}
+              </div>
+              <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${isOpen?'rotate-180':''}`}/>
             </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-gray-800">{c.name}</div>
-              <div className="text-[10px] text-gray-400">{c.count} đơn · {c.lastDate?.slice(5).split('-').reverse().join('/')}</div>
-            </div>
-            <div className="text-right flex-shrink-0 mr-1">
-              <div className="text-xs font-semibold text-green-600">{fmtMoney(c.revenue)}</div>
-              {c.daysSinceLast >= 30 && (
-                <span className="text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700">
-                  {c.daysSinceLast}n
-                </span>
-              )}
-            </div>
-            <ChevronDown size={14} className={`text-gray-400 flex-shrink-0 transition-transform ${open===c.name?'rotate-180':''}`}/>
+
+            {/* Chi tiết mở rộng */}
+            {isOpen && (
+              <div className="bg-gray-50">
+                {/* Ghi chú */}
+                <div className="px-4 py-2 border-b border-gray-200">
+                  {editNote === c.name ? (
+                    <div className="flex gap-2 items-center">
+                      <input value={noteVal} onChange={e=>setNoteVal(e.target.value)}
+                        placeholder="Ghi chú về khách..."
+                        className="flex-1 text-xs px-2 py-1.5 border border-purple-300 rounded-lg focus:outline-none"
+                        autoFocus
+                        onKeyDown={e => e.key==='Enter' && handleSaveNote(c.name)}/>
+                      <button onClick={() => handleSaveNote(c.name)} disabled={savingNote}
+                        className="text-[11px] font-semibold text-purple-600 px-2 py-1 bg-purple-50 rounded-lg active:scale-95">
+                        {savingNote ? '...' : 'Lưu'}
+                      </button>
+                      <button onClick={() => setEditNote(null)} className="text-[11px] text-gray-400 active:scale-95">Huỷ</button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2" onClick={() => { setEditNote(c.name); setNoteVal(note) }}>
+                      <span className="text-[10px] text-gray-400 flex-1">
+                        {note || '+ Thêm ghi chú (size thường, sở thích...)'}
+                      </span>
+                      <Edit2 size={12} className="text-gray-400 flex-shrink-0"/>
+                    </div>
+                  )}
+                </div>
+
+                {/* Lịch sử mua */}
+                <div className="px-4 py-1.5">
+                  <div className="text-[10px] font-medium text-gray-400 uppercase tracking-wider mb-1">
+                    Lịch sử mua ({cSales.length} đơn)
+                  </div>
+                  {cSales.map(s => (
+                    <div key={s.id} className="flex items-center gap-2.5 py-1.5 border-b border-gray-200 last:border-0">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-gray-700 truncate">
+                          {s.jewelry?.code}{s.jewelry?.name ? ` · ${s.jewelry.name}` : ''}
+                          {s.jewelry?.size ? ` · size ${s.jewelry.size}` : ''}
+                        </div>
+                        <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)} · {s.qty} cái</div>
+                        {s.note && <div className="text-[10px] text-gray-400 italic">💬 {s.note}</div>}
+                      </div>
+                      <div className="text-xs font-semibold text-green-600 flex-shrink-0">
+                        {fmtMoney(Number(s.qty)*Number(s.sell_price))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
-          {open === c.name && (
-            <div className="bg-gray-50 border-b border-gray-100 px-4 py-2 pl-16 text-[11px] text-gray-500 leading-loose">
-              <span className="font-semibold text-gray-700">Đã mua: </span>{c.items.join(', ') || '—'}<br/>
-              <span className="font-semibold text-gray-700">Tổng đơn: </span>{c.count} đơn
-              {c.daysSinceLast >= 30 && <span className="ml-2 text-amber-600">· Chưa quay lại {c.daysSinceLast} ngày</span>}
-            </div>
-          )}
-        </div>
-      ))}
+        )
+      })}
+      <div className="h-4"/>
     </>
   )
 }
@@ -714,6 +824,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
         {[
           ['Mã SP', item.code],
           ['Tên', item.name],
+          ['Size', item.size],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-green-600' : 'text-red-500'],
           ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
           ['Giá bán', item.sell_price ? fmtMoney(item.sell_price) : null],
@@ -1027,7 +1138,7 @@ function TripForm({ onSave, onCancel, initial }) {
 // ============================================
 function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGORIES, activeTrip, onSaved, toast }) {
   const EMPTY = {
-    code:'', category:'Nhẫn', name:'', stock_qty:1,
+    code:'', category:'Nhẫn', name:'', size:'', stock_qty:1,
     cost_price:'', sell_price:'', supplier_name:'', supplier_contact:'',
     trip_id:'', note:''
   }
@@ -1043,7 +1154,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
     if (item) {
       setForm({
         code: item.code||'', category: item.category||'Nhẫn', name: item.name||'',
-        stock_qty: item.stock_qty||1, cost_price: item.cost_price||'',
+        size: item.size||'', stock_qty: item.stock_qty||1, cost_price: item.cost_price||'',
         sell_price: item.sell_price||'', supplier_name: item.supplier_name||'',
         supplier_contact: item.supplier_contact||'', trip_id: item.trip_id||'', note: item.note||'',
       })
@@ -1075,6 +1186,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
       const payload = {
         code: form.code.trim(), category: form.category,
         name: form.name.trim() || null,
+        size:             form.size.trim() || null,
         stock_qty:        Number(form.stock_qty) || 0,
         cost_price:       form.cost_price  ? Number(form.cost_price)  : null,
         sell_price:       form.sell_price  ? Number(form.sell_price)  : null,
@@ -1133,6 +1245,11 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
         <div>
           <label className="text-[11px] text-gray-500 block mb-1">Tên — tùy chọn</label>
           <input value={form.name} onChange={e=>f('name',e.target.value)} placeholder="Nhẫn vàng 18k..."
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Size — tùy chọn</label>
+          <input value={form.size} onChange={e=>f('size',e.target.value)} placeholder="VD: 15, M, 50cm..."
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -1248,7 +1365,9 @@ function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
         {item && (
           <div className="bg-purple-50 rounded-xl px-4 py-2.5 text-xs text-purple-700">
             <span className="font-semibold">{item.code}</span>
-            {item.name && ` · ${item.name}`} · Còn {item.stock_qty} cái
+            {item.name && ` · ${item.name}`}
+            {item.size && <span className="ml-1 px-1.5 py-0.5 bg-purple-100 rounded-full">{item.size}</span>}
+            {' · '}Còn {item.stock_qty} cái
           </div>
         )}
         <div className="relative" ref={custRef}>

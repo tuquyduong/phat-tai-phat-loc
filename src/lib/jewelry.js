@@ -311,3 +311,24 @@ export async function saveJewelryCategories(cats) {
     .upsert({ key: CAT_KEY, value: JSON.stringify(cats) }, { onConflict: 'key' })
   if (error) throw error
 }
+
+// ============================================
+// CUSTOMER NOTES (lưu trong settings)
+// ============================================
+const CUST_NOTES_KEY = 'jewelry_customer_notes'
+
+export async function getCustomerNotes() {
+  const { data } = await supabase
+    .from('settings').select('value').eq('key', CUST_NOTES_KEY).maybeSingle()
+  if (!data?.value) return {}
+  try { return JSON.parse(data.value) } catch { return {} }
+}
+
+export async function saveCustomerNote(customerName, note) {
+  const notes = await getCustomerNotes()
+  if (note.trim()) notes[customerName] = note.trim()
+  else delete notes[customerName]
+  const { error } = await supabase.from('settings')
+    .upsert({ key: CUST_NOTES_KEY, value: JSON.stringify(notes) }, { onConflict: 'key' })
+  if (error) throw error
+}
