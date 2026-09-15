@@ -19,7 +19,7 @@ import {
   getSuppliers,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
-  calcStats, getCustomerNames, fmtMoney,
+  calcStats, getCustomerNames, fmtMoney, fmtInput, parseInput,
 } from '../lib/jewelry'
 
 // ============================================
@@ -354,10 +354,10 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
             return (
               <div key={item.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
                 <div onClick={() => onSelect(item)}
-                  className="aspect-square relative bg-gradient-to-br from-purple-50 to-purple-200
-                    flex items-center justify-center overflow-hidden cursor-pointer">
+                  className={`aspect-square relative flex items-center justify-center overflow-hidden cursor-pointer
+                    ${item.image_url ? 'bg-gray-50' : 'bg-gradient-to-br from-purple-50 to-purple-200'}`}>
                   {item.image_url
-                    ? <img src={thumbUrl(item.image_url, 300)} alt={item.code} className="w-full h-full object-cover"/>
+                    ? <img src={thumbUrl(item.image_url, 400)} alt={item.code} className="w-full h-full object-contain"/>
                     : <Diamond size={34} className="text-purple-300"/>
                   }
                   <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full
@@ -808,10 +808,10 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
 
   return (
     <div>
-      <div className="w-full aspect-square relative bg-gradient-to-br from-purple-50 to-purple-200
-        flex items-center justify-center overflow-hidden">
+      <div className={`w-full aspect-square relative flex items-center justify-center overflow-hidden
+        ${item.image_url ? 'bg-gray-50' : 'bg-gradient-to-br from-purple-50 to-purple-200'}`}>
         {item.image_url
-          ? <img src={thumbUrl(item.image_url, 800)} alt={item.code} className="w-full h-full object-cover"/>
+          ? <img src={thumbUrl(item.image_url, 800)} alt={item.code} className="w-full h-full object-contain"/>
           : <Diamond size={72} className="text-purple-200"/>
         }
         <div className="absolute top-2 right-2 text-[9px] px-2 py-0.5 rounded-full bg-black/40 text-white">
@@ -1188,8 +1188,17 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
     if (!form.code.trim()) { toast.error('Nhập mã sản phẩm'); return }
     setSaving(true)
     try {
-      let image_url = item?.image_url || null
-      if (imgFile) image_url = await uploadImage(imgFile, form.code.trim())
+      let image_url  = item?.image_url || null
+      let imgWarning = null
+      if (imgFile) {
+        try {
+          image_url = await uploadImage(imgFile, form.code.trim())
+        } catch (e) {
+          imgWarning = /bucket|not found|policy|permission|row-level/i.test(e.message || '')
+            ? 'Ảnh chưa lưu được — kiểm tra quyền Storage trên Supabase'
+            : 'Ảnh chưa lưu được — sản phẩm vẫn được lưu'
+        }
+      }
       const payload = {
         code: form.code.trim(), category: form.category,
         name: form.name.trim() || null,
@@ -1205,26 +1214,24 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
       }
       if (item) await updateJewelry(item.id, payload)
       else       await createJewelry(payload)
-      toast.success(item ? 'Đã cập nhật' : 'Đã thêm sản phẩm')
+      if (imgWarning) toast.error(imgWarning)
+      else            toast.success(item ? 'Đã cập nhật' : 'Đã thêm sản phẩm')
       onSaved()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    } catch (err) {
+      const m = err.message || ''
+      if (/duplicate key|unique constraint/i.test(m))
+        toast.error(`Mã "${form.code.trim()}" đã tồn tại`)
+      else if (/check constraint/i.test(m))
+        toast.error('Loại sản phẩm không hợp lệ — cần chạy migration SQL')
+      else if (/column .* does not exist/i.test(m))
+        toast.error('Thiếu cột trong database — cần chạy migration SQL')
+      else
+        toast.error('Lỗi: ' + m)
+    }
     finally { setSaving(false) }
   }
 
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
-
-  const onSuppInput = (v) => {
-    f('supplier_name', v)
-    if (!v.trim()) { setAcSupp(false); return }
-    const q = v.toLowerCase()
-    setAcList(suppliers.filter(s => s.name.toLowerCase().includes(q)))
-    setAcSupp(true)
-  }
-
-  const selectSupp = (supp) => {
-    setForm(p => ({ ...p, supplier_name: supp.name, supplier_contact: supp.contact || p.supplier_contact }))
-    setAcSupp(false)
-  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : 'Thêm trang sức'}>
@@ -1233,7 +1240,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
         <div onClick={() => fileRef.current?.click()} className="cursor-pointer">
           {imgPrev ? (
             <div className="relative w-full aspect-video rounded-xl overflow-hidden">
-              <img src={imgPrev} alt="" className="w-full h-full object-cover"/>
+              <img src={imgPrev} alt="" className="w-full h-full object-contain"/>
               <div className="absolute bottom-2 right-2 bg-black/50 text-white text-[10px] px-2 py-0.5 rounded-full">
                 {resizing ? 'Đang resize...' : 'Đổi ảnh'}
               </div>
@@ -1280,13 +1287,15 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
           </div>
           <div>
             <label className="text-[11px] text-gray-500 block mb-1">Giá vốn (đ)</label>
-            <input type="number" value={form.cost_price} onChange={e=>f('cost_price',e.target.value)}
+            <input type="text" inputMode="numeric" value={fmtInput(form.cost_price)}
+              onChange={e=>f('cost_price', parseInput(e.target.value))}
               placeholder="0" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
         </div>
         <div>
           <label className="text-[11px] text-gray-500 block mb-1">Giá bán (đ)</label>
-          <input type="number" value={form.sell_price} onChange={e=>f('sell_price',e.target.value)}
+          <input type="text" inputMode="numeric" value={fmtInput(form.sell_price)}
+            onChange={e=>f('sell_price', parseInput(e.target.value))}
             placeholder="0" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
 
@@ -1435,8 +1444,9 @@ function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
           </div>
           <div>
             <label className="text-[11px] text-gray-500 block mb-1">Giá bán (đ) *</label>
-            <input type="number" value={form.sell_price} onChange={e=>setForm(p=>({...p,sell_price:e.target.value}))}
-              placeholder="3200000" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+            <input type="text" inputMode="numeric" value={fmtInput(form.sell_price)}
+              onChange={e=>setForm(p=>({...p,sell_price:parseInput(e.target.value)}))}
+              placeholder="3.200.000" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
         </div>
         {totalPrice > 0 && (

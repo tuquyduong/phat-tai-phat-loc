@@ -39,10 +39,12 @@ export async function uploadImage(blob, jewelryCode) {
   return data.publicUrl
 }
 
-export function thumbUrl(url, width = 200) {
+export function thumbUrl(url, size = 200) {
   if (!url) return null
   try {
-    return url.replace('/object/public/', '/render/image/public/') + `?width=${width}&quality=60`
+    // resize=contain: ảnh ngang/dọc/vuông đều vừa khung, không bị cắt
+    return url.replace('/object/public/', '/render/image/public/')
+      + `?width=${size}&height=${size}&resize=contain&quality=70`
   } catch { return url }
 }
 
@@ -346,4 +348,20 @@ export async function saveCustomerNote(customerName, note) {
   const { error } = await supabase.from('settings')
     .upsert({ key: CUST_NOTES_KEY, value: JSON.stringify(notes) }, { onConflict: 'key' })
   if (error) throw error
+}
+
+// ============================================
+// FORMAT SỐ TIỀN TRONG INPUT (1.000.000)
+// ============================================
+// Hiển thị: thêm dấu chấm ngăn cách hàng nghìn
+export function fmtInput(val) {
+  if (val === '' || val === null || val === undefined) return ''
+  const digits = String(val).replace(/\D/g, '')
+  if (!digits) return ''
+  return Number(digits).toLocaleString('vi-VN')
+}
+
+// Đọc ngược: bỏ hết dấu chấm, trả về chuỗi số thuần
+export function parseInput(val) {
+  return String(val ?? '').replace(/\D/g, '')
 }
