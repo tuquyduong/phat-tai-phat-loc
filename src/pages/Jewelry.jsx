@@ -19,7 +19,7 @@ import {
   getSuppliers,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
-  calcStats, getCustomerNames, fmtMoney, CATEGORIES,
+  calcStats, getCustomerNames, fmtMoney,
 } from '../lib/jewelry'
 
 // ============================================
@@ -1096,18 +1096,6 @@ function TripForm({ onSave, onCancel, initial }) {
   const [saving, setSaving] = useState(false)
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
 
-  const onSuppInput = (v) => {
-    f('supplier_name', v)
-    if (!v.trim()) { setAcSupp(false); return }
-    const q = v.toLowerCase()
-    setAcList(suppliers.filter(s => s.name.toLowerCase().includes(q)))
-    setAcSupp(true)
-  }
-
-  const selectSupp = (supp) => {
-    setForm(p => ({ ...p, supplier_name: supp.name, supplier_contact: supp.contact || p.supplier_contact }))
-    setAcSupp(false)
-  }
   const handleSave = async () => {
     if (!form.name.trim()) return
     setSaving(true)
@@ -1224,6 +1212,19 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
   }
 
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
+
+  const onSuppInput = (v) => {
+    f('supplier_name', v)
+    if (!v.trim()) { setAcSupp(false); return }
+    const q = v.toLowerCase()
+    setAcList(suppliers.filter(s => s.name.toLowerCase().includes(q)))
+    setAcSupp(true)
+  }
+
+  const selectSupp = (supp) => {
+    setForm(p => ({ ...p, supplier_name: supp.name, supplier_contact: supp.contact || p.supplier_contact }))
+    setAcSupp(false)
+  }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : 'Thêm trang sức'}>
