@@ -296,4 +296,18 @@ export function fmtMoney(n) {
   return x.toLocaleString()
 }
 
-export const CATEGORIES = ['Nhẫn', 'Dây chuyền', 'Bông tai', 'Lắc', 'Vòng', 'Khác']
+export const DEFAULT_CATEGORIES = ['Nhẫn', 'Dây chuyền', 'Bông tai', 'Lắc', 'Vòng', 'Khác']
+const CAT_KEY = 'jewelry_categories'
+
+export async function getJewelryCategories() {
+  const { data } = await supabase
+    .from('settings').select('value').eq('key', CAT_KEY).maybeSingle()
+  if (!data?.value) return DEFAULT_CATEGORIES
+  try { return JSON.parse(data.value) } catch { return DEFAULT_CATEGORIES }
+}
+
+export async function saveJewelryCategories(cats) {
+  const { error } = await supabase.from('settings')
+    .upsert({ key: CAT_KEY, value: JSON.stringify(cats) }, { onConflict: 'key' })
+  if (error) throw error
+}

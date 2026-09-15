@@ -3,7 +3,7 @@
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
-  Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft,
+  Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
   RefreshCw, Tag, Package, Search, X,
   ArrowUpCircle, Camera, Clock, BarChart3,
 } from 'lucide-react'
@@ -14,6 +14,7 @@ import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
+  getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, CATEGORIES,
@@ -35,6 +36,12 @@ export default function Jewelry() {
   const [sellItem, setSellItem] = useState(null)
   const [activeTrip, setActiveTripState] = useState(() => getActiveTrip())
   const [showTripPicker, setShowTripPicker] = useState(false)
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES)
+  const [showCatMgr,  setShowCatMgr]  = useState(false)
+
+  useEffect(() => {
+    getJewelryCategories().then(setCategories).catch(() => {})
+  }, [])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -82,9 +89,14 @@ export default function Jewelry() {
             <RefreshCw size={17} className={loading ? 'animate-spin' : ''}/>
           </button>
           {!detail && (
-            <button onClick={() => { setEditing(null); setShowAdd(true) }} className="p-2 text-gray-400">
-              <Plus size={19}/>
-            </button>
+            <>
+              <button onClick={() => setShowCatMgr(true)} className="p-2 text-gray-400" title="Quản lý loại">
+                <Settings size={17}/>
+              </button>
+              <button onClick={() => { setEditing(null); setShowAdd(true) }} className="p-2 text-gray-400">
+                <Plus size={19}/>
+              </button>
+            </>
           )}
         </div>
         {!detail && (
@@ -113,6 +125,7 @@ export default function Jewelry() {
           onDelete={() => { handleDelete(detail); setDetail(null) }}/>
       ) : modTab === 'kho' ? (
         <KhoTab items={stats.withDays}
+          categories={categories}
           onSelect={setDetail}
           onAdd={() => { setEditing(null); setShowAdd(true) }}
           onEdit={item => { setEditing(item); setShowAdd(true) }}
@@ -155,8 +168,15 @@ export default function Jewelry() {
         onClose={() => { setShowAdd(false); setEditing(null) }}
         item={editing}
         trips={trips}
+        categories={categories}
         activeTrip={activeTrip}
         onSaved={() => { setShowAdd(false); setEditing(null); loadData() }}
+        toast={toast}/>
+      <CategoryManager isOpen={showCatMgr}
+        categories={categories}
+        jewelry={jewelry}
+        onClose={() => setShowCatMgr(false)}
+        onSaved={cats => { setCategories(cats); setShowCatMgr(false) }}
         toast={toast}/>
       <SaleForm isOpen={!!sellItem && sellItem !== 'pick'}
         item={sellItem === 'pick' ? null : sellItem}
@@ -182,7 +202,7 @@ export default function Jewelry() {
 // ============================================
 // KHO TAB
 // ============================================
-function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, activeTrip, onPickTrip, onEndTrip }) {
+function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onAdd, onEdit, onDelete, activeTrip, onPickTrip, onEndTrip }) {
   const [cat,    setCat]    = useState('Tất cả')
   const [sort,   setSort]   = useState('new')
   const [search, setSearch] = useState('')
@@ -209,7 +229,7 @@ function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, activeTrip,
 
   const catCounts = useMemo(() => {
     const counts = { 'Tất cả': jewelry.length }
-    CATEGORIES.forEach(c => { counts[c] = jewelry.filter(j => j.category === c).length })
+    categories.forEach(c => { counts[c] = jewelry.filter(j => j.category === c).length })
     return counts
   }, [jewelry])
 
@@ -277,7 +297,7 @@ function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, activeTrip,
 
       {/* Category filter */}
       <div className="flex overflow-x-auto bg-white border-b border-gray-100 px-1" style={{scrollbarWidth:'none'}}>
-        {['Tất cả', ...CATEGORIES].map(c => (
+        {['Tất cả', ...categories].map(c => (
           catCounts[c] > 0 || c === 'Tất cả' ? (
             <button key={c} onClick={() => setCat(c)}
               className={`px-3 py-2 text-xs whitespace-nowrap border-b-2 flex-shrink-0
@@ -1005,7 +1025,7 @@ function TripForm({ onSave, onCancel, initial }) {
 // ============================================
 // JEWELRY FORM (thêm / sửa SP)
 // ============================================
-function JewelryForm({ isOpen, onClose, item, trips, activeTrip, onSaved, toast }) {
+function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGORIES, activeTrip, onSaved, toast }) {
   const EMPTY = {
     code:'', category:'Nhẫn', name:'', stock_qty:1,
     cost_price:'', sell_price:'', supplier_name:'', supplier_contact:'',
@@ -1106,7 +1126,7 @@ function JewelryForm({ isOpen, onClose, item, trips, activeTrip, onSaved, toast 
             <label className="text-[11px] text-gray-500 block mb-1">Loại *</label>
             <select value={form.category} onChange={e=>f('category',e.target.value)}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white">
-              {CATEGORIES.map(c => <option key={c}>{c}</option>)}
+              {categories.map(c => <option key={c}>{c}</option>)}
             </select>
           </div>
         </div>
@@ -1286,6 +1306,120 @@ function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
           <button onClick={handleSubmit} disabled={saving || !form.sell_price}
             className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
             {saving ? '...' : 'Lưu bán'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// CATEGORY MANAGER
+// ============================================
+function CategoryManager({ isOpen, categories, jewelry = [], onClose, onSaved, toast }) {
+  const [cats,    setCats]    = useState([])
+  const [newCat,  setNewCat]  = useState('')
+  const [editing, setEditing] = useState(null) // index đang sửa tên
+  const [editVal, setEditVal] = useState('')
+  const [saving,  setSaving]  = useState(false)
+
+  useEffect(() => {
+    if (isOpen) { setCats([...categories]); setNewCat(''); setEditing(null) }
+  }, [isOpen, categories])
+
+  const handleAdd = () => {
+    const t = newCat.trim()
+    if (!t || cats.includes(t)) return
+    setCats(v => [...v, t]); setNewCat('')
+  }
+
+  const handleDelete = (i) => {
+    const count = jewelry.filter(j => j.category === cats[i]).length
+    const msg = count > 0
+      ? `Xoá loại "${cats[i]}"?\n${count} sản phẩm đang dùng loại này — chúng không bị xoá nhưng filter sẽ không tìm thấy.`
+      : `Xoá loại "${cats[i]}"?`
+    if (!confirm(msg)) return
+    setCats(v => v.filter((_,idx) => idx !== i))
+  }
+
+  const handleRename = (i) => {
+    const t = editVal.trim()
+    if (!t || (cats.includes(t) && t !== cats[i])) return
+    setCats(v => { const n=[...v]; n[i]=t; return n })
+    setEditing(null)
+  }
+
+  const handleSave = async () => {
+    if (cats.length === 0) { toast.error('Cần ít nhất 1 loại'); return }
+    setSaving(true)
+    try {
+      await saveJewelryCategories(cats)
+      toast.success('Đã lưu danh sách loại')
+      onSaved(cats)
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="⚙️ Quản lý loại trang sức">
+      <div className="px-5 pb-5 space-y-2">
+        {/* Danh sách loại */}
+        <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          {cats.map((cat, i) => (
+            <div key={i} className="flex items-center gap-2 bg-gray-50 rounded-xl px-3 py-2">
+              {editing === i ? (
+                <>
+                  <input value={editVal} onChange={e => setEditVal(e.target.value)}
+                    onKeyDown={e => { if(e.key==='Enter') handleRename(i); if(e.key==='Escape') setEditing(null) }}
+                    className="flex-1 text-sm px-2 py-1 border border-purple-300 rounded-lg focus:outline-none"
+                    autoFocus/>
+                  <button onClick={() => handleRename(i)}
+                    className="text-[11px] font-semibold text-purple-600 px-2 py-1 bg-purple-50 rounded-lg active:scale-95">
+                    Lưu
+                  </button>
+                  <button onClick={() => setEditing(null)}
+                    className="text-[11px] text-gray-400 px-2 py-1 active:scale-95">
+                    Huỷ
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span className="flex-1 text-sm text-gray-800 font-medium">{cat}</span>
+                  <button onClick={() => { setEditing(i); setEditVal(cat) }}
+                    className="p-1.5 text-gray-400 hover:text-purple-600 active:scale-90">
+                    <Edit2 size={13}/>
+                  </button>
+                  <button onClick={() => handleDelete(i)}
+                    className="p-1.5 text-gray-400 hover:text-red-500 active:scale-90">
+                    <Trash2 size={13}/>
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Thêm loại mới */}
+        <div className="flex gap-2 pt-1">
+          <input value={newCat} onChange={e => setNewCat(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && handleAdd()}
+            placeholder="Tên loại mới..."
+            className="flex-1 px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-purple-400"/>
+          <button onClick={handleAdd} disabled={!newCat.trim()}
+            className="px-4 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-semibold
+              disabled:opacity-40 active:scale-95">
+            + Thêm
+          </button>
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            Huỷ
+          </button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+            {saving ? 'Đang lưu...' : 'Lưu thay đổi'}
           </button>
         </div>
       </div>
