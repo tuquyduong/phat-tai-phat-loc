@@ -278,6 +278,21 @@ export function calcStats(jewelry, sales) {
   }
 }
 
+export async function getSuppliers() {
+  const { data, error } = await supabase
+    .from('jewelry')
+    .select('supplier_name, supplier_contact')
+    .not('supplier_name', 'is', null)
+    .order('supplier_name')
+  if (error) throw error
+  // Group by supplier_name, lấy contact mới nhất
+  const map = {}
+  ;(data || []).forEach(j => {
+    if (!map[j.supplier_name]) map[j.supplier_name] = j.supplier_contact || ''
+  })
+  return Object.entries(map).map(([name, contact]) => ({ name, contact }))
+}
+
 export function getCustomerNames(sales) {
   return [...new Set(sales.map(s => s.customer_name).filter(Boolean))]
 }

@@ -16,6 +16,7 @@ import {
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
   getCustomerNotes, saveCustomerNote,
+  getSuppliers,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, CATEGORIES,
@@ -40,10 +41,12 @@ export default function Jewelry() {
   const [categories,    setCategories]    = useState(DEFAULT_CATEGORIES)
   const [showCatMgr,    setShowCatMgr]    = useState(false)
   const [customerNotes, setCustomerNotes] = useState({})
+  const [suppliers,     setSuppliers]     = useState([])
 
   useEffect(() => {
     getJewelryCategories().then(setCategories).catch(() => {})
     getCustomerNotes().then(setCustomerNotes).catch(() => {})
+    getSuppliers().then(setSuppliers).catch(() => {})
   }, [])
 
   const loadData = useCallback(async () => {
@@ -181,8 +184,9 @@ export default function Jewelry() {
         item={editing}
         trips={trips}
         categories={categories}
+        suppliers={suppliers}
         activeTrip={activeTrip}
-        onSaved={() => { setShowAdd(false); setEditing(null); loadData() }}
+        onSaved={() => { setShowAdd(false); setEditing(null); loadData(); getSuppliers().then(setSuppliers).catch(()=>{}) }}
         toast={toast}/>
       <CategoryManager isOpen={showCatMgr}
         categories={categories}
@@ -1091,6 +1095,19 @@ function TripForm({ onSave, onCancel, initial }) {
   })
   const [saving, setSaving] = useState(false)
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
+
+  const onSuppInput = (v) => {
+    f('supplier_name', v)
+    if (!v.trim()) { setAcSupp(false); return }
+    const q = v.toLowerCase()
+    setAcList(suppliers.filter(s => s.name.toLowerCase().includes(q)))
+    setAcSupp(true)
+  }
+
+  const selectSupp = (supp) => {
+    setForm(p => ({ ...p, supplier_name: supp.name, supplier_contact: supp.contact || p.supplier_contact }))
+    setAcSupp(false)
+  }
   const handleSave = async () => {
     if (!form.name.trim()) return
     setSaving(true)
@@ -1136,7 +1153,7 @@ function TripForm({ onSave, onCancel, initial }) {
 // ============================================
 // JEWELRY FORM (thêm / sửa SP)
 // ============================================
-function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGORIES, activeTrip, onSaved, toast }) {
+function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGORIES, suppliers = [], activeTrip, onSaved, toast }) {
   const EMPTY = {
     code:'', category:'Nhẫn', name:'', size:'', stock_qty:1,
     cost_price:'', sell_price:'', supplier_name:'', supplier_contact:'',
@@ -1147,10 +1164,12 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
   const [imgPrev, setImgPrev] = useState(null)
   const [saving,  setSaving]  = useState(false)
   const [resizing,setResizing]= useState(false)
-  const fileRef = useRef()
+  const [acSupp,  setAcSupp]  = useState(false)  // autocomplete NCC
+  const [acList,  setAcList]  = useState([])
+  const fileRef   = useRef()
 
   useEffect(() => {
-    if (!isOpen) return
+    if (!isOpen) { setAcSupp(false); setAcList([]); return }
     if (item) {
       setForm({
         code: item.code||'', category: item.category||'Nhẫn', name: item.name||'',
@@ -1272,17 +1291,31 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
 
         <div className="border-t border-gray-100 pt-2"/>
         <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Nhà cung cấp</div>
-        <div>
+        <div className="relative">
           <label className="text-[11px] text-gray-500 block mb-1">Tên NCC</label>
-          <input value={form.supplier_name} onChange={e=>f('supplier_name',e.target.value)}
-            placeholder="Kim Thanh HN..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          <input value={form.supplier_name}
+            onChange={e => onSuppInput(e.target.value)}
+            onFocus={() => form.supplier_name && setAcSupp(true)}
+            onBlur={() => setTimeout(() => setAcSupp(false), 150)}
+            placeholder="Gõ tên NCC..."
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:border-purple-400 focus:outline-none"/>
+          {acSupp && acList.length > 0 && (
+            <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl
+              shadow-lg z-30 mt-0.5 max-h-40 overflow-y-auto">
+              {acList.map(s => (
+                <div key={s.name} onMouseDown={() => selectSupp(s)}
+                  className="px-3 py-2.5 border-b border-gray-100 last:border-0 cursor-pointer hover:bg-purple-50">
+                  <div className="text-sm font-medium text-gray-800">{s.name}</div>
+                  {s.contact && <div className="text-[10px] text-gray-400">{s.contact}</div>}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="grid grid-cols-2 gap-2">
-          <div>
-            <label className="text-[11px] text-gray-500 block mb-1">SĐT / Zalo</label>
-            <input type="tel" value={form.supplier_contact} onChange={e=>f('supplier_contact',e.target.value)}
-              placeholder="0912..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
-          </div>
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">SĐT / Zalo</label>
+          <input type="tel" value={form.supplier_contact} onChange={e=>f('supplier_contact',e.target.value)}
+            placeholder="0912..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
 
         <div className="border-t border-gray-100 pt-2"/>
