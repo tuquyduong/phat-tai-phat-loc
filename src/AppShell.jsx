@@ -10,12 +10,12 @@ import Home from './pages/Home'
 import Expenses from './pages/Expenses'
 import Lab from './pages/Lab'
 import Jewelry from './pages/Jewelry'
-import { getOrders, getCustomers, verifySessionDetailed } from './lib/supabase'
+import { getOrders, getCustomers, verifySessionDetailed, hasLocalSession } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
   const [activeModule, setActiveModule] = useState('orders')
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
   const [activeModules, setActiveModulesState] = useState(['orders', 'expenses', 'lab', 'jewelry'])
 
   // Data cho Home page
@@ -35,10 +35,25 @@ export default function AppShell() {
         if (valid !== isAuthenticated) setIsAuthenticated(valid)
       } catch { /* im lặng, giữ trạng thái hiện tại */ }
     }
+
+    // Đồng bộ nhanh khi login/logout (không phải chờ 60s)
+    const onAuthChanged = () => {
+      const hasToken = hasLocalSession()
+      if (alive && hasToken !== isAuthenticated) setIsAuthenticated(hasToken)
+      checkAuth()   // xác thực lại chữ ký ở nền
+    }
+
     checkAuth()
-    // Kiểm tra lại mỗi 60s
+    window.addEventListener('auth-changed', onAuthChanged)
+    window.addEventListener('storage', onAuthChanged)   // đồng bộ giữa các tab
     const interval = setInterval(checkAuth, 60000)
-    return () => { alive = false; clearInterval(interval) }
+
+    return () => {
+      alive = false
+      clearInterval(interval)
+      window.removeEventListener('auth-changed', onAuthChanged)
+      window.removeEventListener('storage', onAuthChanged)
+    }
   }, [isAuthenticated])
 
   // Load module config

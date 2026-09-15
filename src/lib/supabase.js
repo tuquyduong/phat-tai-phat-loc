@@ -729,7 +729,10 @@ export async function createSession() {
   const expiry = Date.now() + SESSION_DAYS * 86400000
   const sig    = await sha256(pwHash + '|' + expiry)
   const token  = `${expiry}.${sig}`
-  try { localStorage.setItem(SESSION_KEY, token) } catch {}
+  try {
+    localStorage.setItem(SESSION_KEY, token)
+    window.dispatchEvent(new Event('auth-changed'))
+  } catch {}
   return token
 }
 
@@ -761,6 +764,19 @@ export async function verifySession() {
   return r === 'valid'
 }
 
+// Có token chưa hết hạn không — kiểm tra offline, không gọi DB
+export function hasLocalSession() {
+  try {
+    const token = localStorage.getItem(SESSION_KEY)
+    if (!token || !token.includes('.')) return false
+    const expiry = Number(token.split('.')[0])
+    return !!expiry && Date.now() < expiry
+  } catch { return false }
+}
+
 export function clearSession() {
-  try { localStorage.removeItem(SESSION_KEY) } catch {}
+  try {
+    localStorage.removeItem(SESSION_KEY)
+    window.dispatchEvent(new Event('auth-changed'))
+  } catch {}
 }

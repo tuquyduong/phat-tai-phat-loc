@@ -3,7 +3,7 @@ import {
   Package, Plus, Search, Filter, X,
   RefreshCw, LogOut, Settings, BarChart3
 } from 'lucide-react'
-import { getOrders, getCustomers, getProducts, checkPassword, createSession, verifySessionDetailed, clearSession } from './lib/supabase'
+import { getOrders, getCustomers, getProducts, checkPassword, createSession, verifySessionDetailed, clearSession, hasLocalSession } from './lib/supabase'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import OrderCard from './components/OrderCard'
@@ -39,7 +39,7 @@ function AppContent() {
   const toast = useToast()
 
   // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState(false)
+  const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
   const [checkingAuth, setCheckingAuth] = useState(true)
 
   // Data state
@@ -71,8 +71,9 @@ function AppContent() {
   useEffect(() => {
     verifySessionDetailed()
       .then(r => {
-        // 'offline' + có token cũ → cho vào (đã đăng nhập trước đó, chỉ mất mạng)
-        if (r === 'valid' || r === 'offline') setIsAuthenticated(true)
+        // 'offline' → giữ nguyên (token còn hạn, chỉ mất mạng)
+        if (r === 'offline') return
+        setIsAuthenticated(r === 'valid')   // 'invalid' → đăng xuất
       })
       .catch(() => {})
       .finally(() => setCheckingAuth(false))
