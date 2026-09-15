@@ -233,11 +233,15 @@ export const CATEGORIES = ['Nhẫn','Dây chuyền','Bông tai','Lắc','Vòng',
 export async function getJewelryImports(jewelryId) {
   const { data, error } = await supabase
     .from('jewelry_imports')
-    .select('*')
+    .select('*, jewelry_trips(name)')
     .eq('jewelry_id', jewelryId)
     .order('import_date', { ascending: false })
   if (error) throw error
-  return data || []
+  return (data || []).map(i => ({
+    ...i,
+    trip_name: i.jewelry_trips?.name || null,
+    jewelry_trips: undefined,
+  }))
 }
 
 export async function createJewelryImport(imp) {
@@ -281,6 +285,7 @@ export async function updateJewelryImport(id, updates) {
       supplier_name: updates.supplier_name?.trim() || null,
       import_date:   updates.import_date,
       note:          updates.note?.trim() || null,
+      trip_id:       updates.trip_id || null,
     }).eq('id', id),
   ]
 
@@ -306,4 +311,68 @@ export async function deleteJewelryImport(importId) {
   const { error } = await supabase
     .from('jewelry_imports').delete().eq('id', importId)
   if (error) throw error
+}
+
+// ============================================
+// TRIPS (chuyến nhập)
+// ============================================
+export async function getJewelryTrips() {
+  const { data, error } = await supabase
+    .from('jewelry_trips')
+    .select('*, jewelry_imports(id, qty, cost_per_unit)')
+    .order('trip_date', { ascending: false })
+  if (error) throw error
+  // Đếm lô và tổng tiền cho mỗi chuyến
+  return (data || []).map(t => ({
+    ...t,
+    lot_count:  t.jewelry_imports?.length || 0,
+    total_cost: (t.jewelry_imports || []).reduce(
+      (s, i) => s + (Number(i.qty)||0) * (Number(i.cost_per_unit)||0), 0
+    ),
+    jewelry_imports: undefined,
+  }))
+}
+
+export async function createJewelryTrip(trip) {
+  const { data, error } = await supabase
+    .from('jewelry_trips')
+    .insert([{
+      name:        trip.name.trim(),
+      destination: trip.destination?.trim() || null,
+      trip_date:   trip.trip_date || null,
+      note:        trip.note?.trim() || null,
+    }])
+    .select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateJewelryTrip(id, updates) {
+  const { error } = await supabase
+    .from('jewelry_trips')
+    .update({
+      name:        updates.name.trim(),
+      destination: updates.destination?.trim() || null,
+      trip_date:   updates.trip_date || null,
+      note:        updates.note?.trim() || null,
+    })
+    .eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteJewelryTrip(id) {
+  // ON DELETE SET NULL → lô nhập giữ nguyên, chỉ mất liên kết
+  const { error } = await supabase
+    .from('jewelry_trips').delete().eq('id', id)
+  if (error) throw error
+}
+
+// Active trip session (localStorage)
+const TRIP_KEY = 'jewelry_active_trip'
+export function getActiveTrip() {
+  try { return JSON.parse(localStorage.getItem(TRIP_KEY)) } catch { return null }
+}
+export function setActiveTrip(trip) {
+  if (trip) localStorage.setItem(TRIP_KEY, JSON.stringify(trip))
+  else       localStorage.removeItem(TRIP_KEY)
 }

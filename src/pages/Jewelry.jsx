@@ -14,6 +14,8 @@ import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale,
   getJewelryImports, createJewelryImport, updateJewelryImport, deleteJewelryImport,
+  getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
+  getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, CATEGORIES
 } from '../lib/jewelry'
@@ -32,6 +34,27 @@ export default function Jewelry() {
   const [editing,  setEditing]  = useState(null)
   const [sellItem,   setSellItem]   = useState(null)
   const [importItem, setImportItem] = useState(null)  // item đang nhập lô
+  const [activeTrip, setActiveTripState] = useState(() => getActiveTrip())
+  const [showTripPicker, setShowTripPicker] = useState(false)
+  const [trips, setTrips] = useState([])
+
+  const loadTrips = useCallback(async () => {
+    try { setTrips(await getJewelryTrips()) } catch {}
+  }, [])
+
+  useEffect(() => { loadTrips() }, [loadTrips])
+
+  const handleSetTrip = (trip) => {
+    setActiveTrip(trip)
+    setActiveTripState(trip)
+    setShowTripPicker(false)
+  }
+
+  const handleEndTrip = () => {
+    if (!confirm('Kết thúc nhập hàng chuyến này?')) return
+    setActiveTrip(null)
+    setActiveTripState(null)
+  }
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -62,7 +85,7 @@ export default function Jewelry() {
   }
 
   const handleSavedImport = () => {
-    setImportItem(null); loadData()
+    setImportItem(null); loadData(); loadTrips()
   }
 
   // Chi tiết → bán
@@ -97,7 +120,7 @@ export default function Jewelry() {
         {/* Module tabs */}
         {!detail && (
           <div className="flex border-t border-gray-100">
-            {[['kho','Kho hàng'],['ban','Bán hàng'],['khach','Khách'],['bc','Báo cáo']].map(([id,label]) => (
+            {[['kho','Kho hàng'],['ban','Bán hàng'],['khach','Khách'],['bc','Báo cáo'],['trips','Chuyến']].map(([id,label]) => (
               <button key={id} onClick={() => setModTab(id)}
                 className={`flex-1 py-2.5 text-xs text-center border-b-2 transition-colors
                   ${modTab===id ? 'border-purple-600 text-purple-600 font-semibold'
@@ -125,11 +148,19 @@ export default function Jewelry() {
           onAdd={() => { setEditing(null); setShowAdd(true) }}
           onEdit={item => { setEditing(item); setShowAdd(true) }}
           onDelete={handleDelete}
-          onImport={item => setImportItem(item)}/>
+          onImport={item => setImportItem(item)}
+          activeTrip={activeTrip}
+          onPickTrip={() => { loadTrips(); setShowTripPicker(true) }}
+          onEndTrip={handleEndTrip}/>
       ) : modTab === 'ban' ? (
         <BanTab sales={sales} />
       ) : modTab === 'khach' ? (
         <KhachTab customers={stats.customers} />
+      ) : modTab === 'trips' ? (
+        <TripsTab trips={trips} activeTrip={activeTrip}
+          onSelect={handleSetTrip}
+          onRefresh={loadTrips}
+          toast={toast}/>
       ) : (
         <BcTab stats={stats} />
       )}
@@ -164,8 +195,16 @@ export default function Jewelry() {
           onClose={() => setSellItem(null)}/>
       )}
       <ImportForm isOpen={!!importItem} item={importItem}
+        activeTrip={activeTrip}
+        trips={trips}
         onClose={() => setImportItem(null)}
         onSaved={handleSavedImport} toast={toast}/>
+      <TripPickerModal isOpen={showTripPicker} trips={trips}
+        activeTrip={activeTrip}
+        onSelect={handleSetTrip}
+        onClose={() => setShowTripPicker(false)}
+        onCreated={async (trip) => { await loadTrips(); handleSetTrip(trip) }}
+        toast={toast}/>
     </div>
   )
 }
@@ -173,7 +212,7 @@ export default function Jewelry() {
 // ============================================
 // KHO TAB
 // ============================================
-function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, onImport }) {
+function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, onImport, activeTrip, onPickTrip, onEndTrip }) {
   const [cat,    setCat]    = useState('Tất cả')
   const [sort,   setSort]   = useState('new')
   const [search, setSearch] = useState('')
@@ -219,6 +258,45 @@ function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, onImport })
           </div>
         ))}
       </div>
+
+      {/* Active trip banner */}
+      {activeTrip ? (
+        <div className="mx-3 mt-2 mb-1 rounded-xl overflow-hidden">
+          <div className="bg-green-600 px-3 py-2 flex items-center gap-2.5">
+            <div className="w-7 h-7 bg-white/20 rounded-full flex items-center justify-center text-sm flex-shrink-0">
+              ✈️
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-[9px] text-green-100 font-medium">Đang nhập hàng</div>
+              <div className="text-xs font-bold text-white truncate">{activeTrip.name}</div>
+            </div>
+            <button onClick={onEndTrip}
+              className="text-[10px] font-semibold px-2 py-1 bg-white/20 text-white rounded-full flex-shrink-0 active:scale-95">
+              Kết thúc ✕
+            </button>
+          </div>
+          {activeTrip.destination && (
+            <div className="bg-green-700/80 px-3 py-1">
+              <span className="text-[10px] text-green-100">{activeTrip.destination}</span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <button onClick={onPickTrip}
+          className="mx-3 mt-2 mb-1 w-[calc(100%-24px)] flex items-center gap-2.5 px-3 py-2 bg-white
+            border border-dashed border-gray-300 rounded-xl text-left active:scale-98 transition-transform">
+          <div className="w-7 h-7 bg-purple-50 rounded-full flex items-center justify-center flex-shrink-0">
+            <Package size={14} className="text-purple-500"/>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs font-semibold text-purple-600">Bắt đầu nhập hàng</div>
+            <div className="text-[10px] text-gray-400">Chọn chuyến để tự động gắn lô</div>
+          </div>
+          <span className="text-[10px] font-semibold px-2 py-1 bg-purple-600 text-white rounded-full flex-shrink-0">
+            Chọn
+          </span>
+        </button>
+      )}
 
       {/* Search bar */}
       <div className="px-3 pb-2 bg-white border-b border-gray-100">
@@ -862,6 +940,11 @@ function ImportRow({ imp, fmtDate, onEdit, onDelete }) {
           <div className="text-[10px] text-gray-400">
             {imp.supplier_name || 'NCC không ghi'}
             {imp.cost_per_unit && ` · ${fmtMoney(imp.cost_per_unit)}/cái`}
+            {imp.trip_name && (
+              <span className="ml-1 px-1.5 py-0.5 bg-green-50 text-green-700 rounded-full text-[9px] font-medium">
+                ✈ {imp.trip_name}
+              </span>
+            )}
           </div>
         </div>
         {total && <span className="text-xs font-semibold text-purple-600 flex-shrink-0">{fmtMoney(total)}</span>}
@@ -1196,8 +1279,8 @@ function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
 // ============================================
 // IMPORT FORM — nhập lô trang sức
 // ============================================
-function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved, toast }) {
-  const EMPTY = { qty: '', cost_per_unit: '', supplier_name: '', import_date: '', note: '' }
+function ImportForm({ isOpen, item, editingImport, jewelryCode, activeTrip, trips = [], onClose, onSaved, toast }) {
+  const EMPTY = { qty: '', cost_per_unit: '', supplier_name: '', import_date: '', note: '', trip_id: '' }
   const [form,   setForm]   = useState(EMPTY)
   const [saving, setSaving] = useState(false)
 
@@ -1210,10 +1293,12 @@ function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved
         supplier_name: editingImport.supplier_name || '',
         import_date:   editingImport.import_date || getLocalDateString(),
         note:          editingImport.note || '',
+        trip_id:       editingImport.trip_id || '',
       })
     } else {
       setForm({ ...EMPTY, import_date: getLocalDateString(),
-        supplier_name: item?.supplier_name || '' })
+        supplier_name: item?.supplier_name || '',
+        trip_id: activeTrip?.id || '' })
     }
   }, [isOpen, editingImport, item])
 
@@ -1227,7 +1312,11 @@ function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved
         await updateJewelryImport(editingImport.id, form)
         toast.success('Đã cập nhật lô nhập')
       } else {
-        await createJewelryImport({ ...form, jewelry_id: item.id })
+        await createJewelryImport({
+          ...form,
+          jewelry_id: item.id,
+          trip_id: form.trip_id || null,
+        })
         toast.success(`Đã nhập ${form.qty} cái — tồn kho đã cộng`)
       }
       onSaved()
@@ -1280,6 +1369,27 @@ function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved
           <input type="date" value={form.import_date} onChange={e=>f('import_date',e.target.value)}
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
+        {/* Trip selector */}
+        {(activeTrip || trips.length > 0) && (
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Gắn vào chuyến — tùy chọn</label>
+            {activeTrip && !form.trip_id && (
+              <button type="button" onClick={() => f('trip_id', activeTrip.id)}
+                className="w-full text-left px-3 py-2.5 border border-dashed border-green-300
+                  bg-green-50 rounded-xl text-xs text-green-700 font-medium mb-2 active:scale-98">
+                + Gắn vào chuyến đang nhập: {activeTrip.name}
+              </button>
+            )}
+            <select value={form.trip_id} onChange={e => f('trip_id', e.target.value)}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm bg-white">
+              <option value="">Không gắn chuyến</option>
+              {trips.map(t => (
+                <option key={t.id} value={t.id}>{t.name}{t.destination ? ` — ${t.destination}` : ''}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         <div>
           <label className="text-[11px] text-gray-500 block mb-1">Nhà cung cấp lô này</label>
           <input type="text" value={form.supplier_name} onChange={e=>f('supplier_name',e.target.value)}
@@ -1305,6 +1415,302 @@ function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved
         </div>
       </div>
     </Modal>
+  )
+}
+
+// ============================================
+// TRIPS TAB — quản lý chuyến nhập
+// ============================================
+function TripsTab({ trips, activeTrip, onSelect, onRefresh, toast }) {
+  const [editTrip,  setEditTrip]  = useState(null)  // null=thêm mới, obj=sửa
+  const [showForm,  setShowForm]  = useState(false)
+
+  const handleDelete = async (trip) => {
+    if (!confirm(`Xoá chuyến "${trip.name}"?\nCác lô nhập đã gắn sẽ giữ nguyên, chỉ mất liên kết chuyến.`)) return
+    try {
+      await deleteJewelryTrip(trip.id)
+      if (activeTrip?.id === trip.id) onSelect(null)
+      toast.success('Đã xoá chuyến')
+      onRefresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+
+  const handleSave = async (form) => {
+    try {
+      if (editTrip?.id) {
+        await updateJewelryTrip(editTrip.id, form)
+        toast.success('Đã cập nhật chuyến')
+      } else {
+        await createJewelryTrip(form)
+        toast.success('Đã tạo chuyến mới')
+      }
+      setShowForm(false); setEditTrip(null); onRefresh()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+
+  const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
+
+  return (
+    <>
+      {/* Header + thêm mới */}
+      <div className="flex items-center justify-between px-4 py-3 bg-white border-b border-gray-100">
+        <div className="text-xs font-semibold text-gray-600">{trips.length} chuyến nhập</div>
+        <button onClick={() => { setEditTrip(null); setShowForm(true) }}
+          className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 text-white
+            rounded-xl text-xs font-semibold active:scale-95">
+          <Plus size={13}/> Thêm chuyến
+        </button>
+      </div>
+
+      {/* Active session banner */}
+      {activeTrip && (
+        <div className="mx-3 mt-3 bg-green-50 border border-green-200 rounded-xl px-3 py-2.5
+          flex items-center gap-2.5">
+          <div className="w-8 h-8 bg-green-500 rounded-xl flex items-center justify-center flex-shrink-0">
+            <span className="text-white text-sm">✈️</span>
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-[10px] text-green-600 font-medium">Đang nhập hàng</div>
+            <div className="text-xs font-bold text-green-800 truncate">{activeTrip.name}</div>
+          </div>
+          <button onClick={() => onSelect(null)}
+            className="text-[10px] font-semibold px-2 py-1 bg-white border border-green-300
+              text-green-700 rounded-full active:scale-95">
+            Kết thúc ✕
+          </button>
+        </div>
+      )}
+
+      {/* Trip list */}
+      {trips.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <Package size={32} className="mb-2 opacity-30"/>
+          <p className="text-sm">Chưa có chuyến nhập nào</p>
+          <button onClick={() => { setEditTrip(null); setShowForm(true) }}
+            className="mt-3 text-xs text-purple-600 font-semibold">
+            + Tạo chuyến đầu tiên
+          </button>
+        </div>
+      ) : (
+        <div className="mt-2 space-y-0">
+          {trips.map(trip => (
+            <div key={trip.id}
+              className={`bg-white border-b border-gray-100 px-4 py-3
+                ${activeTrip?.id === trip.id ? 'bg-green-50' : ''}`}>
+              <div className="flex items-center gap-3">
+                {/* Icon + start/stop */}
+                <div onClick={() => onSelect(activeTrip?.id === trip.id ? null : trip)}
+                  className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg
+                    flex-shrink-0 cursor-pointer active:scale-95
+                    ${activeTrip?.id === trip.id ? 'bg-green-500' : 'bg-purple-50'}`}>
+                  {activeTrip?.id === trip.id ? '✓' : '✈️'}
+                </div>
+
+                {/* Info */}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-sm font-semibold text-gray-800">{trip.name}</span>
+                    {activeTrip?.id === trip.id && (
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 bg-green-100
+                        text-green-700 rounded-full">Đang nhập</span>
+                    )}
+                  </div>
+                  {trip.destination && (
+                    <div className="text-[10px] text-gray-400 mt-0.5">{trip.destination}</div>
+                  )}
+                  <div className="flex items-center gap-3 mt-0.5">
+                    {trip.trip_date && (
+                      <span className="text-[10px] text-gray-400">{fmtDate(trip.trip_date)}</span>
+                    )}
+                    <span className="text-[10px] text-purple-500 font-medium">
+                      {trip.lot_count} lô nhập
+                      {trip.total_cost > 0 && ` · ${fmtMoney(trip.total_cost)}`}
+                    </span>
+                  </div>
+                  {trip.note && (
+                    <div className="text-[10px] text-gray-400 italic mt-0.5 truncate">{trip.note}</div>
+                  )}
+                </div>
+
+                {/* Actions */}
+                <div className="flex gap-1 flex-shrink-0">
+                  <button onClick={() => { setEditTrip(trip); setShowForm(true) }}
+                    className="p-2 text-gray-400 hover:text-purple-600 active:scale-90">
+                    <Edit2 size={14}/>
+                  </button>
+                  <button onClick={() => handleDelete(trip)}
+                    className="p-2 text-gray-400 hover:text-red-500 active:scale-90">
+                    <Trash2 size={14}/>
+                  </button>
+                </div>
+              </div>
+
+              {/* Tap to set active */}
+              {activeTrip?.id !== trip.id && (
+                <button onClick={() => onSelect(trip)}
+                  className="mt-2 w-full py-1.5 text-[10px] font-semibold text-purple-600
+                    bg-purple-50 rounded-lg active:scale-98">
+                  Bắt đầu nhập hàng với chuyến này
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Form thêm/sửa */}
+      <Modal isOpen={showForm}
+        onClose={() => { setShowForm(false); setEditTrip(null) }}
+        title={editTrip ? `Sửa — ${editTrip.name}` : 'Thêm chuyến mới'}>
+        <TripForm
+          initial={editTrip}
+          onSave={handleSave}
+          onCancel={() => { setShowForm(false); setEditTrip(null) }}/>
+      </Modal>
+      <div className="h-4"/>
+    </>
+  )
+}
+
+// ============================================
+// TRIP PICKER MODAL
+// ============================================
+function TripPickerModal({ isOpen, trips, activeTrip, onSelect, onClose, onCreated, toast }) {
+  const [showNew, setShowNew] = useState(false)
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Chọn chuyến nhập">
+      <div className="pb-4">
+        {/* Active session info */}
+        {activeTrip && (
+          <div className="mx-4 mb-3 px-3 py-2 bg-green-50 border border-green-200 rounded-xl
+            flex items-center gap-2">
+            <div className="w-5 h-5 bg-green-500 rounded-full flex items-center justify-center flex-shrink-0">
+              <span className="text-white text-[10px]">✓</span>
+            </div>
+            <div className="flex-1 text-xs text-green-700">
+              Đang nhập: <span className="font-semibold">{activeTrip.name}</span>
+            </div>
+            <button onClick={() => onSelect(null)}
+              className="text-[10px] text-green-600 font-medium active:opacity-70">
+              Bỏ chọn
+            </button>
+          </div>
+        )}
+
+        {/* Existing trips */}
+        {trips.map(t => (
+          <div key={t.id} onClick={() => onSelect(t)}
+            className={`flex items-center gap-3 px-4 py-3 border-b border-gray-100 cursor-pointer active:bg-gray-50
+              ${activeTrip?.id === t.id ? 'bg-green-50' : ''}`}>
+            <div className="w-9 h-9 rounded-xl bg-purple-50 flex items-center justify-center text-lg flex-shrink-0">
+              ✈️
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-semibold text-gray-800 flex items-center gap-2">
+                {t.name}
+                {activeTrip?.id === t.id && (
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 bg-green-100 text-green-700 rounded-full">
+                    Đang nhập
+                  </span>
+                )}
+              </div>
+              {t.destination && <div className="text-[10px] text-gray-400">{t.destination}</div>}
+              {t.trip_date && <div className="text-[10px] text-gray-400">{t.trip_date}</div>}
+            </div>
+            <div className="text-right flex-shrink-0">
+              <div className="text-xs font-medium text-purple-600">{t.lot_count} lô</div>
+            </div>
+          </div>
+        ))}
+
+        {/* Create new */}
+        {!showNew ? (
+          <button onClick={() => setShowNew(true)}
+            className="w-full flex items-center gap-3 px-4 py-3 text-purple-600 font-semibold text-sm
+              border-t border-gray-100 active:bg-purple-50">
+            <div className="w-9 h-9 rounded-xl bg-purple-50 flex items-center justify-center flex-shrink-0">
+              <Plus size={18} className="text-purple-600"/>
+            </div>
+            Tạo chuyến mới
+          </button>
+        ) : (
+          <TripForm onSave={async (data) => {
+            try {
+              const newTrip = await createJewelryTrip(data)
+              toast.success('Đã tạo chuyến mới')
+              onCreated(newTrip)
+              setShowNew(false)
+            } catch (err) { toast.error('Lỗi: ' + err.message) }
+          }} onCancel={() => setShowNew(false)}/>
+        )}
+
+        {/* Skip option */}
+        <button onClick={() => onSelect(null)}
+          className="w-full text-center py-3 text-xs text-gray-400 active:text-gray-600">
+          Nhập không gắn chuyến
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// TRIP FORM (tạo / sửa chuyến)
+// ============================================
+function TripForm({ onSave, onCancel, initial }) {
+  const [form, setForm] = useState({
+    name:        initial?.name || '',
+    destination: initial?.destination || '',
+    trip_date:   initial?.trip_date || getLocalDateString(),
+    note:        initial?.note || '',
+  })
+  const [saving, setSaving] = useState(false)
+  const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
+
+  const handleSave = async () => {
+    if (!form.name.trim()) return
+    setSaving(true)
+    try { await onSave(form) } finally { setSaving(false) }
+  }
+
+  return (
+    <div className="px-4 pt-3 pb-2 border-t border-gray-100 space-y-3">
+      <div className="text-xs font-semibold text-gray-600">Tạo chuyến mới</div>
+      <div>
+        <label className="text-[11px] text-gray-500 block mb-1">Tên chuyến *</label>
+        <input value={form.name} onChange={e=>f('name',e.target.value)} autoFocus
+          placeholder="VD: Chuyến TQ tháng 9, Chuyến HN..."
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+      </div>
+      <div>
+        <label className="text-[11px] text-gray-500 block mb-1">Điểm đến</label>
+        <input value={form.destination} onChange={e=>f('destination',e.target.value)}
+          placeholder="Quảng Châu, Thâm Quyến..."
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+      </div>
+      <div>
+        <label className="text-[11px] text-gray-500 block mb-1">Ngày nhập</label>
+        <input type="date" value={form.trip_date} onChange={e=>f('trip_date',e.target.value)}
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+      </div>
+      <div>
+        <label className="text-[11px] text-gray-500 block mb-1">Ghi chú</label>
+        <input value={form.note} onChange={e=>f('note',e.target.value)}
+          placeholder="Ngân sách, mục tiêu..."
+          className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+      </div>
+      <div className="flex gap-2">
+        <button onClick={onCancel}
+          className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+          Huỷ
+        </button>
+        <button onClick={handleSave} disabled={saving || !form.name.trim()}
+          className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+          {saving ? '...' : 'Tạo & Bắt đầu'}
+        </button>
+      </div>
+    </div>
   )
 }
 
