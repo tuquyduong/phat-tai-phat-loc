@@ -180,19 +180,14 @@ export function calcStats(jewelry, sales) {
         ? Math.floor((today - new Date(c.lastDate)) / 86400000) : 999
     }))
 
-  // Xuất nhập log (nhập = jewelry created, bán = sales)
-  const importLog = jewelry.map(j => ({
-    type: 'import', date: j.created_at?.slice(0,10),
-    code: j.code, name: j.name,
-    qty: j.stock_qty, supplier: j.supplier_name,
-  }))
+  // Log bán hàng (imports xem trong DetailPanel riêng theo từng SP)
   const saleLog = sales.map(s => ({
     type: 'sale', date: s.sold_at,
     code: s.jewelry?.code, name: s.jewelry?.name,
     qty: s.qty, customer: s.customer_name,
     revenue: Number(s.qty) * Number(s.sell_price),
   }))
-  const xnLog = [...importLog, ...saleLog].sort((a,b) => b.date?.localeCompare(a.date))
+  const xnLog = [...saleLog].sort((a,b) => (b.date||'').localeCompare(a.date||''))
 
   // Doanh thu tháng hiện tại
   const thisMonth = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
@@ -231,3 +226,84 @@ export function fmtMoney(n) {
 }
 
 export const CATEGORIES = ['Nhẫn','Dây chuyền','Bông tai','Lắc','Vòng','Khác']
+
+// ============================================
+// IMPORTS (lô nhập trang sức)
+// ============================================
+export async function getJewelryImports(jewelryId) {
+  const { data, error } = await supabase
+    .from('jewelry_imports')
+    .select('*')
+    .eq('jewelry_id', jewelryId)
+    .order('import_date', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+export async function createJewelryImport(imp) {
+  // Đọc stock hiện tại → cộng thêm
+  const { data: item, error: ge } = await supabase
+    .from('jewelry').select('stock_qty').eq('id', imp.jewelry_id).single()
+  if (ge) throw ge
+  const newQty = (Number(item.stock_qty) || 0) + (Number(imp.qty) || 0)
+
+  const [r1, r2] = await Promise.all([
+    supabase.from('jewelry_imports').insert([{
+      jewelry_id:    imp.jewelry_id,
+      qty:           Number(imp.qty),
+      cost_per_unit: imp.cost_per_unit ? Number(imp.cost_per_unit) : null,
+      supplier_name: imp.supplier_name?.trim() || null,
+      import_date:   imp.import_date,
+      note:          imp.note?.trim() || null,
+    }]).select().single(),
+    supabase.from('jewelry').update({
+      stock_qty: newQty,
+      updated_at: new Date().toISOString(),
+    }).eq('id', imp.jewelry_id),
+  ])
+  if (r1.error) throw r1.error
+  if (r2.error) throw r2.error
+  return r1.data
+}
+
+export async function updateJewelryImport(id, updates) {
+  // Đọc lô cũ để tính diff qty → cập nhật stock
+  const { data: oldImp, error: ge } = await supabase
+    .from('jewelry_imports').select('qty, jewelry_id').eq('id', id).single()
+  if (ge) throw ge
+
+  const qtyDiff = Number(updates.qty) - Number(oldImp.qty)
+
+  const ops = [
+    supabase.from('jewelry_imports').update({
+      qty:           Number(updates.qty),
+      cost_per_unit: updates.cost_per_unit ? Number(updates.cost_per_unit) : null,
+      supplier_name: updates.supplier_name?.trim() || null,
+      import_date:   updates.import_date,
+      note:          updates.note?.trim() || null,
+    }).eq('id', id),
+  ]
+
+  // Chỉ cập nhật stock khi qty thay đổi
+  if (qtyDiff !== 0) {
+    const { data: item, error: se } = await supabase
+      .from('jewelry').select('stock_qty').eq('id', oldImp.jewelry_id).single()
+    if (se) throw se
+    ops.push(
+      supabase.from('jewelry').update({
+        stock_qty: (Number(item.stock_qty) || 0) + qtyDiff,
+        updated_at: new Date().toISOString(),
+      }).eq('id', oldImp.jewelry_id)
+    )
+  }
+
+  const results = await Promise.all(ops)
+  for (const r of results) { if (r.error) throw r.error }
+}
+
+// Xoá lô nhập — KHÔNG hoàn tồn kho tự động (tránh nhầm lẫn)
+export async function deleteJewelryImport(importId) {
+  const { error } = await supabase
+    .from('jewelry_imports').delete().eq('id', importId)
+  if (error) throw error
+}

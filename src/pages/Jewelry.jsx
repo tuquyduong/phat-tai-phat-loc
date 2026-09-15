@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft,
-  RefreshCw, Tag, Users, BarChart3, Package,
+  RefreshCw, Tag, Users, BarChart3, Package, Search, X,
   ArrowDownCircle, ArrowUpCircle, Camera, AlertTriangle, Clock
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
@@ -13,6 +13,7 @@ import { getLocalDateString } from '../lib/helpers'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale,
+  getJewelryImports, createJewelryImport, updateJewelryImport, deleteJewelryImport,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, CATEGORIES
 } from '../lib/jewelry'
@@ -29,7 +30,8 @@ export default function Jewelry() {
   const [detail,   setDetail]   = useState(null)     // jewelry item đang xem
   const [showAdd,  setShowAdd]  = useState(false)
   const [editing,  setEditing]  = useState(null)
-  const [sellItem, setSellItem] = useState(null)
+  const [sellItem,   setSellItem]   = useState(null)
+  const [importItem, setImportItem] = useState(null)  // item đang nhập lô
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -57,6 +59,10 @@ export default function Jewelry() {
 
   const handleSavedSale = () => {
     setSellItem(null); loadData()
+  }
+
+  const handleSavedImport = () => {
+    setImportItem(null); loadData()
   }
 
   // Chi tiết → bán
@@ -112,10 +118,14 @@ export default function Jewelry() {
         <DetailPanel item={detail} sales={sales.filter(s=>s.jewelry_id===detail.id)}
           onSell={() => openSell(detail)}
           onEdit={() => { setDetail(null); setEditing(detail); setShowAdd(true) }}
-          onDelete={() => { handleDelete(detail); setDetail(null) }} />
+          onDelete={() => { handleDelete(detail); setDetail(null) }}
+          onImport={() => setImportItem(detail)} />
       ) : modTab === 'kho' ? (
         <KhoTab items={stats.withDays} onSelect={setDetail}
-          onAdd={() => { setEditing(null); setShowAdd(true) }}/>
+          onAdd={() => { setEditing(null); setShowAdd(true) }}
+          onEdit={item => { setEditing(item); setShowAdd(true) }}
+          onDelete={handleDelete}
+          onImport={item => setImportItem(item)}/>
       ) : modTab === 'ban' ? (
         <BanTab sales={sales} />
       ) : modTab === 'khach' ? (
@@ -153,6 +163,9 @@ export default function Jewelry() {
           onPick={j => setSellItem(j)}
           onClose={() => setSellItem(null)}/>
       )}
+      <ImportForm isOpen={!!importItem} item={importItem}
+        onClose={() => setImportItem(null)}
+        onSaved={handleSavedImport} toast={toast}/>
     </div>
   )
 }
@@ -160,12 +173,21 @@ export default function Jewelry() {
 // ============================================
 // KHO TAB
 // ============================================
-function KhoTab({ items: jewelry, onSelect, onAdd }) {
-  const [cat, setCat]   = useState('Tất cả')
-  const [sort, setSort] = useState('new')
+function KhoTab({ items: jewelry, onSelect, onAdd, onEdit, onDelete, onImport }) {
+  const [cat,    setCat]    = useState('Tất cả')
+  const [sort,   setSort]   = useState('new')
+  const [search, setSearch] = useState('')
 
   const filtered = useMemo(() => {
     let list = cat === 'Tất cả' ? jewelry : jewelry.filter(j => j.category === cat)
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      list = list.filter(j =>
+        j.code.toLowerCase().includes(q) ||
+        j.name?.toLowerCase().includes(q) ||
+        j.supplier_name?.toLowerCase().includes(q)
+      )
+    }
     switch(sort) {
       case 'slow':    return [...list].sort((a,b) => b.days_in_stock - a.days_in_stock)
       case 'stock':   return [...list].sort((a,b) => b.stock_remaining - a.stock_remaining)
@@ -173,7 +195,7 @@ function KhoTab({ items: jewelry, onSelect, onAdd }) {
       case 'price_l': return [...list].sort((a,b) => (a.sell_price||0) - (b.sell_price||0))
       default:        return [...list].sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
     }
-  }, [jewelry, cat, sort])
+  }, [jewelry, cat, sort, search])
 
   const catCounts = useMemo(() => {
     const counts = { 'Tất cả': jewelry.length }
@@ -198,6 +220,22 @@ function KhoTab({ items: jewelry, onSelect, onAdd }) {
         ))}
       </div>
 
+      {/* Search bar */}
+      <div className="px-3 pb-2 bg-white border-b border-gray-100">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e => setSearch(e.target.value)}
+            placeholder="Tìm mã, tên, nhà cung cấp..."
+            className="w-full pl-8 pr-8 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50 focus:outline-none focus:border-purple-400"/>
+          {search && (
+            <button onClick={() => setSearch('')}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 p-0.5">
+              <X size={13}/>
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* Category filter */}
       <div className="flex gap-0 overflow-x-auto bg-white border-b border-gray-100 px-1"
         style={{ scrollbarWidth: 'none' }}>
@@ -215,7 +253,9 @@ function KhoTab({ items: jewelry, onSelect, onAdd }) {
 
       {/* Sort bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-white border-b border-gray-100">
-        <span className="text-[10px] text-gray-400">{filtered.length} sản phẩm</span>
+        <span className="text-[10px] text-gray-400">
+          {filtered.length} sản phẩm{search && ` · kết quả cho "${search}"`}
+        </span>
         <select value={sort} onChange={e=>setSort(e.target.value)}
           className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-white text-gray-600">
           <option value="new">Mới nhập trước</option>
@@ -227,57 +267,82 @@ function KhoTab({ items: jewelry, onSelect, onAdd }) {
       </div>
 
       {/* Grid */}
-      <div className="grid grid-cols-2 gap-2.5 p-3">
-        {filtered.map(item => {
-          const s = item.stock_remaining
-          const level = s <= 0 ? 'out' : s <= 1 ? 'low' : 'ok'
-          return (
-            <div key={item.id} onClick={() => onSelect(item)}
-              className="bg-white rounded-xl border border-gray-100 overflow-hidden cursor-pointer active:scale-95 transition-transform">
-              {/* Image */}
-              <div className="aspect-square relative bg-gradient-to-br from-purple-50 to-purple-200
-                flex items-center justify-center overflow-hidden">
-                {item.image_url
-                  ? <img src={thumbUrl(item.image_url, 300)} alt={item.code}
-                      className="w-full h-full object-cover"/>
-                  : <Diamond size={36} className="text-purple-300"/>
-                }
-                {/* Stock badge */}
-                <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full
-                  ${level==='out' ? 'bg-red-100 text-red-600'
-                  : level==='low' ? 'bg-amber-100 text-amber-700'
-                  : 'bg-green-100 text-green-700'}`}>
-                  {s <= 0 ? 'Hết' : `Còn ${s}`}
-                </span>
-                {/* Slow moving */}
-                {item.days_in_stock >= 30 && s > 0 && (
-                  <span className="absolute top-1.5 left-1.5 text-[9px] font-semibold px-1.5 py-0.5
-                    rounded-full bg-amber-500 text-white">{item.days_in_stock}n</span>
-                )}
-                {/* Category */}
-                <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded-full
-                  bg-black/40 text-white">{item.category}</span>
-              </div>
-              <div className="p-2">
-                <div className="text-[11px] font-semibold text-gray-800">{item.code}</div>
-                {item.name && <div className="text-[10px] text-gray-500 truncate">{item.name}</div>}
-                {item.sell_price > 0 && (
-                  <div className="text-[10px] text-purple-600 font-medium mt-0.5">
-                    {fmtMoney(item.sell_price)}
-                  </div>
-                )}
-              </div>
-            </div>
-          )
-        })}
-        {/* Add card */}
-        <div onClick={onAdd} className="aspect-square rounded-xl border-2 border-dashed border-gray-200
-          flex flex-col items-center justify-center gap-1.5 cursor-pointer text-gray-400
-          hover:border-purple-300 hover:text-purple-400 transition-colors active:scale-95">
-          <Plus size={22}/>
-          <span className="text-[11px]">Thêm mới</span>
+      {filtered.length === 0 && search ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <Search size={32} className="mb-2 opacity-40"/>
+          <p className="text-sm">Không tìm thấy "{search}"</p>
+          <button onClick={() => setSearch('')} className="mt-2 text-xs text-purple-500">Xoá tìm kiếm</button>
         </div>
-      </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5 p-3">
+          {filtered.map(item => {
+            const s = item.stock_remaining
+            const level = s <= 0 ? 'out' : s <= 1 ? 'low' : 'ok'
+            return (
+              <div key={item.id}
+                className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+                {/* Image — click để vào detail */}
+                <div onClick={() => onSelect(item)}
+                  className="aspect-square relative bg-gradient-to-br from-purple-50 to-purple-200
+                  flex items-center justify-center overflow-hidden cursor-pointer">
+                  {item.image_url
+                    ? <img src={thumbUrl(item.image_url, 300)} alt={item.code}
+                        className="w-full h-full object-cover"/>
+                    : <Diamond size={34} className="text-purple-300"/>
+                  }
+                  <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full
+                    ${level==='out' ? 'bg-red-100 text-red-600'
+                    : level==='low' ? 'bg-amber-100 text-amber-700'
+                    : 'bg-green-100 text-green-700'}`}>
+                    {s <= 0 ? 'Hết' : `Còn ${s}`}
+                  </span>
+                  {item.days_in_stock >= 30 && s > 0 && (
+                    <span className="absolute top-1.5 left-1.5 text-[9px] font-semibold px-1.5 py-0.5
+                      rounded-full bg-amber-500 text-white">{item.days_in_stock}n</span>
+                  )}
+                  <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded-full
+                    bg-black/40 text-white">{item.category}</span>
+                </div>
+                {/* Info */}
+                <div className="px-2 pt-2 pb-1 cursor-pointer" onClick={() => onSelect(item)}>
+                  <div className="text-[11px] font-semibold text-gray-800">{item.code}</div>
+                  {item.name && <div className="text-[10px] text-gray-500 truncate">{item.name}</div>}
+                  {item.sell_price > 0 && (
+                    <div className="text-[10px] text-purple-600 font-medium mt-0.5">
+                      {fmtMoney(item.sell_price)}
+                    </div>
+                  )}
+                </div>
+                {/* Edit / Delete / Import actions */}
+                <div className="flex border-t border-gray-100 mt-1">
+                  <button onClick={() => onImport(item)}
+                    className="flex-1 py-1.5 text-[10px] text-purple-600 flex items-center justify-center gap-0.5
+                      border-r border-gray-100 hover:bg-purple-50 active:scale-95 transition-colors">
+                    <ArrowDownCircle size={11}/> Nhập lô
+                  </button>
+                  <button onClick={() => onEdit(item)}
+                    className="flex-1 py-1.5 text-[10px] text-gray-500 flex items-center justify-center gap-0.5
+                      border-r border-gray-100 hover:bg-gray-50 active:scale-95 transition-colors">
+                    <Edit2 size={11}/> Sửa
+                  </button>
+                  <button onClick={() => onDelete(item)}
+                    className="flex-1 py-1.5 text-[10px] text-red-400 flex items-center justify-center gap-0.5
+                      hover:bg-red-50 active:scale-95 transition-colors">
+                    <Trash2 size={11}/> Xoá
+                  </button>
+                </div>
+              </div>
+            )
+          })}
+          {/* Add card */}
+          <div onClick={onAdd} className="aspect-square rounded-xl border-2 border-dashed border-gray-200
+            flex flex-col items-center justify-center gap-1.5 cursor-pointer text-gray-400
+            hover:border-purple-300 hover:text-purple-400 transition-colors active:scale-95">
+            <Plus size={22}/>
+            <span className="text-[11px]">Thêm mới</span>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -618,10 +683,35 @@ function BcTab({ stats }) {
 // ============================================
 // DETAIL PANEL
 // ============================================
-function DetailPanel({ item, sales, onSell, onEdit, onDelete }) {
+function DetailPanel({ item, sales, onSell, onEdit, onDelete, onImport }) {
+  const detailToast = useToast()
+  const [detailTab, setDetailTab] = useState('imports')
+  const [imports,   setImports]   = useState([])
+  const [loadingImp, setLoadingImp] = useState(true)
+  const [editImp,   setEditImp]   = useState(null) // lô đang sửa
+
+  const loadImports = useCallback(async () => {
+    setLoadingImp(true)
+    try { setImports(await getJewelryImports(item.id)) }
+    catch { /* silent */ }
+    finally { setLoadingImp(false) }
+  }, [item.id])
+
+  useEffect(() => { loadImports() }, [loadImports])
+
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const sold    = sales.reduce((s,x) => s + Number(x.qty), 0)
   const revenue = sales.reduce((s,x) => s + Number(x.qty)*Number(x.sell_price), 0)
+  const totalImported = imports.reduce((s,x) => s + Number(x.qty), 0)
+  const avgCost = imports.length > 0
+    ? imports.filter(i=>i.cost_per_unit).reduce((s,i)=>s+Number(i.cost_per_unit),0) / imports.filter(i=>i.cost_per_unit).length
+    : null
+
+  const handleDelImp = async (imp) => {
+    if (!confirm('Xoá lô nhập này? Tồn kho không hoàn lại tự động — hãy điều chỉnh tay nếu cần.')) return
+    try { await deleteJewelryImport(imp.id); loadImports(); onDelete() }
+    catch { /* silent */ }
+  }
 
   return (
     <div>
@@ -632,7 +722,7 @@ function DetailPanel({ item, sales, onSell, onEdit, onDelete }) {
           ? <img src={thumbUrl(item.image_url, 800)} alt={item.code} className="w-full h-full object-cover"/>
           : <Diamond size={72} className="text-purple-200"/>
         }
-        <div className="absolute bottom-2 left-2 text-[10px] px-2 py-0.5 rounded-full bg-black/40 text-white">
+        <div className="absolute top-2 right-2 text-[9px] px-2 py-0.5 rounded-full bg-black/40 text-white">
           {item.category}
         </div>
       </div>
@@ -643,13 +733,13 @@ function DetailPanel({ item, sales, onSell, onEdit, onDelete }) {
           ['Mã SP', item.code],
           ['Tên', item.name],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-green-600' : 'text-red-500'],
-          ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) : null],
+          ['Tổng đã nhập', totalImported > 0 ? `${totalImported} cái / ${imports.length} lô` : null],
+          ['Giá vốn TB', avgCost ? fmtMoney(avgCost) + '/cái' : null],
           ['Giá bán', item.sell_price ? fmtMoney(item.sell_price) : null],
           ['Đã bán', sold > 0 ? `${sold} cái · ${fmtMoney(revenue)}` : null],
+          ['NCC chính', item.supplier_name],
+          ['SĐT NCC', item.supplier_contact],
           ['Ghi chú', item.note],
-          ['Nhà cung cấp', item.supplier_name],
-          ['SĐT / Zalo', item.supplier_contact],
-          ['Ngày nhập', fmtDate(item.created_at?.slice(0,10))],
         ].filter(([,v]) => v).map(([l,v,c]) => (
           <div key={l} className="flex justify-between items-center py-2.5 border-b border-gray-100 last:border-0">
             <span className="text-xs text-gray-500">{l}</span>
@@ -660,54 +750,139 @@ function DetailPanel({ item, sales, onSell, onEdit, onDelete }) {
 
       {/* Actions */}
       <div className="flex gap-2 p-3">
+        <button onClick={onImport}
+          className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl text-xs font-semibold active:scale-95">
+          + Nhập lô
+        </button>
         {item.stock_qty > 0 && (
           <button onClick={onSell}
-            className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl text-xs font-semibold active:scale-95">
-            Ghi nhận bán
+            className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-xs font-semibold active:scale-95">
+            Ghi bán
           </button>
         )}
         <button onClick={onEdit}
-          className="flex-1 py-2.5 bg-purple-50 text-purple-600 border border-purple-200 rounded-xl text-xs font-semibold active:scale-95">
+          className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-xs font-semibold active:scale-95">
           Sửa
         </button>
         <button onClick={onDelete}
-          className="px-4 py-2.5 bg-red-50 text-red-500 border border-red-200 rounded-xl active:scale-95">
+          className="px-3 py-2.5 bg-red-50 text-red-500 border border-red-200 rounded-xl active:scale-95">
           <Trash2 size={15}/>
         </button>
       </div>
 
-      {/* Sale history */}
-      {sales.length > 0 && (
-        <>
-          <div className="px-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
-            Lịch sử bán
+      {/* Sub tabs */}
+      <div className="flex bg-gray-100 rounded-xl p-1 mx-3 mb-2 gap-1">
+        {[['imports',`Lô nhập (${imports.length})`],['sales',`Lịch sử bán (${sales.length})`]].map(([id,label]) => (
+          <button key={id} onClick={() => setDetailTab(id)}
+            className={`flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-colors
+              ${detailTab===id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Lô nhập */}
+      {detailTab === 'imports' && (
+        loadingImp ? (
+          <div className="text-center py-6 text-gray-400 text-xs">Đang tải...</div>
+        ) : imports.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 text-sm">
+            <Package size={28} className="mx-auto mb-2 opacity-40"/>
+            Chưa có lô nhập nào
           </div>
-          {sales.map(s => (
-            <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5">
-              <div className="flex items-center gap-2.5">
-                <div className="w-6 h-6 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
-                  <Tag size={11} className="text-green-600"/>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-gray-700">{s.customer_name || 'Khách lẻ'} · {s.qty} cái</div>
-                  <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)}</div>
-                </div>
-                <div className="text-xs font-semibold text-green-600">
-                  {fmtMoney(Number(s.qty)*Number(s.sell_price))}
-                </div>
-                <button onClick={async()=>{
-                  if(!confirm('Xóa lần bán này?')) return
-                  try { await deleteSale(s.id); onDelete() } catch{}
-                }} className="p-1 text-gray-300 hover:text-red-400">
-                  <Trash2 size={12}/>
-                </button>
-              </div>
-              {s.note && <div className="text-[10px] text-gray-400 italic mt-1 pl-8">💬 {s.note}</div>}
-            </div>
-          ))}
-        </>
+        ) : (
+          <div className="space-y-0">
+            {imports.map(imp => (
+              <ImportRow key={imp.id} imp={imp} fmtDate={fmtDate}
+                onEdit={() => setEditImp(imp)}
+                onDelete={() => handleDelImp(imp)}/>
+            ))}
+          </div>
+        )
       )}
+
+      {/* Lịch sử bán */}
+      {detailTab === 'sales' && (
+        sales.length === 0 ? (
+          <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn bán nào</div>
+        ) : (
+          <div className="space-y-0">
+            {sales.map(s => (
+              <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-6 h-6 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
+                    <Tag size={11} className="text-green-600"/>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-700">{s.customer_name || 'Khách lẻ'} · {s.qty} cái</div>
+                    <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)}</div>
+                  </div>
+                  <div className="text-xs font-semibold text-green-600">
+                    {fmtMoney(Number(s.qty)*Number(s.sell_price))}
+                  </div>
+                  <button onClick={async()=>{
+                    if(!confirm('Xóa lần bán này?')) return
+                    try { await deleteSale(s.id); onDelete() } catch{}
+                  }} className="p-1 text-gray-300 hover:text-red-400 active:scale-90">
+                    <Trash2 size={12}/>
+                  </button>
+                </div>
+                {s.note && <div className="text-[10px] text-gray-400 italic mt-1 pl-8">💬 {s.note}</div>}
+              </div>
+            ))}
+          </div>
+        )
+      )}
+
+      {/* Edit import modal */}
+      <ImportForm isOpen={!!editImp}
+        item={null}
+        editingImport={editImp}
+        jewelryCode={item.code}
+        onClose={() => setEditImp(null)}
+        onSaved={() => { setEditImp(null); loadImports(); onDelete() }}
+        toast={detailToast}/>
       <div className="h-4"/>
+    </div>
+  )
+}
+
+// Import row component
+function ImportRow({ imp, fmtDate, onEdit, onDelete }) {
+  const [open, setOpen] = useState(false)
+  const total = imp.cost_per_unit ? Number(imp.qty) * Number(imp.cost_per_unit) : null
+  return (
+    <div className="bg-white border-b border-gray-100">
+      <div className="px-4 py-2.5 flex items-center gap-3 cursor-pointer" onClick={() => setOpen(v=>!v)}>
+        <div className="w-7 h-7 rounded-full bg-purple-50 flex items-center justify-center flex-shrink-0">
+          <ArrowDownCircle size={14} className="text-purple-600"/>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-xs font-semibold text-gray-800">+{imp.qty} cái · {fmtDate(imp.import_date)}</div>
+          <div className="text-[10px] text-gray-400">
+            {imp.supplier_name || 'NCC không ghi'}
+            {imp.cost_per_unit && ` · ${fmtMoney(imp.cost_per_unit)}/cái`}
+          </div>
+        </div>
+        {total && <span className="text-xs font-semibold text-purple-600 flex-shrink-0">{fmtMoney(total)}</span>}
+        <ChevronDown size={13} className={`text-gray-400 flex-shrink-0 transition-transform ${open?'rotate-180':''}`}/>
+      </div>
+      {open && (
+        <div className="px-4 pb-3 pt-1 border-t border-gray-100 bg-gray-50 text-[11px] text-gray-500 leading-loose">
+          {imp.note && <div><span className="font-semibold text-gray-700">Ghi chú: </span>{imp.note}</div>}
+          {total && <div><span className="font-semibold text-gray-700">Tổng tiền: </span>{fmtMoney(total)}</div>}
+          <div className="flex gap-2 mt-2">
+            <button onClick={onEdit}
+              className="px-3 py-1.5 bg-purple-50 text-purple-600 border border-purple-200 rounded-lg text-[11px] font-medium active:scale-95">
+              ✏️ Sửa lô
+            </button>
+            <button onClick={onDelete}
+              className="px-3 py-1.5 bg-red-50 text-red-500 border border-red-200 rounded-lg text-[11px] font-medium active:scale-95">
+              🗑️ Xoá lô
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1011,6 +1186,121 @@ function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
           <button onClick={handleSubmit} disabled={saving || !form.sell_price}
             className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
             {saving ? '...' : 'Lưu bán'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// IMPORT FORM — nhập lô trang sức
+// ============================================
+function ImportForm({ isOpen, item, editingImport, jewelryCode, onClose, onSaved, toast }) {
+  const EMPTY = { qty: '', cost_per_unit: '', supplier_name: '', import_date: '', note: '' }
+  const [form,   setForm]   = useState(EMPTY)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!isOpen) return
+    if (editingImport) {
+      setForm({
+        qty:           String(editingImport.qty || ''),
+        cost_per_unit: String(editingImport.cost_per_unit || ''),
+        supplier_name: editingImport.supplier_name || '',
+        import_date:   editingImport.import_date || getLocalDateString(),
+        note:          editingImport.note || '',
+      })
+    } else {
+      setForm({ ...EMPTY, import_date: getLocalDateString(),
+        supplier_name: item?.supplier_name || '' })
+    }
+  }, [isOpen, editingImport, item])
+
+  const total = (Number(form.qty)||0) * (Number(form.cost_per_unit)||0)
+
+  const handleSubmit = async () => {
+    if (!form.qty || Number(form.qty) <= 0) { toast.error('Nhập số lượng'); return }
+    setSaving(true)
+    try {
+      if (editingImport) {
+        await updateJewelryImport(editingImport.id, form)
+        toast.success('Đã cập nhật lô nhập')
+      } else {
+        await createJewelryImport({ ...form, jewelry_id: item.id })
+        toast.success(`Đã nhập ${form.qty} cái — tồn kho đã cộng`)
+      }
+      onSaved()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    finally { setSaving(false) }
+  }
+
+  const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose}
+      title={editingImport ? `Sửa lô — ${jewelryCode || ''}` : `Nhập lô — ${item?.code || ''}`}>
+      <div className="px-5 pb-6 space-y-3">
+        {!editingImport && item && (
+          <div className="bg-purple-50 rounded-xl px-4 py-2.5 text-xs text-purple-700">
+            <span className="font-semibold">{item.code}</span>
+            {item.name && ` · ${item.name}`}
+            {' · '}Tồn hiện tại: <span className="font-semibold">{item.stock_qty} cái</span>
+            {Number(form.qty) > 0 && (
+              <span> → sau nhập: <span className="font-semibold">
+                {(Number(item.stock_qty)||0) + Number(form.qty)} cái
+              </span></span>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Số lượng *</label>
+            <input type="number" min="1" value={form.qty} onChange={e=>f('qty',e.target.value)}
+              placeholder="2" autoFocus
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Giá vốn/cái (đ)</label>
+            <input type="number" value={form.cost_per_unit} onChange={e=>f('cost_per_unit',e.target.value)}
+              placeholder="Tùy chọn"
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+        </div>
+
+        {total > 0 && (
+          <div className="text-xs text-center text-purple-600 font-semibold bg-purple-50 rounded-lg py-2">
+            Tổng nhập: {fmtMoney(total)}
+          </div>
+        )}
+
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Ngày nhập</label>
+          <input type="date" value={form.import_date} onChange={e=>f('import_date',e.target.value)}
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Nhà cung cấp lô này</label>
+          <input type="text" value={form.supplier_name} onChange={e=>f('supplier_name',e.target.value)}
+            placeholder="Kim Thanh HN, Vàng bạc Hùng..."
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Ghi chú</label>
+          <input type="text" value={form.note} onChange={e=>f('note',e.target.value)}
+            placeholder="Chất lượng, điều kiện..."
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            Hủy
+          </button>
+          <button onClick={handleSubmit} disabled={saving || !form.qty}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+            {saving ? '...' : editingImport ? 'Lưu thay đổi' : 'Lưu lô nhập'}
           </button>
         </div>
       </div>
