@@ -5,19 +5,10 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
   // Lock body scroll (iOS-safe)
   useEffect(() => {
     if (isOpen) {
-      const scrollY = window.scrollY
       document.body.style.overflow = 'hidden'
-      document.body.style.position = 'fixed'
-      document.body.style.width = '100%'
-      document.body.style.top = `-${scrollY}px`
     }
     return () => {
-      const scrollY = document.body.style.top
       document.body.style.overflow = ''
-      document.body.style.position = ''
-      document.body.style.width = ''
-      document.body.style.top = ''
-      if (scrollY) window.scrollTo(0, parseInt(scrollY || '0') * -1)
     }
   }, [isOpen])
 
