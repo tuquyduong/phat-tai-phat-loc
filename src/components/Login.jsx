@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getLockoutRemaining } from '../lib/supabase'
 import { Lock, Eye, EyeOff, Package } from 'lucide-react'
 
 export default function Login({ onLogin }) {
@@ -6,6 +7,15 @@ export default function Login({ onLogin }) {
   const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [lockMins, setLockMins] = useState(0)
+
+  // Kiểm tra trạng thái khoá khi mở màn login
+  useEffect(() => {
+    const check = () => setLockMins(getLockoutRemaining())
+    check()
+    const t = setInterval(check, 30000)
+    return () => clearInterval(t)
+  }, [])
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -16,9 +26,13 @@ export default function Login({ onLogin }) {
       const success = await onLogin(password)
       if (!success) {
         setError('Mật khẩu không đúng')
+        setPassword('')
       }
     } catch (err) {
-      setError('Có lỗi xảy ra')
+      // Hiển thị đúng lỗi: khoá do sai nhiều lần, mất mạng...
+      setError(err?.message || 'Có lỗi xảy ra')
+      setPassword('')
+      setLockMins(getLockoutRemaining())
     } finally {
       setLoading(false)
     }
@@ -76,9 +90,15 @@ export default function Login({ onLogin }) {
             </div>
           )}
 
+          {lockMins > 0 && (
+            <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm">
+              Đã nhập sai quá nhiều lần. Thử lại sau {lockMins} phút.
+            </div>
+          )}
+
           <button
             type="submit"
-            disabled={loading || !password}
+            disabled={loading || !password || lockMins > 0}
             className="w-full py-3 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-semibold rounded-xl hover:from-green-600 hover:to-emerald-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed btn-press shadow-md"
           >
             {loading ? 'Đang kiểm tra...' : 'Đăng nhập'}

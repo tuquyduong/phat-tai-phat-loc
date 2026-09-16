@@ -103,34 +103,128 @@ export async function getJewelrySales() {
   return data || []
 }
 
+// Tạo đơn — hỗ trợ cả hàng có sẵn (jewelry_id) và hàng order (item_name)
 export async function createSale(sale) {
-  const { data: item, error: ge } = await supabase
-    .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+  const sellQty  = Number(sale.qty) || 1
+  const isInStock = !!sale.jewelry_id
+
+  const row = {
+    jewelry_id:     sale.jewelry_id || null,
+    item_name:      sale.item_name?.trim() || null,
+    item_image:     sale.item_image || null,
+    qty:            sellQty,
+    sell_price:     Number(sale.sell_price) || 0,
+    customer_name:  sale.customer_name?.trim()  || null,
+    customer_phone: sale.customer_phone?.trim() || null,
+    deposit:        sale.deposit ? Number(sale.deposit) : null,
+    due_date:       sale.due_date || null,
+    note:           sale.note?.trim() || null,
+    sold_at:        sale.sold_at,
+    delivered:      sale.delivered ?? true,
+    paid:           sale.paid ?? true,
+    delivered_at:   (sale.delivered ?? true) ? sale.sold_at : null,
+    paid_at:        (sale.paid      ?? true) ? sale.sold_at : null,
+  }
+
+  // Hàng có sẵn → trừ kho ngay khi đã giao
+  if (isInStock && row.delivered) {
+    const { data: item, error: ge } = await supabase
+      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+    if (ge) throw ge
+    const currentQty = Number(item.stock_qty) || 0
+    if (sellQty > currentQty) throw new Error(`Không đủ hàng — tồn kho chỉ còn ${currentQty} cái`)
+
+    const [r1, r2] = await Promise.all([
+      supabase.from('jewelry_sales').insert([row]).select().single(),
+      supabase.from('jewelry').update({
+        stock_qty: currentQty - sellQty,
+        updated_at: new Date().toISOString(),
+      }).eq('id', sale.jewelry_id),
+    ])
+    if (r1.error) throw r1.error
+    if (r2.error) throw r2.error
+    return r1.data
+  }
+
+  // Hàng order, hoặc hàng có sẵn nhưng chưa giao → chưa trừ kho
+  const { data, error } = await supabase
+    .from('jewelry_sales').insert([row]).select().single()
+  if (error) throw error
+  return data
+}
+
+// Tick "đã giao" / "đã thanh toán"
+export async function updateSaleStatus(saleId, field, value) {
+  const today = new Date().toISOString().slice(0, 10)
+  const { data: sale, error: ge } = await supabase
+    .from('jewelry_sales').select('*').eq('id', saleId).single()
   if (ge) throw ge
-  const currentQty = Number(item.stock_qty) || 0
-  const sellQty    = Number(sale.qty) || 1
-  if (sellQty > currentQty) throw new Error(`Không đủ hàng — tồn kho chỉ còn ${currentQty} cái`)
-  const newQty = currentQty - sellQty
-  const [r1, r2] = await Promise.all([
-    supabase.from('jewelry_sales').insert([{
-      jewelry_id:    sale.jewelry_id,
-      qty:           sale.qty,
-      sell_price:    sale.sell_price,
-      customer_name: sale.customer_name?.trim() || null,
-      note:          sale.note?.trim() || null,
-      sold_at:       sale.sold_at,
-    }]).select().single(),
-    supabase.from('jewelry').update({
-      stock_qty: newQty,
+
+  const updates = {
+    [field]: value,
+    [`${field}_at`]: value ? today : null,
+  }
+
+  // Khi tick "đã giao" lần đầu cho hàng CÓ SẴN → trừ kho
+  if (field === 'delivered' && value && sale.jewelry_id && !sale.delivered) {
+    const { data: item, error: ie } = await supabase
+      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+    if (ie) throw ie
+    const currentQty = Number(item.stock_qty) || 0
+    const sellQty    = Number(sale.qty) || 1
+    if (sellQty > currentQty) throw new Error(`Không đủ hàng — tồn kho chỉ còn ${currentQty} cái`)
+    await supabase.from('jewelry').update({
+      stock_qty: currentQty - sellQty,
       updated_at: new Date().toISOString(),
-    }).eq('id', sale.jewelry_id),
-  ])
-  if (r1.error) throw r1.error
-  if (r2.error) throw r2.error
-  return r1.data
+    }).eq('id', sale.jewelry_id)
+  }
+
+  // Bỏ tick "đã giao" cho hàng CÓ SẴN → hoàn kho
+  if (field === 'delivered' && !value && sale.jewelry_id && sale.delivered) {
+    const { data: item } = await supabase
+      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+    if (item) {
+      await supabase.from('jewelry').update({
+        stock_qty: (Number(item.stock_qty) || 0) + (Number(sale.qty) || 1),
+        updated_at: new Date().toISOString(),
+      }).eq('id', sale.jewelry_id)
+    }
+  }
+
+  const { error } = await supabase
+    .from('jewelry_sales').update(updates).eq('id', saleId)
+  if (error) throw error
+}
+
+export async function updateSale(saleId, updates) {
+  const { error } = await supabase.from('jewelry_sales').update({
+    item_name:      updates.item_name?.trim() || null,
+    qty:            Number(updates.qty) || 1,
+    sell_price:     Number(updates.sell_price) || 0,
+    customer_name:  updates.customer_name?.trim()  || null,
+    customer_phone: updates.customer_phone?.trim() || null,
+    deposit:        updates.deposit ? Number(updates.deposit) : null,
+    due_date:       updates.due_date || null,
+    note:           updates.note?.trim() || null,
+    sold_at:        updates.sold_at,
+  }).eq('id', saleId)
+  if (error) throw error
 }
 
 export async function deleteSale(saleId) {
+  // Hoàn kho nếu đơn đã giao và là hàng có sẵn
+  const { data: sale } = await supabase
+    .from('jewelry_sales').select('jewelry_id, qty, delivered').eq('id', saleId).single()
+  if (sale?.jewelry_id && sale.delivered) {
+    const { data: item } = await supabase
+      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+    if (item) {
+      await supabase.from('jewelry').update({
+        stock_qty: (Number(item.stock_qty) || 0) + (Number(sale.qty) || 1),
+        updated_at: new Date().toISOString(),
+      }).eq('id', sale.jewelry_id)
+    }
+  }
   const { error } = await supabase.from('jewelry_sales').delete().eq('id', saleId)
   if (error) throw error
 }
@@ -209,10 +303,11 @@ export function calcStats(jewelry, sales) {
   const inStock      = jewelry.filter(j => Number(j.stock_qty) > 0).length
   const totalSold    = sales.reduce((s, x) => s + Number(x.qty), 0)
   const totalRevenue = sales.reduce((s, x) => s + Number(x.qty) * Number(x.sell_price), 0)
-  const monthRevenue = sales
-    .filter(s => s.sold_at?.startsWith(thisMonth))
-    .reduce((s, x) => s + Number(x.qty) * Number(x.sell_price), 0)
-  const monthSalesCount = sales.filter(s => s.sold_at?.startsWith(thisMonth)).length
+  const monthSales   = sales.filter(s => s.sold_at?.startsWith(thisMonth))
+  const monthRevenue = monthSales.reduce((s, x) => s + Number(x.qty) * Number(x.sell_price), 0)
+  const monthActual  = monthSales.reduce((s, x) =>
+    s + (x.paid ? Number(x.qty) * Number(x.sell_price) : (Number(x.deposit) || 0)), 0)
+  const monthSalesCount = monthSales.length
 
   // Days in stock
   const withDays = jewelry.map(j => ({
@@ -269,14 +364,54 @@ export function calcStats(jewelry, sales) {
     catRevenue[cat] = (catRevenue[cat] || 0) + Number(s.qty) * Number(s.sell_price)
   })
 
+  // ===== Trạng thái đơn =====
+  const today10 = new Date().toISOString().slice(0, 10)
+  const pending = sales.filter(s => !s.delivered || !s.paid)
+  const done    = sales.filter(s =>  s.delivered &&  s.paid)
+
+  const orderTotal = s => Number(s.qty) * Number(s.sell_price)
+
+  // Thực thu = đơn đã thanh toán + tiền cọc của đơn chưa thanh toán
+  const actualRevenue = sales.reduce((sum, s) =>
+    sum + (s.paid ? orderTotal(s) : (Number(s.deposit) || 0)), 0)
+
+  // Công nợ = tổng đơn chưa thanh toán, trừ cọc đã nhận
+  const totalDebt = sales
+    .filter(s => !s.paid)
+    .reduce((sum, s) => sum + orderTotal(s) - (Number(s.deposit) || 0), 0)
+
+  const heldDeposit = sales
+    .filter(s => !s.paid)
+    .reduce((sum, s) => sum + (Number(s.deposit) || 0), 0)
+
+  const overdue = sales.filter(s =>
+    !s.delivered && s.due_date && s.due_date < today10)
+
+  // Công nợ theo khách
+  const debtByCustomer = {}
+  sales.filter(s => !s.paid).forEach(s => {
+    const name = s.customer_name || 'Khách lẻ'
+    const owed = orderTotal(s) - (Number(s.deposit) || 0)
+    if (owed <= 0) return
+    if (!debtByCustomer[name]) debtByCustomer[name] = { name, amount: 0, count: 0, phone: s.customer_phone }
+    debtByCustomer[name].amount += owed
+    debtByCustomer[name].count  += 1
+  })
+  const debtors = Object.values(debtByCustomer).sort((a,b) => b.amount - a.amount)
+
   return {
     totalItems, inStock, totalSold, totalRevenue,
-    monthRevenue, monthSalesCount,
+    monthRevenue, monthActual, monthSalesCount,
     slowMovingCount: slowMoving.length,
     slowMoving, bestSellers, customers, saleLog, withDays, catRevenue,
     stockValue: jewelry.reduce(
       (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.sell_price)||0), 0
     ),
+    // Đơn hàng
+    pending, done, overdue, debtors,
+    pendingCount: pending.length,
+    overdueCount: overdue.length,
+    actualRevenue, totalDebt, heldDeposit,
   }
 }
 

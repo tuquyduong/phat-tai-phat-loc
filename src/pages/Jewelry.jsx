@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
-  RefreshCw, Tag, Package, Search, X,
+  RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle,
   ArrowUpCircle, Camera, Clock, BarChart3,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
@@ -12,7 +12,7 @@ import Modal from '../components/Modal'
 import { getLocalDateString } from '../lib/helpers'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
-  getJewelrySales, createSale, deleteSale,
+  getJewelrySales, createSale, deleteSale, updateSaleStatus, updateSale,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
   getCustomerNotes, saveCustomerNote,
@@ -36,6 +36,7 @@ export default function Jewelry() {
   const [showAdd,  setShowAdd]  = useState(false)
   const [editing,  setEditing]  = useState(null)
   const [sellItem, setSellItem] = useState(null)
+  const [editSale, setEditSale] = useState(null)
   const [activeTrip, setActiveTripState] = useState(() => getActiveTrip())
   const [showTripPicker, setShowTripPicker] = useState(false)
   const [categories,    setCategories]    = useState(DEFAULT_CATEGORIES)
@@ -140,7 +141,10 @@ export default function Jewelry() {
           onPickTrip={() => setShowTripPicker(true)}
           onEndTrip={handleEndTrip}/>
       ) : modTab === 'ban' ? (
-        <BanTab sales={sales}/>
+        <BanTab sales={sales} stats={stats}
+          onRefresh={loadData}
+          onEdit={s => setEditSale(s)}
+          toast={toast}/>
       ) : modTab === 'khach' ? (
         <KhachTab customers={stats.customers}
           sales={sales}
@@ -171,7 +175,7 @@ export default function Jewelry() {
         </button>
       )}
       {!detail && modTab === 'ban' && (
-        <button onClick={() => setSellItem('pick')}
+        <button onClick={() => setSellItem('new')}
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
           <Plus size={22}/>
@@ -194,17 +198,14 @@ export default function Jewelry() {
         onClose={() => setShowCatMgr(false)}
         onSaved={cats => { setCategories(cats); setShowCatMgr(false) }}
         toast={toast}/>
-      <SaleForm isOpen={!!sellItem && sellItem !== 'pick'}
-        item={sellItem === 'pick' ? null : sellItem}
+      <SaleForm isOpen={!!sellItem || !!editSale}
+        item={sellItem && sellItem !== 'new' ? sellItem : null}
+        editSale={editSale}
+        jewelry={jewelry}
         customerNames={custNames}
-        onClose={() => setSellItem(null)}
-        onSaved={() => { setSellItem(null); loadData() }}
+        onClose={() => { setSellItem(null); setEditSale(null) }}
+        onSaved={() => { setSellItem(null); setEditSale(null); loadData() }}
         toast={toast}/>
-      {sellItem === 'pick' && (
-        <PickJewelryModal jewelry={jewelry.filter(j => j.stock_qty > 0)}
-          onPick={j => setSellItem(j)}
-          onClose={() => setSellItem(null)}/>
-      )}
       <TripPickerModal isOpen={showTripPicker} trips={trips}
         activeTrip={activeTrip}
         onSelect={handleSetTrip}
@@ -416,52 +417,223 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
 }
 
 // ============================================
-// BÁN HÀNG TAB
+// BÁN HÀNG TAB — theo dõi đơn
 // ============================================
-function BanTab({ sales }) {
-  const { monthSales, monthRev } = useMemo(() => {
-    const m = new Date().toISOString().slice(0,7)
-    const list = sales.filter(s => s.sold_at?.startsWith(m))
-    return { monthSales: list, monthRev: list.reduce((s,x) => s+Number(x.qty)*Number(x.sell_price),0) }
-  }, [sales])
+function BanTab({ sales, stats, onRefresh, onEdit, toast }) {
+  const [view,   setView]   = useState('pending')   // pending | done | all
+  const [search, setSearch] = useState('')
+  const [busy,   setBusy]   = useState(null)
+
   const fmtDate = d => { if(!d) return ''; const [y,mo,day]=d.split('-'); return `${day}/${mo}/${y.slice(2)}` }
+  const today10 = new Date().toISOString().slice(0,10)
+
+  const list = useMemo(() => {
+    let base = view === 'pending' ? stats.pending
+             : view === 'done'    ? stats.done
+             : sales
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      base = base.filter(s =>
+        (s.customer_name || '').toLowerCase().includes(q) ||
+        (s.customer_phone || '').includes(q) ||
+        (s.item_name || '').toLowerCase().includes(q) ||
+        (s.jewelry?.code || '').toLowerCase().includes(q) ||
+        (s.jewelry?.name || '').toLowerCase().includes(q)
+      )
+    }
+    return [...base].sort((a,b) => (b.sold_at||'').localeCompare(a.sold_at||''))
+  }, [sales, stats, view, search])
+
+  const toggle = async (sale, field) => {
+    setBusy(sale.id + field)
+    try {
+      await updateSaleStatus(sale.id, field, !sale[field])
+      onRefresh()
+    } catch (err) { toast.error(err.message) }
+    finally { setBusy(null) }
+  }
+
+  const handleDelete = async (sale) => {
+    if (!confirm('Xoá đơn này? Hàng có sẵn đã giao sẽ được hoàn về kho.')) return
+    try { await deleteSale(sale.id); toast.success('Đã xoá đơn'); onRefresh() }
+    catch (err) { toast.error(err.message) }
+  }
 
   return (
     <>
+      {/* Stats */}
       <div className="grid grid-cols-2 gap-2 p-3">
         <div className="bg-white rounded-xl border border-gray-100 p-3">
-          <div className="text-[10px] text-gray-500">Tháng này</div>
-          <div className="text-lg font-semibold text-green-600 mt-0.5">{fmtMoney(monthRev)}</div>
+          <div className="text-[10px] text-gray-500">Thực thu tháng</div>
+          <div className="text-lg font-semibold text-green-600 mt-0.5">{fmtMoney(stats.monthActual)}</div>
+          {stats.monthRevenue > stats.monthActual && (
+            <div className="text-[9px] text-gray-400">/{fmtMoney(stats.monthRevenue)} ghi nhận</div>
+          )}
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-3">
-          <div className="text-[10px] text-gray-500">Số đơn</div>
-          <div className="text-lg font-semibold text-purple-600 mt-0.5">{monthSales.length}</div>
+          <div className="text-[10px] text-gray-500">Khách còn nợ</div>
+          <div className={`text-lg font-semibold mt-0.5 ${stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'}`}>
+            {fmtMoney(stats.totalDebt)}
+          </div>
         </div>
       </div>
-      <div className="px-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">Lịch sử bán</div>
-      {sales.length === 0 ? (
-        <div className="text-center py-10 text-gray-400 text-sm">Chưa có đơn bán nào</div>
-      ) : sales.map(s => (
-        <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
-              <Tag size={13} className="text-green-600"/>
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-gray-800 truncate">
-                {s.jewelry?.code}{s.jewelry?.name ? ` · ${s.jewelry.name}` : ''}
+
+      {/* Cảnh báo đơn trễ hẹn */}
+      {stats.overdueCount > 0 && (
+        <div className="mx-3 mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
+          <AlertCircle size={15} className="text-amber-600 flex-shrink-0"/>
+          <span className="text-xs text-amber-800 flex-1">
+            {stats.overdueCount} đơn quá hẹn giao
+          </span>
+          <button onClick={() => setView('pending')} className="text-[10px] font-semibold text-amber-700">
+            Xem
+          </button>
+        </div>
+      )}
+
+      {/* Search */}
+      <div className="px-3 pb-2 bg-white border-b border-gray-100">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Tìm khách, SĐT, tên hàng..."
+            className="w-full pl-8 pr-8 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50
+              focus:outline-none focus:border-purple-400"/>
+          {search && (
+            <button onClick={()=>setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 p-0.5">
+              <X size={13}/>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* View tabs */}
+      <div className="flex bg-white border-b border-gray-100">
+        {[
+          ['pending', `Đang xử lý (${stats.pendingCount})`],
+          ['done',    `Hoàn tất (${stats.done.length})`],
+          ['all',     `Tất cả (${sales.length})`],
+        ].map(([id, label]) => (
+          <button key={id} onClick={() => setView(id)}
+            className={`flex-1 py-2 text-xs border-b-2
+              ${view===id ? 'border-purple-600 text-purple-600 font-semibold' : 'border-transparent text-gray-400'}`}>
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* Danh sách đơn */}
+      {list.length === 0 ? (
+        <div className="text-center py-12 text-gray-400 text-sm">
+          {view === 'pending' ? 'Không có đơn nào đang xử lý 👍'
+           : search ? `Không tìm thấy "${search}"` : 'Chưa có đơn nào'}
+        </div>
+      ) : list.map(s => {
+        const total   = Number(s.qty) * Number(s.sell_price)
+        const dep     = Number(s.deposit) || 0
+        const owed    = total - dep
+        const isOrder = !s.jewelry_id
+        const late    = !s.delivered && s.due_date && s.due_date < today10
+        const name    = s.jewelry?.code
+          ? `${s.jewelry.code}${s.jewelry.name ? ' · ' + s.jewelry.name : ''}`
+          : (s.item_name || 'Hàng order')
+
+        return (
+          <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-3">
+            <div className="flex gap-3">
+              {/* Ảnh */}
+              <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-purple-50
+                flex items-center justify-center">
+                {(s.item_image || s.jewelry?.image_url)
+                  ? <img src={thumbUrl(s.item_image || s.jewelry.image_url, 120)} alt=""
+                      className="w-full h-full object-cover"/>
+                  : <Diamond size={18} className="text-purple-200"/>
+                }
               </div>
-              <div className="text-[10px] text-gray-400">
-                {fmtDate(s.sold_at)} · {s.customer_name || 'Khách lẻ'} · {s.qty} cái
+
+              <div className="flex-1 min-w-0">
+                {/* Hàng 1: tên + tổng tiền */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-gray-800 truncate">{name}</div>
+                    <div className="text-[10px] text-gray-400">
+                      {s.customer_name || 'Khách lẻ'}
+                      {s.customer_phone && ` · ${s.customer_phone}`}
+                      {' · '}{s.qty} cái
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-xs font-bold text-gray-800">{fmtMoney(total)}</div>
+                    <div className="text-[9px] text-gray-400">{fmtDate(s.sold_at)}</div>
+                  </div>
+                </div>
+
+                {/* Badges */}
+                <div className="flex items-center gap-1 mt-1 flex-wrap">
+                  {isOrder && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600 font-medium">
+                      Order
+                    </span>
+                  )}
+                  {late && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">
+                      Trễ hẹn {fmtDate(s.due_date)}
+                    </span>
+                  )}
+                  {!late && s.due_date && !s.delivered && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Hẹn {fmtDate(s.due_date)}
+                    </span>
+                  )}
+                  {dep > 0 && !s.paid && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">
+                      Cọc {fmtMoney(dep)} · còn {fmtMoney(owed)}
+                    </span>
+                  )}
+                  {!s.paid && dep === 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">
+                      Nợ {fmtMoney(total)}
+                    </span>
+                  )}
+                </div>
+
+                {s.note && <div className="text-[10px] text-gray-400 italic mt-1">💬 {s.note}</div>}
+
+                {/* Tick trạng thái */}
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => toggle(s, 'delivered')} disabled={busy === s.id + 'delivered'}
+                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-semibold flex items-center
+                      justify-center gap-1 active:scale-95 transition-colors border
+                      ${s.delivered
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-white text-gray-400 border-gray-200'}`}>
+                    {s.delivered ? <Check size={11}/> : <Truck size={11}/>}
+                    {s.delivered ? 'Đã giao' : 'Chưa giao'}
+                  </button>
+                  <button onClick={() => toggle(s, 'paid')} disabled={busy === s.id + 'paid'}
+                    className={`flex-1 py-1.5 rounded-lg text-[10px] font-semibold flex items-center
+                      justify-center gap-1 active:scale-95 transition-colors border
+                      ${s.paid
+                        ? 'bg-green-50 text-green-700 border-green-200'
+                        : 'bg-white text-gray-400 border-gray-200'}`}>
+                    {s.paid ? <Check size={11}/> : <Wallet size={11}/>}
+                    {s.paid ? 'Đã thu' : 'Chưa thu'}
+                  </button>
+                  <button onClick={() => onEdit(s)}
+                    className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 active:scale-95">
+                    <Edit2 size={11}/>
+                  </button>
+                  <button onClick={() => handleDelete(s)}
+                    className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-red-400 active:scale-95">
+                    <Trash2 size={11}/>
+                  </button>
+                </div>
               </div>
-            </div>
-            <div className="text-xs font-semibold text-green-600 flex-shrink-0">
-              {fmtMoney(Number(s.qty)*Number(s.sell_price))}
             </div>
           </div>
-          {s.note && <div className="text-[10px] text-gray-400 italic mt-1 pl-9">💬 {s.note}</div>}
-        </div>
-      ))}
+        )
+      })}
+      <div className="h-4"/>
     </>
   )
 }
@@ -643,7 +815,7 @@ function BcTab({ stats }) {
   return (
     <>
       <div className="flex bg-gray-100 rounded-xl p-1 mx-3 mt-3 gap-1">
-        {[['tong','Tổng hợp'],['chay','Bán chạy'],['ton','Tồn lâu'],['xn','Lịch sử bán']].map(([id,label]) => (
+        {[['tong','Tổng hợp'],['no','Công nợ'],['chay','Bán chạy'],['ton','Tồn lâu']].map(([id,label]) => (
           <button key={id} onClick={() => setBcTab(id)}
             className={`flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-colors
               ${bcTab===id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
@@ -656,8 +828,13 @@ function BcTab({ stats }) {
         <>
           <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 overflow-hidden">
             {[
-              ['Doanh thu tháng này', fmtMoney(stats.monthRevenue), 'text-green-600'],
+              ['Thực thu tháng này', fmtMoney(stats.monthActual), 'text-green-600'],
+              ['Ghi nhận tháng này', fmtMoney(stats.monthRevenue), 'text-gray-600'],
               ['Tổng doanh thu', fmtMoney(stats.totalRevenue), 'text-green-600'],
+              ['Khách còn nợ', fmtMoney(stats.totalDebt), stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'],
+              ['Tiền cọc đang giữ', fmtMoney(stats.heldDeposit), 'text-amber-600'],
+              ['Đơn đang xử lý', `${stats.pendingCount} đơn`, stats.pendingCount > 0 ? 'text-blue-600' : 'text-gray-300'],
+              ['Đơn quá hẹn giao', `${stats.overdueCount} đơn`, stats.overdueCount > 0 ? 'text-red-500' : 'text-gray-300'],
               ['Số món đã bán', `${stats.totalSold} món`, 'text-purple-600'],
               ['Còn tồn kho', `${stats.inStock} món`, 'text-amber-600'],
               ['Tồn lâu >30 ngày', `${stats.slowMovingCount} món`, 'text-red-500'],
@@ -758,37 +935,70 @@ function BcTab({ stats }) {
         </>
       )}
 
-      {bcTab === 'xn' && (
+      {bcTab === 'no' && (
         <>
           <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 overflow-hidden">
             <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
-              <span className="text-xs text-gray-500">Tổng bán ra</span>
-              <span className="text-xs font-semibold text-green-600">
-                {stats.totalSold} món · {fmtMoney(stats.totalRevenue)}
+              <span className="text-xs text-gray-500">Tổng công nợ</span>
+              <span className={`text-xs font-semibold ${stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'}`}>
+                {fmtMoney(stats.totalDebt)}
               </span>
             </div>
+            <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
+              <span className="text-xs text-gray-500">Số khách nợ</span>
+              <span className="text-xs font-semibold text-purple-600">{stats.debtors.length} khách</span>
+            </div>
             <div className="flex justify-between px-4 py-2.5">
-              <span className="text-xs text-gray-500">Còn tồn</span>
-              <span className="text-xs font-semibold text-amber-600">{stats.inStock} món</span>
+              <span className="text-xs text-gray-500">Tiền cọc đang giữ</span>
+              <span className="text-xs font-semibold text-amber-600">{fmtMoney(stats.heldDeposit)}</span>
             </div>
           </div>
-          <div className="px-3 mt-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">Lịch sử bán</div>
-          {stats.saleLog.slice(0,30).map((x,i) => (
-            <div key={i} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
-              <div className="w-7 h-7 rounded-full bg-green-50 flex items-center justify-center flex-shrink-0">
-                <ArrowUpCircle size={14} className="text-green-600"/>
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="text-xs font-semibold text-gray-800 truncate">
-                  {x.code}{x.name ? ` · ${x.name}` : ''}
+
+          <div className="px-3 mt-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+            Danh sách khách nợ
+          </div>
+          {stats.debtors.length === 0
+            ? <div className="text-center py-8 text-gray-400 text-sm">Không có khách nào đang nợ 👍</div>
+            : stats.debtors.map((d,i) => (
+              <div key={d.name} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
+                <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center
+                  text-[10px] font-bold text-red-600 flex-shrink-0">
+                  {i+1}
                 </div>
-                <div className="text-[10px] text-gray-400">
-                  {fmtDate(x.date)} · {x.customer || 'Khách lẻ'} · {x.qty} cái
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-gray-800">{d.name}</div>
+                  <div className="text-[10px] text-gray-400">
+                    {d.count} đơn{d.phone ? ` · ${d.phone}` : ''}
+                  </div>
                 </div>
+                <div className="text-sm font-bold text-red-500 flex-shrink-0">{fmtMoney(d.amount)}</div>
               </div>
-              <span className="text-xs font-semibold text-green-600 flex-shrink-0">{fmtMoney(x.revenue)}</span>
-            </div>
-          ))}
+            ))
+          }
+
+          {stats.overdueCount > 0 && (
+            <>
+              <div className="px-3 mt-4 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                Đơn quá hẹn giao
+              </div>
+              {stats.overdue.map(s => (
+                <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
+                  <AlertCircle size={16} className="text-amber-500 flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-gray-800 truncate">
+                      {s.jewelry?.code || s.item_name || 'Hàng order'}
+                    </div>
+                    <div className="text-[10px] text-gray-400">
+                      {s.customer_name || 'Khách lẻ'} · hẹn {fmtDate(s.due_date)}
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-amber-600 flex-shrink-0">
+                    {fmtMoney(Number(s.qty)*Number(s.sell_price))}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
       <div className="h-4"/>
@@ -878,7 +1088,14 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
               <div className="text-xs text-gray-700">{s.customer_name || 'Khách lẻ'} · {s.qty} cái</div>
               <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)}</div>
             </div>
-            <div className="text-xs font-semibold text-green-600">{fmtMoney(Number(s.qty)*Number(s.sell_price))}</div>
+            <div className="text-right flex-shrink-0">
+              <div className="text-xs font-semibold text-green-600">{fmtMoney(Number(s.qty)*Number(s.sell_price))}</div>
+              {(!s.delivered || !s.paid) && (
+                <div className="text-[9px] text-amber-600">
+                  {!s.delivered && 'Chưa giao'}{!s.delivered && !s.paid && ' · '}{!s.paid && 'Chưa thu'}
+                </div>
+              )}
+            </div>
             <button onClick={async () => {
               if (!confirm('Xoá lần bán này?')) return
               try { await deleteSale(s.id); onDelete() } catch {}
@@ -1233,6 +1450,23 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
 
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
 
+  const onSuppInput = (v) => {
+    f('supplier_name', v)
+    if (!v.trim()) { setAcSupp(false); return }
+    const q = v.toLowerCase()
+    setAcList(suppliers.filter(s => s.name.toLowerCase().includes(q)))
+    setAcSupp(true)
+  }
+
+  const selectSupp = (supp) => {
+    setForm(prev => ({
+      ...prev,
+      supplier_name:    supp.name,
+      supplier_contact: supp.contact || prev.supplier_contact,
+    }))
+    setAcSupp(false)
+  }
+
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : 'Thêm trang sức'}>
       <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[70vh]">
@@ -1366,112 +1600,315 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
 }
 
 // ============================================
-// SALE FORM
+// SALE FORM — tạo / sửa đơn (có sẵn hoặc order)
 // ============================================
-function SaleForm({ isOpen, item, customerNames, onClose, onSaved, toast }) {
-  const [form,   setForm]   = useState({ qty:1, sell_price:'', customer_name:'', note:'', sold_at:'' })
-  const [saving, setSaving] = useState(false)
-  const [acShow, setAcShow] = useState(false)
-  const [acList, setAcList] = useState([])
-  const custRef = useRef()
+function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose, onSaved, toast }) {
+  const EMPTY = {
+    mode: 'stock',          // stock | order
+    jewelry_id: '', item_name: '',
+    qty: 1, sell_price: '', deposit: '',
+    customer_name: '', customer_phone: '',
+    due_date: '', note: '', sold_at: '',
+    delivered: true, paid: true,
+  }
+  const [form,    setForm]    = useState(EMPTY)
+  const [saving,  setSaving]  = useState(false)
+  const [acShow,  setAcShow]  = useState(false)
+  const [acList,  setAcList]  = useState([])
+  const [pickOpen,setPickOpen]= useState(false)
+  const [imgFile, setImgFile] = useState(null)
+  const [imgPrev, setImgPrev] = useState(null)
+  const [resizing,setResizing]= useState(false)
+  const fileRef = useRef()
+
+  const picked = form.jewelry_id ? jewelry.find(j => j.id === form.jewelry_id) : null
 
   useEffect(() => {
-    if (!isOpen) return
-    setForm({ qty:1, sell_price: item?.sell_price||'', customer_name:'', note:'', sold_at: getLocalDateString() })
-    setAcShow(false)
-  }, [isOpen, item])
+    if (!isOpen) { setAcShow(false); setPickOpen(false); return }
+    if (editSale) {
+      setForm({
+        mode: editSale.jewelry_id ? 'stock' : 'order',
+        jewelry_id:     editSale.jewelry_id || '',
+        item_name:      editSale.item_name || '',
+        qty:            editSale.qty || 1,
+        sell_price:     String(editSale.sell_price || ''),
+        deposit:        String(editSale.deposit || ''),
+        customer_name:  editSale.customer_name || '',
+        customer_phone: editSale.customer_phone || '',
+        due_date:       editSale.due_date || '',
+        note:           editSale.note || '',
+        sold_at:        editSale.sold_at || getLocalDateString(),
+        delivered:      editSale.delivered ?? true,
+        paid:           editSale.paid ?? true,
+      })
+      setImgPrev(editSale.item_image || null)
+    } else if (item) {
+      setForm({ ...EMPTY, mode: 'stock', jewelry_id: item.id,
+        sell_price: String(item.sell_price || ''), sold_at: getLocalDateString() })
+      setImgPrev(null)
+    } else {
+      setForm({ ...EMPTY, sold_at: getLocalDateString() })
+      setImgPrev(null)
+    }
+    setImgFile(null)
+  }, [isOpen, item, editSale])
+
+  const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
 
   const onCustInput = (v) => {
-    setForm(p => ({ ...p, customer_name: v }))
+    f('customer_name', v)
     if (!v.trim()) { setAcShow(false); return }
     setAcList(customerNames.filter(n => n.toLowerCase().includes(v.toLowerCase())))
     setAcShow(true)
   }
 
-  const totalPrice = Number(form.qty||1) * Number(form.sell_price||0)
+  const handleFile = async (e) => {
+    const file = e.target.files?.[0]; if (!file) return
+    setResizing(true)
+    try {
+      const blob = await resizeImage(file, 800, 0.75)
+      setImgFile(new File([blob], file.name, { type: 'image/jpeg' }))
+      setImgPrev(URL.createObjectURL(blob))
+    } catch { toast.error('Lỗi xử lý ảnh') }
+    finally { setResizing(false) }
+  }
+
+  const total = Number(form.qty || 1) * Number(form.sell_price || 0)
+  const owed  = total - (Number(form.deposit) || 0)
 
   const handleSubmit = async () => {
-    if (!item) { toast.error('Chưa chọn sản phẩm'); return }
+    if (form.mode === 'stock' && !form.jewelry_id) { toast.error('Chọn sản phẩm trong kho'); return }
+    if (form.mode === 'order' && !form.item_name.trim()) { toast.error('Nhập tên hàng'); return }
     if (!form.sell_price) { toast.error('Nhập giá bán'); return }
+
     setSaving(true)
     try {
-      await createSale({ ...form, jewelry_id: item.id, qty: Number(form.qty)||1, sell_price: Number(form.sell_price) })
-      toast.success('Đã ghi nhận bán')
+      if (editSale) {
+        await updateSale(editSale.id, form)
+        toast.success('Đã cập nhật đơn')
+      } else {
+        let item_image = null
+        if (imgFile) {
+          try { item_image = await uploadImage(imgFile, form.item_name.trim() || 'order') }
+          catch { toast.error('Ảnh chưa lưu được — đơn vẫn được tạo') }
+        }
+        await createSale({
+          ...form,
+          jewelry_id: form.mode === 'stock' ? form.jewelry_id : null,
+          item_name:  form.mode === 'order' ? form.item_name : null,
+          item_image,
+        })
+        toast.success('Đã tạo đơn')
+      }
       onSaved()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    } catch (err) { toast.error(err.message) }
     finally { setSaving(false) }
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Ghi nhận bán">
-      <div className="px-5 pb-6 space-y-3">
-        {item && (
-          <div className="bg-purple-50 rounded-xl px-4 py-2.5 text-xs text-purple-700">
-            <span className="font-semibold">{item.code}</span>
-            {item.name && ` · ${item.name}`}
-            {item.size && <span className="ml-1 px-1.5 py-0.5 bg-purple-100 rounded-full">{item.size}</span>}
-            {' · '}Còn {item.stock_qty} cái
+    <Modal isOpen={isOpen} onClose={onClose} title={editSale ? 'Sửa đơn' : 'Đơn hàng mới'}>
+      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[75vh]">
+
+        {/* Chọn loại hàng */}
+        {!editSale && (
+          <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
+            {[['stock','Hàng có sẵn'],['order','Hàng order']].map(([id,label]) => (
+              <button key={id} onClick={() => { f('mode', id); f('jewelry_id',''); f('item_name','') }}
+                className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
+                  ${form.mode===id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
+                {label}
+              </button>
+            ))}
           </div>
         )}
-        <div className="relative" ref={custRef}>
+
+        {/* Hàng có sẵn: chọn SP */}
+        {form.mode === 'stock' && (
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Sản phẩm *</label>
+            {picked ? (
+              <div onClick={() => !editSale && setPickOpen(true)}
+                className="flex items-center gap-2.5 px-3 py-2 bg-purple-50 rounded-xl cursor-pointer">
+                {picked.image_url
+                  ? <img src={thumbUrl(picked.image_url,80)} alt="" className="w-9 h-9 rounded-lg object-cover flex-shrink-0"/>
+                  : <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center flex-shrink-0">
+                      <Diamond size={15} className="text-purple-400"/>
+                    </div>}
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-semibold text-purple-800">{picked.code}</div>
+                  <div className="text-[10px] text-purple-500">
+                    {picked.name}{picked.size ? ` · size ${picked.size}` : ''} · Còn {picked.stock_qty}
+                  </div>
+                </div>
+                {!editSale && <ChevronDown size={14} className="text-purple-400 flex-shrink-0"/>}
+              </div>
+            ) : (
+              <button onClick={() => setPickOpen(true)}
+                className="w-full px-3 py-2.5 border border-dashed border-gray-300 rounded-xl
+                  text-xs text-gray-400 text-left active:scale-98">
+                Bấm để chọn sản phẩm...
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Hàng order: tên + ảnh */}
+        {form.mode === 'order' && (
+          <>
+            <div>
+              <label className="text-[11px] text-gray-500 block mb-1">Tên hàng *</label>
+              <input value={form.item_name} onChange={e=>f('item_name',e.target.value)}
+                placeholder="Nhẫn kim cương 2 carat..."
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+            </div>
+            {!editSale && (
+              <div>
+                <label className="text-[11px] text-gray-500 block mb-1">Ảnh mẫu — tùy chọn</label>
+                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile}/>
+                <div onClick={() => fileRef.current?.click()} className="cursor-pointer">
+                  {imgPrev ? (
+                    <div className="relative w-full aspect-video rounded-xl overflow-hidden">
+                      <img src={imgPrev} alt="" className="w-full h-full object-cover"/>
+                      <div className="absolute bottom-2 right-2 bg-black/50 text-white text-[10px] px-2 py-0.5 rounded-full">
+                        {resizing ? 'Đang xử lý...' : 'Đổi ảnh'}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="w-full h-20 rounded-xl border-2 border-dashed border-gray-200
+                      flex flex-col items-center justify-center gap-1 text-gray-400">
+                      {resizing ? <RefreshCw size={18} className="animate-spin text-purple-400"/>
+                        : <><Camera size={18}/><span className="text-[11px]">Chọn ảnh mẫu</span></>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* Khách hàng */}
+        <div className="border-t border-gray-100 pt-2"/>
+        <div className="relative">
           <label className="text-[11px] text-gray-500 block mb-1">Tên khách</label>
           <input value={form.customer_name} onChange={e=>onCustInput(e.target.value)}
             onFocus={() => form.customer_name && setAcShow(true)}
+            onBlur={() => setTimeout(() => setAcShow(false), 150)}
             placeholder="Gõ tên khách..."
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
-          {acShow && (
-            <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl z-20 shadow-lg mt-0.5 max-h-40 overflow-y-auto">
-              {acList.map(name => (
-                <div key={name} onClick={() => { setForm(p=>({...p,customer_name:name})); setAcShow(false) }}
-                  className="px-3 py-2.5 text-sm text-gray-700 border-b border-gray-100 last:border-0 cursor-pointer hover:bg-gray-50">
-                  {name}
+          {acShow && acList.length > 0 && (
+            <div className="absolute top-full left-0 right-0 bg-white border border-gray-200 rounded-xl
+              z-30 shadow-lg mt-0.5 max-h-40 overflow-y-auto">
+              {acList.map(n => (
+                <div key={n} onMouseDown={() => { f('customer_name', n); setAcShow(false) }}
+                  className="px-3 py-2.5 text-sm text-gray-700 border-b border-gray-100 last:border-0
+                    cursor-pointer hover:bg-purple-50">
+                  {n}
                 </div>
               ))}
-              {form.customer_name && !acList.includes(form.customer_name) && (
-                <div onClick={() => setAcShow(false)}
-                  className="px-3 py-2.5 text-sm text-purple-600 font-medium cursor-pointer hover:bg-purple-50">
-                  + Thêm "{form.customer_name}" mới
-                </div>
-              )}
             </div>
           )}
         </div>
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">SĐT / Zalo — tùy chọn</label>
+          <input type="tel" value={form.customer_phone} onChange={e=>f('customer_phone',e.target.value)}
+            placeholder="0912..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        {/* Tiền */}
+        <div className="border-t border-gray-100 pt-2"/>
         <div className="grid grid-cols-2 gap-2">
           <div>
             <label className="text-[11px] text-gray-500 block mb-1">Số lượng</label>
-            <input type="number" min="1" value={form.qty} onChange={e=>setForm(p=>({...p,qty:e.target.value}))}
+            <input type="number" min="1" value={form.qty} onChange={e=>f('qty',e.target.value)}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
           <div>
             <label className="text-[11px] text-gray-500 block mb-1">Giá bán (đ) *</label>
             <input type="text" inputMode="numeric" value={fmtInput(form.sell_price)}
-              onChange={e=>setForm(p=>({...p,sell_price:parseInput(e.target.value)}))}
+              onChange={e=>f('sell_price', parseInput(e.target.value))}
               placeholder="3.200.000" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
         </div>
-        {totalPrice > 0 && (
-          <div className="text-xs text-center text-purple-600 font-semibold bg-purple-50 rounded-lg py-2">
-            Tổng: {fmtMoney(totalPrice)}
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Tiền cọc (đ) — tùy chọn</label>
+          <input type="text" inputMode="numeric" value={fmtInput(form.deposit)}
+            onChange={e=>f('deposit', parseInput(e.target.value))}
+            placeholder="0" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+        {total > 0 && (
+          <div className="bg-purple-50 rounded-xl py-2 px-3 text-xs text-purple-700 text-center font-semibold">
+            Tổng: {fmtMoney(total)}
+            {Number(form.deposit) > 0 && <span className="font-normal"> · còn lại {fmtMoney(owed)}</span>}
           </div>
         )}
-        <div>
-          <label className="text-[11px] text-gray-500 block mb-1">Ngày bán</label>
-          <input type="date" value={form.sold_at} onChange={e=>setForm(p=>({...p,sold_at:e.target.value}))}
-            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+
+        {/* Ngày */}
+        <div className="border-t border-gray-100 pt-2"/>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Ngày chốt đơn</label>
+            <input type="date" value={form.sold_at} onChange={e=>f('sold_at',e.target.value)}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Hẹn giao — tùy chọn</label>
+            <input type="date" value={form.due_date} onChange={e=>f('due_date',e.target.value)}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
         </div>
+
+        {/* Trạng thái ban đầu */}
+        {!editSale && (
+          <>
+            <div className="border-t border-gray-100 pt-2"/>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Trạng thái</div>
+            <div className="flex gap-2">
+              <button onClick={() => f('delivered', !form.delivered)}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border flex items-center
+                  justify-center gap-1.5 active:scale-95
+                  ${form.delivered ? 'bg-green-50 text-green-700 border-green-200'
+                                   : 'bg-white text-gray-400 border-gray-200'}`}>
+                {form.delivered ? <Check size={13}/> : <Truck size={13}/>}
+                {form.delivered ? 'Đã giao' : 'Chưa giao'}
+              </button>
+              <button onClick={() => f('paid', !form.paid)}
+                className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border flex items-center
+                  justify-center gap-1.5 active:scale-95
+                  ${form.paid ? 'bg-green-50 text-green-700 border-green-200'
+                              : 'bg-white text-gray-400 border-gray-200'}`}>
+                {form.paid ? <Check size={13}/> : <Wallet size={13}/>}
+                {form.paid ? 'Đã thu đủ' : 'Chưa thu'}
+              </button>
+            </div>
+          </>
+        )}
+
         <div>
           <label className="text-[11px] text-gray-500 block mb-1">Ghi chú</label>
-          <input value={form.note} onChange={e=>setForm(p=>({...p,note:e.target.value}))}
-            placeholder="Giảm giá, tặng hộp..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          <input value={form.note} onChange={e=>f('note',e.target.value)}
+            placeholder="Giảm giá, khắc chữ..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
+
         <div className="flex gap-2 pt-1">
-          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            Huỷ
+          </button>
           <button onClick={handleSubmit} disabled={saving || !form.sell_price}
             className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
-            {saving ? '...' : 'Lưu bán'}
+            {saving ? '...' : editSale ? 'Lưu thay đổi' : 'Tạo đơn'}
           </button>
         </div>
       </div>
+
+      {pickOpen && (
+        <PickJewelryModal jewelry={jewelry}
+          onPick={j => {
+            f('jewelry_id', j.id)
+            if (!form.sell_price) f('sell_price', String(j.sell_price || ''))
+            setPickOpen(false)
+          }}
+          onClose={() => setPickOpen(false)}/>
+      )}
     </Modal>
   )
 }

@@ -5,7 +5,7 @@
 import { useState, useMemo } from 'react'
 import { RefreshCw, Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
 import { formatMoney, sumBy } from '../lib/helpers'
-import { setPassword, checkPassword, supabase } from '../lib/supabase'
+import { setPassword, checkPassword, createSession, supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
 
 // Backup tables list
@@ -92,6 +92,7 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
       const valid = await checkPassword(currentPw)
       if (!valid) { toast.error('Mật khẩu hiện tại không đúng'); return }
       await setPassword(newPw)
+      await createSession()   // session cũ gắn với hash cũ → tạo lại
       toast.success('Đã đổi mật khẩu thành công!')
       setCurrentPw(''); setNewPw(''); setConfirmPw(''); setShowSecurity(false)
     } catch (err) {
