@@ -5,11 +5,12 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
   RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle, PackageCheck,
-  ArrowUpCircle, Camera, Clock, BarChart3,
+  Camera, Clock,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
 import { getLocalDateString } from '../lib/helpers'
+import MountsTab from './JewelryMounts'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale, updateSaleStatus, updateSale,
@@ -33,6 +34,9 @@ export default function Jewelry() {
   const [trips,    setTrips]    = useState([])
   const [loading,  setLoading]  = useState(true)
   const [modTab,   setModTab]   = useState('kho')
+  const [khoView,  setKhoView]  = useState('stock')   // stock | incoming
+  const [banView,  setBanView]  = useState('orders')  // orders | customers
+  const [soView,   setSoView]   = useState('report')  // report | trips
   const [detail,   setDetail]   = useState(null)
   const [showAdd,  setShowAdd]  = useState(false)
   const [editing,  setEditing]  = useState(null)
@@ -110,9 +114,9 @@ export default function Jewelry() {
         </div>
         {!detail && (
           <div className="flex border-t border-gray-100 overflow-x-auto" style={{scrollbarWidth:'none'}}>
-            {[['kho','Kho hàng'],['nhap','Nhập hàng'],['ban','Bán hàng'],['khach','Khách'],['bc','Báo cáo'],['trips','Chuyến']].map(([id,label]) => (
+            {[['kho','Kho'],['ban','Bán'],['omau','Ổ mẫu'],['so','Sổ sách']].map(([id,label]) => (
               <button key={id} onClick={() => setModTab(id)}
-                className={`flex-1 min-w-fit px-2 py-2.5 text-xs text-center border-b-2 whitespace-nowrap
+                className={`flex-1 px-2 py-2.5 text-xs text-center border-b-2
                   ${modTab===id ? 'border-purple-600 text-purple-600 font-semibold' : 'border-transparent text-gray-400'}`}>
                 {label}
               </button>
@@ -133,64 +137,85 @@ export default function Jewelry() {
           onEdit={() => { setDetail(null); setEditing(detail); setShowAdd(true) }}
           onDelete={() => { handleDelete(detail); setDetail(null) }}/>
       ) : modTab === 'kho' ? (
-        <KhoTab items={stats.withDays}
-          categories={categories}
-          onSelect={setDetail}
-          onAdd={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
-          onEdit={item => { setEditing(item); setAddMode(item.status || 'in_stock'); setShowAdd(true) }}
-          onDelete={handleDelete}
-          activeTrip={activeTrip}
-          onPickTrip={() => setShowTripPicker(true)}
-          onEndTrip={handleEndTrip}/>
-      ) : modTab === 'nhap' ? (
-        <NhapTab stats={stats} sales={sales}
-          onAdd={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
-          onEdit={item => { setEditing(item); setAddMode('ordered'); setShowAdd(true) }}
-          onDelete={handleDelete}
-          onRefresh={loadData}
-          toast={toast}/>
+        <>
+          <SubFilter value={khoView} onChange={setKhoView} options={[
+            ['stock',    `Trong kho (${stats.inStock})`],
+            ['incoming', `Đang về (${stats.incomingCount})`],
+          ]}/>
+          {khoView === 'stock' ? (
+            <KhoTab items={stats.withDays}
+              categories={categories}
+              onSelect={setDetail}
+              onAdd={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
+              onEdit={item => { setEditing(item); setAddMode(item.status || 'in_stock'); setShowAdd(true) }}
+              onDelete={handleDelete}
+              activeTrip={activeTrip}
+              onPickTrip={() => setShowTripPicker(true)}
+              onEndTrip={handleEndTrip}/>
+          ) : (
+            <NhapTab stats={stats} sales={sales}
+              onAdd={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
+              onEdit={item => { setEditing(item); setAddMode('ordered'); setShowAdd(true) }}
+              onDelete={handleDelete}
+              onRefresh={loadData}
+              toast={toast}/>
+          )}
+        </>
       ) : modTab === 'ban' ? (
-        <BanTab sales={sales} stats={stats}
-          onRefresh={loadData}
-          onEdit={s => setEditSale(s)}
-          toast={toast}/>
-      ) : modTab === 'khach' ? (
-        <KhachTab customers={stats.customers}
-          sales={sales}
-          customerNotes={customerNotes}
-          onNoteSaved={async (name, note) => {
-            try {
-              await saveCustomerNote(name, note)
-              const updated = await getCustomerNotes()
-              setCustomerNotes(updated)
-            } catch { toast.error('Lỗi lưu ghi chú') }
-          }}/>
-      ) : modTab === 'trips' ? (
-        <TripsTab trips={trips} jewelry={jewelry}
-          activeTrip={activeTrip}
-          onSelect={handleSetTrip}
-          onRefresh={loadData}
-          toast={toast}/>
+        <>
+          <SubFilter value={banView} onChange={setBanView} options={[
+            ['orders',    `Đơn hàng (${sales.length})`],
+            ['customers', `Khách (${stats.customers.length})`],
+          ]}/>
+          {banView === 'orders' ? (
+            <BanTab sales={sales} stats={stats}
+              onRefresh={loadData}
+              onEdit={s => setEditSale(s)}
+              toast={toast}/>
+          ) : (
+            <KhachTab customers={stats.customers}
+              sales={sales}
+              customerNotes={customerNotes}
+              onNoteSaved={async (name, note) => {
+                try {
+                  await saveCustomerNote(name, note)
+                  const updated = await getCustomerNotes()
+                  setCustomerNotes(updated)
+                } catch { toast.error('Lỗi lưu ghi chú') }
+              }}/>
+          )}
+        </>
+      ) : modTab === 'omau' ? (
+        <MountsTab toast={toast}/>
       ) : (
-        <BcTab stats={stats}/>
+        <>
+          <SubFilter value={soView} onChange={setSoView} options={[
+            ['report', 'Báo cáo'],
+            ['trips',  `Chuyến (${trips.length})`],
+          ]}/>
+          {soView === 'report'
+            ? <BcTab stats={stats}/>
+            : <TripsTab trips={trips} jewelry={jewelry}
+                activeTrip={activeTrip}
+                onSelect={handleSetTrip}
+                onRefresh={loadData}
+                toast={toast}/>}
+        </>
       )}
 
       {/* FAB */}
-      {!detail && modTab === 'nhap' && (
-        <button onClick={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
-          className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
-          style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
-          <Plus size={22}/>
-        </button>
-      )}
       {!detail && modTab === 'kho' && (
-        <button onClick={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
+        <button onClick={() => {
+            setEditing(null)
+            setAddMode(khoView === 'incoming' ? 'ordered' : 'in_stock')
+            setShowAdd(true)
+          }}
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
           <Plus size={22}/>
         </button>
       )}
-      {!detail && modTab === 'ban' && (
+      {!detail && modTab === 'ban' && banView === 'orders' && (
         <button onClick={() => setSellItem('new')}
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
@@ -229,6 +254,25 @@ export default function Jewelry() {
         onClose={() => setShowTripPicker(false)}
         onCreated={async (trip) => { await loadData(); handleSetTrip(trip) }}
         toast={toast}/>
+    </div>
+  )
+}
+
+// ============================================
+// SUB FILTER — nút lọc trong tab
+// ============================================
+function SubFilter({ value, onChange, options }) {
+  return (
+    <div className="flex gap-2 px-3 py-2 bg-white border-b border-gray-100">
+      {options.map(([id, label]) => (
+        <button key={id} onClick={() => onChange(id)}
+          className={`flex-1 py-2 rounded-xl text-[11px] font-medium border transition-colors active:scale-98
+            ${value === id
+              ? 'bg-purple-600 text-white border-purple-600 font-semibold'
+              : 'bg-white text-gray-500 border-gray-200'}`}>
+          {label}
+        </button>
+      ))}
     </div>
   )
 }

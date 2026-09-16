@@ -579,3 +579,86 @@ export function fmtInput(val) {
 export function parseInput(val) {
   return String(val ?? '').replace(/\D/g, '')
 }
+
+// ============================================
+// Ổ MẪU (mounts)
+// ============================================
+export const MOUNT_TYPES = ['Ổ nhẫn', 'Khuyên tai', 'Vòng', 'Lắc', 'Mặt dây', 'Khác']
+export const GOLD_TYPES  = ['18k', '24k', '14k', '10k', 'Bạc 925', 'Khác']
+
+export async function getMounts() {
+  const { data, error } = await supabase
+    .from('jewelry_mounts').select('*').order('created_at', { ascending: false })
+  if (error) throw error
+  return data || []
+}
+
+export async function createMount(m) {
+  const { data, error } = await supabase
+    .from('jewelry_mounts').insert([cleanMount(m)]).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateMount(id, m) {
+  const { data, error } = await supabase
+    .from('jewelry_mounts')
+    .update({ ...cleanMount(m), updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .select().single()
+  if (error) throw error
+  return data
+}
+
+export async function deleteMount(id) {
+  const { data: m } = await supabase
+    .from('jewelry_mounts').select('image_url').eq('id', id).single()
+  if (m?.image_url) {
+    const path = m.image_url.split('/').pop().split('?')[0]
+    await supabase.storage.from(BUCKET).remove([path]).catch(() => {})
+  }
+  const { error } = await supabase.from('jewelry_mounts').delete().eq('id', id)
+  if (error) throw error
+}
+
+function cleanMount(m) {
+  const num = v => (v === '' || v === null || v === undefined) ? null : Number(v)
+  return {
+    name:        m.name.trim(),
+    type:        m.type || 'Ổ nhẫn',
+    image_url:   m.image_url || null,
+    size:        m.size?.trim()       || null,
+    gold_chi:    num(m.gold_chi),
+    gold_gram:   num(m.gold_gram),
+    gold_type:   m.gold_type || '18k',
+    labor_cost:  num(m.labor_cost),
+    stone_count: num(m.stone_count),
+    stone_size:  m.stone_size?.trim() || null,
+    note:        m.note?.trim()       || null,
+  }
+}
+
+// ============================================
+// GIÁ VÀNG (settings key: gold_price)
+// ============================================
+const GOLD_KEY = 'gold_price'
+
+export async function getGoldPrice() {
+  const { data } = await supabase
+    .from('settings').select('value').eq('key', GOLD_KEY).maybeSingle()
+  return Number(data?.value) || 0
+}
+
+export async function saveGoldPrice(price) {
+  const { error } = await supabase.from('settings')
+    .upsert({ key: GOLD_KEY, value: String(Number(price) || 0) }, { onConflict: 'key' })
+  if (error) throw error
+}
+
+// Ước tính giá ổ = vàng + công (chưa tính đá)
+export function estimateMount(mount, goldPrice) {
+  const chi   = Number(mount.gold_chi)   || 0
+  const labor = Number(mount.labor_cost) || 0
+  const gold  = chi * (Number(goldPrice) || 0)
+  return { gold, labor, total: gold + labor }
+}
