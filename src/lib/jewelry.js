@@ -126,12 +126,23 @@ export async function createSale(sale) {
     paid_at:        (sale.paid      ?? true) ? sale.sold_at : null,
   }
 
-  // Hàng có sẵn → trừ kho ngay khi đã giao
-  if (isInStock && row.delivered) {
-    const { data: item, error: ge } = await supabase
-      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+  // Đọc trạng thái món hàng trước — hàng đang về KHÔNG BAO GIỜ được đánh dấu đã giao
+  let stockItem = null
+  if (isInStock) {
+    const { data, error: ge } = await supabase
+      .from('jewelry').select('stock_qty, status').eq('id', sale.jewelry_id).single()
     if (ge) throw ge
-    const currentQty = Number(item.stock_qty) || 0
+    stockItem = data
+    if (stockItem.status === 'ordered' && row.delivered) {
+      // Ép về chưa giao — hàng chưa có trong tay thì không thể giao
+      row.delivered    = false
+      row.delivered_at = null
+    }
+  }
+
+  // Hàng có sẵn trong kho + đã giao → trừ kho ngay
+  if (isInStock && row.delivered) {
+    const currentQty = Number(stockItem.stock_qty) || 0
     if (sellQty > currentQty) throw new Error(`Không đủ hàng — tồn kho chỉ còn ${currentQty} cái`)
 
     const [r1, r2] = await Promise.all([
@@ -146,11 +157,59 @@ export async function createSale(sale) {
     return r1.data
   }
 
-  // Hàng order, hoặc hàng có sẵn nhưng chưa giao → chưa trừ kho
+  // Hàng có sẵn chưa giao, hoặc hàng ĐANG VỀ → chưa trừ kho, nhưng vẫn giới hạn số lượng
+  if (isInStock) {
+    // Đã bán trước bao nhiêu cho món này (các đơn chưa giao)
+    const { data: prev } = await supabase
+      .from('jewelry_sales').select('qty')
+      .eq('jewelry_id', sale.jewelry_id).eq('delivered', false)
+    const soldAhead = (prev || []).reduce((s, x) => s + (Number(x.qty) || 0), 0)
+
+    const limit = Number(stockItem.stock_qty) || 0
+    if (soldAhead + sellQty > limit) {
+      const left = Math.max(0, limit - soldAhead)
+      throw new Error(stockItem.status === 'ordered'
+        ? `Chỉ còn ${left} cái đang về chưa bán — không đặt quá số lượng nhập`
+        : `Chỉ còn ${left} cái — không bán quá tồn kho`)
+    }
+  }
+
   const { data, error } = await supabase
     .from('jewelry_sales').insert([row]).select().single()
   if (error) throw error
   return data
+}
+
+// ============================================
+// NHẬN HÀNG VỀ — đổi status, cập nhật số thực nhận
+// ============================================
+export async function receiveOrder(jewelryId, actualQty) {
+  const { data: item, error: ge } = await supabase
+    .from('jewelry').select('stock_qty, code').eq('id', jewelryId).single()
+  if (ge) throw ge
+
+  const received = Number(actualQty)
+  if (!(received >= 0)) throw new Error('Số lượng thực nhận không hợp lệ')
+
+  // Số đã bán trước (đơn chưa giao)
+  const { data: prev } = await supabase
+    .from('jewelry_sales').select('qty')
+    .eq('jewelry_id', jewelryId).eq('delivered', false)
+  const soldAhead = (prev || []).reduce((s, x) => s + (Number(x.qty) || 0), 0)
+
+  if (received < soldAhead) {
+    throw new Error(`Đã bán trước ${soldAhead} cái — số thực nhận không được nhỏ hơn`)
+  }
+
+  const { error } = await supabase.from('jewelry').update({
+    status:      'in_stock',
+    stock_qty:   received,
+    received_at: new Date().toISOString().slice(0, 10),
+    updated_at:  new Date().toISOString(),
+  }).eq('id', jewelryId)
+  if (error) throw error
+
+  return { received, soldAhead, available: received - soldAhead }
 }
 
 // Tick "đã giao" / "đã thanh toán"
@@ -168,8 +227,10 @@ export async function updateSaleStatus(saleId, field, value) {
   // Khi tick "đã giao" lần đầu cho hàng CÓ SẴN → trừ kho
   if (field === 'delivered' && value && sale.jewelry_id && !sale.delivered) {
     const { data: item, error: ie } = await supabase
-      .from('jewelry').select('stock_qty').eq('id', sale.jewelry_id).single()
+      .from('jewelry').select('stock_qty, status').eq('id', sale.jewelry_id).single()
     if (ie) throw ie
+    if (item.status === 'ordered')
+      throw new Error('Hàng chưa về kho — xác nhận nhận hàng ở tab Nhập hàng trước')
     const currentQty = Number(item.stock_qty) || 0
     const sellQty    = Number(sale.qty) || 1
     if (sellQty > currentQty) throw new Error(`Không đủ hàng — tồn kho chỉ còn ${currentQty} cái`)
@@ -235,18 +296,24 @@ export async function deleteSale(saleId) {
 export async function getJewelryTrips() {
   const { data, error } = await supabase
     .from('jewelry_trips')
-    .select('*, jewelry(id, stock_qty, cost_price)')
+    .select('*, jewelry(id, stock_qty, cost_price, status)')
     .order('trip_date', { ascending: false })
   if (error) throw error
-  return (data || []).map(t => ({
-    ...t,
-    item_count:  t.jewelry?.length || 0,
-    // Giá trị tồn kho hiện tại của chuyến (stock còn × giá vốn)
-    stock_value: (t.jewelry || []).reduce(
-      (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.cost_price)||0), 0
-    ),
-    jewelry: undefined,
-  }))
+  const val = list => list.reduce(
+    (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.cost_price)||0), 0)
+  return (data || []).map(t => {
+    const all = t.jewelry || []
+    const arrived  = all.filter(j => j.status !== 'ordered')
+    const incoming = all.filter(j => j.status === 'ordered')
+    return {
+      ...t,
+      item_count:     arrived.length,
+      incoming_count: incoming.length,
+      stock_value:    val(arrived),
+      incoming_value: val(incoming),
+      jewelry: undefined,
+    }
+  })
 }
 
 export async function createJewelryTrip(trip) {
@@ -299,8 +366,12 @@ export function calcStats(jewelry, sales) {
   const today    = new Date()
   const thisMonth = new Date().toISOString().slice(0, 7)
 
-  const totalItems   = jewelry.length
-  const inStock      = jewelry.filter(j => Number(j.stock_qty) > 0).length
+  // Tách hàng đang về khỏi hàng trong kho
+  const incoming  = jewelry.filter(j => j.status === 'ordered')
+  const inStockJw = jewelry.filter(j => j.status !== 'ordered')
+
+  const totalItems   = inStockJw.length
+  const inStock      = inStockJw.filter(j => Number(j.stock_qty) > 0).length
   const totalSold    = sales.reduce((s, x) => s + Number(x.qty), 0)
   const totalRevenue = sales.reduce((s, x) => s + Number(x.qty) * Number(x.sell_price), 0)
   const monthSales   = sales.filter(s => s.sold_at?.startsWith(thisMonth))
@@ -310,7 +381,7 @@ export function calcStats(jewelry, sales) {
   const monthSalesCount = monthSales.length
 
   // Days in stock
-  const withDays = jewelry.map(j => ({
+  const withDays = inStockJw.map(j => ({
     ...j,
     days_in_stock:   Math.floor((today - new Date(j.created_at)) / 86400000),
     stock_remaining: Number(j.stock_qty) || 0,
@@ -404,9 +475,17 @@ export function calcStats(jewelry, sales) {
     monthRevenue, monthActual, monthSalesCount,
     slowMovingCount: slowMoving.length,
     slowMoving, bestSellers, customers, saleLog, withDays, catRevenue,
-    stockValue: jewelry.reduce(
+    stockValue: inStockJw.reduce(
       (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.sell_price)||0), 0
     ),
+    // Hàng đang về
+    incoming,
+    incomingCount: incoming.length,
+    incomingValue: incoming.reduce(
+      (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.cost_price)||0), 0
+    ),
+    incomingLate: incoming.filter(j =>
+      j.eta_date && j.eta_date < new Date().toISOString().slice(0,10)).length,
     // Đơn hàng
     pending, done, overdue, debtors,
     pendingCount: pending.length,

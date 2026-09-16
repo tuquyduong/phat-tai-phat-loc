@@ -4,7 +4,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
-  RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle,
+  RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle, PackageCheck,
   ArrowUpCircle, Camera, Clock, BarChart3,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
@@ -13,6 +13,7 @@ import { getLocalDateString } from '../lib/helpers'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale, updateSaleStatus, updateSale,
+  receiveOrder,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
   getCustomerNotes, saveCustomerNote,
@@ -37,6 +38,7 @@ export default function Jewelry() {
   const [editing,  setEditing]  = useState(null)
   const [sellItem, setSellItem] = useState(null)
   const [editSale, setEditSale] = useState(null)
+  const [addMode,  setAddMode]  = useState('in_stock')  // in_stock | ordered
   const [activeTrip, setActiveTripState] = useState(() => getActiveTrip())
   const [showTripPicker, setShowTripPicker] = useState(false)
   const [categories,    setCategories]    = useState(DEFAULT_CATEGORIES)
@@ -108,7 +110,7 @@ export default function Jewelry() {
         </div>
         {!detail && (
           <div className="flex border-t border-gray-100 overflow-x-auto" style={{scrollbarWidth:'none'}}>
-            {[['kho','Kho hàng'],['ban','Bán hàng'],['khach','Khách'],['bc','Báo cáo'],['trips','Chuyến']].map(([id,label]) => (
+            {[['kho','Kho hàng'],['nhap','Nhập hàng'],['ban','Bán hàng'],['khach','Khách'],['bc','Báo cáo'],['trips','Chuyến']].map(([id,label]) => (
               <button key={id} onClick={() => setModTab(id)}
                 className={`flex-1 min-w-fit px-2 py-2.5 text-xs text-center border-b-2 whitespace-nowrap
                   ${modTab===id ? 'border-purple-600 text-purple-600 font-semibold' : 'border-transparent text-gray-400'}`}>
@@ -134,12 +136,19 @@ export default function Jewelry() {
         <KhoTab items={stats.withDays}
           categories={categories}
           onSelect={setDetail}
-          onAdd={() => { setEditing(null); setShowAdd(true) }}
-          onEdit={item => { setEditing(item); setShowAdd(true) }}
+          onAdd={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
+          onEdit={item => { setEditing(item); setAddMode(item.status || 'in_stock'); setShowAdd(true) }}
           onDelete={handleDelete}
           activeTrip={activeTrip}
           onPickTrip={() => setShowTripPicker(true)}
           onEndTrip={handleEndTrip}/>
+      ) : modTab === 'nhap' ? (
+        <NhapTab stats={stats} sales={sales}
+          onAdd={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
+          onEdit={item => { setEditing(item); setAddMode('ordered'); setShowAdd(true) }}
+          onDelete={handleDelete}
+          onRefresh={loadData}
+          toast={toast}/>
       ) : modTab === 'ban' ? (
         <BanTab sales={sales} stats={stats}
           onRefresh={loadData}
@@ -167,8 +176,15 @@ export default function Jewelry() {
       )}
 
       {/* FAB */}
+      {!detail && modTab === 'nhap' && (
+        <button onClick={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
+          className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
+          style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
+          <Plus size={22}/>
+        </button>
+      )}
       {!detail && modTab === 'kho' && (
-        <button onClick={() => { setEditing(null); setShowAdd(true) }}
+        <button onClick={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
           <Plus size={22}/>
@@ -186,6 +202,7 @@ export default function Jewelry() {
       <JewelryForm isOpen={showAdd}
         onClose={() => { setShowAdd(false); setEditing(null) }}
         item={editing}
+        mode={addMode}
         trips={trips}
         categories={categories}
         suppliers={suppliers}
@@ -413,6 +430,274 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
         </div>
       )}
     </>
+  )
+}
+
+// ============================================
+// NHẬP HÀNG TAB — hàng đang về
+// ============================================
+function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
+  const [recvItem, setRecvItem] = useState(null)
+  const [search,   setSearch]   = useState('')
+  const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
+  const today10 = new Date().toISOString().slice(0,10)
+
+  const list = useMemo(() => {
+    let base = stats.incoming
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      base = base.filter(j =>
+        j.code.toLowerCase().includes(q) ||
+        j.name?.toLowerCase().includes(q) ||
+        j.supplier_name?.toLowerCase().includes(q) ||
+        j.tracking_number?.toLowerCase().includes(q)
+      )
+    }
+    return [...base].sort((a,b) => (a.eta_date||'9999').localeCompare(b.eta_date||'9999'))
+  }, [stats.incoming, search])
+
+  // Đếm số đã bán trước cho từng món
+  const soldAhead = useMemo(() => {
+    const m = {}
+    sales.filter(s => !s.delivered && s.jewelry_id).forEach(s => {
+      m[s.jewelry_id] = (m[s.jewelry_id] || 0) + (Number(s.qty) || 0)
+    })
+    return m
+  }, [sales])
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2 p-3">
+        <div className="bg-white rounded-xl border border-gray-100 p-3">
+          <div className="text-[10px] text-gray-500">Đang về</div>
+          <div className="text-lg font-semibold text-purple-600 mt-0.5">{stats.incomingCount} món</div>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-3">
+          <div className="text-[10px] text-gray-500">Tiền hàng chờ về</div>
+          <div className="text-lg font-semibold text-amber-600 mt-0.5">{fmtMoney(stats.incomingValue)}</div>
+        </div>
+      </div>
+
+      {stats.incomingLate > 0 && (
+        <div className="mx-3 mb-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-2">
+          <AlertCircle size={15} className="text-amber-600 flex-shrink-0"/>
+          <span className="text-xs text-amber-800 flex-1">{stats.incomingLate} món quá hẹn về</span>
+        </div>
+      )}
+
+      <div className="px-3 pb-2 bg-white border-b border-gray-100">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Tìm mã, tên, NCC, mã vận đơn..."
+            className="w-full pl-8 pr-8 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50
+              focus:outline-none focus:border-purple-400"/>
+          {search && (
+            <button onClick={()=>setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 p-0.5">
+              <X size={13}/>
+            </button>
+          )}
+        </div>
+      </div>
+
+      {list.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <Package size={32} className="mb-2 opacity-30"/>
+          <p className="text-sm">{search ? `Không tìm thấy "${search}"` : 'Không có hàng nào đang về'}</p>
+          {!search && (
+            <button onClick={onAdd} className="mt-3 text-xs text-purple-600 font-semibold">
+              + Thêm hàng đang về
+            </button>
+          )}
+        </div>
+      ) : list.map(j => {
+        const ahead = soldAhead[j.id] || 0
+        const late  = j.eta_date && j.eta_date < today10
+        const cost  = (Number(j.stock_qty)||0) * (Number(j.cost_price)||0)
+
+        return (
+          <div key={j.id} className="bg-white border-b border-gray-100 px-4 py-3">
+            <div className="flex gap-3">
+              <div className="w-12 h-12 rounded-xl overflow-hidden flex-shrink-0 bg-purple-50
+                flex items-center justify-center">
+                {j.image_url
+                  ? <img src={thumbUrl(j.image_url, 120)} alt="" className="w-full h-full object-cover"/>
+                  : <Diamond size={18} className="text-purple-200"/>}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-xs font-semibold text-gray-800 truncate">
+                      {j.code}{j.name ? ` · ${j.name}` : ''}
+                    </div>
+                    <div className="text-[10px] text-gray-400">
+                      {j.stock_qty} cái
+                      {j.supplier_name && ` · ${j.supplier_name}`}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    <div className="text-xs font-bold text-gray-800">{fmtMoney(cost)}</div>
+                    {j.order_date && <div className="text-[9px] text-gray-400">Đặt {fmtDate(j.order_date)}</div>}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-1 mt-1 flex-wrap">
+                  {j.tracking_number && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-700 font-mono">
+                      {j.tracking_number}
+                    </span>
+                  )}
+                  {late && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-600 font-medium">
+                      Quá hẹn {fmtDate(j.eta_date)}
+                    </span>
+                  )}
+                  {!late && j.eta_date && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      Dự kiến {fmtDate(j.eta_date)}
+                    </span>
+                  )}
+                  {j.trip_name && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700">
+                      ✈ {j.trip_name}
+                    </span>
+                  )}
+                  {ahead > 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 font-medium">
+                      Đã bán trước {ahead}
+                    </span>
+                  )}
+                </div>
+
+                {j.note && <div className="text-[10px] text-gray-400 italic mt-1">💬 {j.note}</div>}
+
+                <div className="flex gap-2 mt-2">
+                  <button onClick={() => setRecvItem({ ...j, soldAhead: ahead })}
+                    className="flex-1 py-1.5 rounded-lg text-[10px] font-semibold flex items-center
+                      justify-center gap-1 bg-green-50 text-green-700 border border-green-200 active:scale-95">
+                    <PackageCheck size={11}/> Hàng đã về
+                  </button>
+                  <button onClick={() => onEdit(j)}
+                    className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-gray-400 active:scale-95">
+                    <Edit2 size={11}/>
+                  </button>
+                  <button onClick={() => {
+                      if (ahead > 0 && !confirm(
+                        `"${j.code}" đã bán trước ${ahead} cái.\nXoá món này sẽ xoá cả các đơn đó. Tiếp tục?`
+                      )) return
+                      onDelete(j)
+                    }}
+                    className="px-2.5 py-1.5 rounded-lg border border-gray-200 text-red-400 active:scale-95">
+                    <Trash2 size={11}/>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })}
+
+      <ReceiveModal item={recvItem}
+        onClose={() => setRecvItem(null)}
+        onDone={() => { setRecvItem(null); onRefresh() }}
+        toast={toast}/>
+      <div className="h-4"/>
+    </>
+  )
+}
+
+// ============================================
+// RECEIVE MODAL — xác nhận hàng về
+// ============================================
+function ReceiveModal({ item, onClose, onDone, toast }) {
+  const [qty,    setQty]    = useState(0)
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { if (item) setQty(Number(item.stock_qty) || 0) }, [item])
+
+  if (!item) return null
+
+  const ordered = Number(item.stock_qty) || 0
+  const ahead   = item.soldAhead || 0
+  const short   = ordered - qty
+  const tooFew  = qty < ahead
+
+  const handleConfirm = async () => {
+    setSaving(true)
+    try {
+      const r = await receiveOrder(item.id, qty)
+      toast.success(r.soldAhead > 0
+        ? `${item.code} đã vào kho — còn ${r.available} cái bán được`
+        : `${item.code} đã vào kho`)
+      onDone()
+    } catch (err) { toast.error(err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={!!item} onClose={onClose} title="Xác nhận hàng về">
+      <div className="px-5 pb-6 space-y-3">
+        <div className="text-center">
+          <div className="text-3xl mb-1">📦</div>
+          <div className="text-sm font-semibold text-gray-800">
+            {item.code}{item.name ? ` · ${item.name}` : ''}
+          </div>
+        </div>
+
+        <div className="bg-gray-50 rounded-xl p-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Số lượng đặt</span>
+            <span className="text-sm font-semibold text-gray-800">{ordered} cái</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-500">Thực nhận</span>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setQty(v => Math.max(0, v - 1))}
+                className="w-8 h-8 rounded-lg border border-gray-200 bg-white text-gray-700 text-lg
+                  flex items-center justify-center active:scale-90">−</button>
+              <input type="number" min="0" value={qty}
+                onChange={e => setQty(Math.max(0, Number(e.target.value) || 0))}
+                className="w-16 text-center text-sm font-semibold py-1.5 border border-gray-200 rounded-lg"/>
+              <button onClick={() => setQty(v => v + 1)}
+                className="w-8 h-8 rounded-lg border border-gray-200 bg-white text-gray-700 text-lg
+                  flex items-center justify-center active:scale-90">+</button>
+            </div>
+          </div>
+          {ahead > 0 && (
+            <div className="flex items-center justify-between pt-1 border-t border-gray-200">
+              <span className="text-xs text-gray-500">Đã bán trước</span>
+              <span className="text-sm font-semibold text-amber-600">{ahead} cái</span>
+            </div>
+          )}
+        </div>
+
+        {tooFew && (
+          <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-xl text-[11px] text-red-700 leading-relaxed">
+            Đã bán trước {ahead} cái — số thực nhận không được nhỏ hơn.
+          </div>
+        )}
+        {!tooFew && short > 0 && (
+          <div className="px-3 py-2 bg-amber-50 rounded-xl text-[11px] text-amber-800 leading-relaxed">
+            Thiếu <b>{short}</b> cái so với đơn đặt. Kho ghi nhận đúng {qty} cái thực nhận.
+          </div>
+        )}
+
+        <div className="px-3 py-2 bg-gray-50 rounded-xl text-[11px] text-gray-500 leading-relaxed">
+          Món này chuyển sang <b>Kho hàng</b>, giữ nguyên ảnh, giá, NCC và chuyến.
+          {ahead > 0 && ` ${ahead} cái đã bán trước sẽ tự trừ — còn ${Math.max(0, qty - ahead)} cái bán tiếp.`}
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
+          <button onClick={handleConfirm} disabled={saving || tooFew}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+            {saving ? '...' : 'Xác nhận'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -1201,6 +1486,11 @@ function TripsTab({ trips, jewelry, activeTrip, onSelect, onRefresh, toast }) {
                         {trip.item_count} món
                         {trip.stock_value > 0 && ` · tồn ${fmtMoney(trip.stock_value)}`}
                       </span>
+                      {trip.incoming_count > 0 && (
+                        <span className="text-[10px] text-amber-600 font-medium">
+                          {trip.incoming_count} đang về · {fmtMoney(trip.incoming_value)}
+                        </span>
+                      )}
                     </div>
                     {trip.note && <div className="text-[10px] text-gray-400 italic truncate">{trip.note}</div>}
                   </div>
@@ -1358,11 +1648,12 @@ function TripForm({ onSave, onCancel, initial }) {
 // ============================================
 // JEWELRY FORM (thêm / sửa SP)
 // ============================================
-function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGORIES, suppliers = [], activeTrip, onSaved, toast }) {
+function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categories = DEFAULT_CATEGORIES, suppliers = [], activeTrip, onSaved, toast }) {
   const EMPTY = {
     code:'', category:'Nhẫn', name:'', size:'', stock_qty:1,
     cost_price:'', sell_price:'', supplier_name:'', supplier_contact:'',
-    trip_id:'', note:''
+    trip_id:'', note:'',
+    tracking_number:'', order_date:'', eta_date:'',
   }
   const [form,    setForm]    = useState(EMPTY)
   const [imgFile, setImgFile] = useState(null)
@@ -1381,14 +1672,16 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
         size: item.size||'', stock_qty: item.stock_qty||1, cost_price: item.cost_price||'',
         sell_price: item.sell_price||'', supplier_name: item.supplier_name||'',
         supplier_contact: item.supplier_contact||'', trip_id: item.trip_id||'', note: item.note||'',
+        tracking_number: item.tracking_number||'', order_date: item.order_date||'', eta_date: item.eta_date||'',
       })
       setImgPrev(item.image_url || null)
     } else {
-      setForm({ ...EMPTY, trip_id: activeTrip?.id || '' })
+      setForm({ ...EMPTY, trip_id: activeTrip?.id || '',
+        order_date: mode === 'ordered' ? getLocalDateString() : '' })
       setImgPrev(null)
     }
     setImgFile(null)
-  }, [isOpen, item, activeTrip])
+  }, [isOpen, item, activeTrip, mode])
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
@@ -1428,6 +1721,10 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
         trip_id:          form.trip_id || null,
         note:             form.note.trim() || null,
         image_url,
+        status:           item ? (item.status || 'in_stock') : mode,
+        tracking_number:  form.tracking_number.trim() || null,
+        order_date:       form.order_date || null,
+        eta_date:         form.eta_date   || null,
       }
       if (item) await updateJewelry(item.id, payload)
       else       await createJewelry(payload)
@@ -1449,6 +1746,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
   }
 
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
+  const isOrdered = item ? item.status === 'ordered' : mode === 'ordered'
 
   const onSuppInput = (v) => {
     f('supplier_name', v)
@@ -1468,7 +1766,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
   }
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : 'Thêm trang sức'}>
+    <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : (mode === 'ordered' ? 'Thêm hàng đang về' : 'Thêm trang sức')}>
       <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[70vh]">
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile}/>
         <div onClick={() => fileRef.current?.click()} className="cursor-pointer">
@@ -1515,7 +1813,7 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[11px] text-gray-500 block mb-1">Số lượng</label>
+            <label className="text-[11px] text-gray-500 block mb-1">{isOrdered ? 'Số lượng đặt' : 'Số lượng'}</label>
             <input type="number" value={form.stock_qty} onChange={e=>f('stock_qty',e.target.value)}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
@@ -1561,6 +1859,31 @@ function JewelryForm({ isOpen, onClose, item, trips, categories = DEFAULT_CATEGO
           <input type="tel" value={form.supplier_contact} onChange={e=>f('supplier_contact',e.target.value)}
             placeholder="0912..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
+
+        {isOrdered && (
+          <>
+            <div className="border-t border-gray-100 pt-2"/>
+            <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Thông tin đơn nhập</div>
+            <div>
+              <label className="text-[11px] text-gray-500 block mb-1">Mã vận đơn — tùy chọn</label>
+              <input value={form.tracking_number} onChange={e=>f('tracking_number',e.target.value)}
+                placeholder="SF1234567890"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm font-mono"/>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="text-[11px] text-gray-500 block mb-1">Ngày đặt</label>
+                <input type="date" value={form.order_date} onChange={e=>f('order_date',e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+              </div>
+              <div>
+                <label className="text-[11px] text-gray-500 block mb-1">Dự kiến về</label>
+                <input type="date" value={form.eta_date} onChange={e=>f('eta_date',e.target.value)}
+                  className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+              </div>
+            </div>
+          </>
+        )}
 
         <div className="border-t border-gray-100 pt-2"/>
         <div>
@@ -1621,7 +1944,9 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
   const [resizing,setResizing]= useState(false)
   const fileRef = useRef()
 
-  const picked = form.jewelry_id ? jewelry.find(j => j.id === form.jewelry_id) : null
+  const picked = form.jewelry_id
+    ? (jewelry.find(j => j.id === form.jewelry_id) || item || null)
+    : null
 
   useEffect(() => {
     if (!isOpen) { setAcShow(false); setPickOpen(false); return }
@@ -1644,7 +1969,9 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
       setImgPrev(editSale.item_image || null)
     } else if (item) {
       setForm({ ...EMPTY, mode: 'stock', jewelry_id: item.id,
-        sell_price: String(item.sell_price || ''), sold_at: getLocalDateString() })
+        sell_price: String(item.sell_price || ''), sold_at: getLocalDateString(),
+        // Hàng đang về → không thể giao ngay
+        delivered: item.status !== 'ordered' })
       setImgPrev(null)
     } else {
       setForm({ ...EMPTY, sold_at: getLocalDateString() })
@@ -1737,7 +2064,10 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-semibold text-purple-800">{picked.code}</div>
                   <div className="text-[10px] text-purple-500">
-                    {picked.name}{picked.size ? ` · size ${picked.size}` : ''} · Còn {picked.stock_qty}
+                    {picked.name}{picked.size ? ` · size ${picked.size}` : ''}
+                    {picked.status === 'ordered'
+                      ? ` · Đang về ${picked.stock_qty}`
+                      : ` · Còn ${picked.stock_qty}`}
                   </div>
                 </div>
                 {!editSale && <ChevronDown size={14} className="text-purple-400 flex-shrink-0"/>}
@@ -1863,13 +2193,14 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
             <div className="border-t border-gray-100 pt-2"/>
             <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Trạng thái</div>
             <div className="flex gap-2">
-              <button onClick={() => f('delivered', !form.delivered)}
+              <button onClick={() => picked?.status !== 'ordered' && f('delivered', !form.delivered)}
+                disabled={picked?.status === 'ordered'}
                 className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border flex items-center
-                  justify-center gap-1.5 active:scale-95
+                  justify-center gap-1.5 active:scale-95 disabled:opacity-60
                   ${form.delivered ? 'bg-green-50 text-green-700 border-green-200'
                                    : 'bg-white text-gray-400 border-gray-200'}`}>
                 {form.delivered ? <Check size={13}/> : <Truck size={13}/>}
-                {form.delivered ? 'Đã giao' : 'Chưa giao'}
+                {picked?.status === 'ordered' ? 'Chờ hàng về' : (form.delivered ? 'Đã giao' : 'Chưa giao')}
               </button>
               <button onClick={() => f('paid', !form.paid)}
                 className={`flex-1 py-2.5 rounded-xl text-xs font-semibold border flex items-center
@@ -1903,8 +2234,13 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
       {pickOpen && (
         <PickJewelryModal jewelry={jewelry}
           onPick={j => {
-            f('jewelry_id', j.id)
-            if (!form.sell_price) f('sell_price', String(j.sell_price || ''))
+            setForm(prev => ({
+              ...prev,
+              jewelry_id: j.id,
+              sell_price: prev.sell_price || String(j.sell_price || ''),
+              // Hàng đang về → chưa thể giao ngay
+              delivered:  j.status === 'ordered' ? false : prev.delivered,
+            }))
             setPickOpen(false)
           }}
           onClose={() => setPickOpen(false)}/>
@@ -2028,41 +2364,83 @@ function CategoryManager({ isOpen, categories, jewelry = [], onClose, onSaved, t
 }
 
 // ============================================
-// PICK JEWELRY MODAL
+// PICK JEWELRY MODAL — kho + hàng đang về
 // ============================================
 function PickJewelryModal({ jewelry, onPick, onClose }) {
   const [q, setQ] = useState('')
-  const filtered = jewelry.filter(j =>
+
+  const match = j =>
     j.code.toLowerCase().includes(q.toLowerCase()) ||
-    j.name?.toLowerCase().includes(q.toLowerCase()))
+    j.name?.toLowerCase().includes(q.toLowerCase())
+
+  const inStock  = jewelry.filter(j => j.status !== 'ordered' && j.stock_qty > 0 && match(j))
+  const incoming = jewelry.filter(j => j.status === 'ordered' && match(j))
+  const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}` }
+
+  const Row = ({ j, incoming: inc }) => (
+    <div onClick={() => onPick(j)}
+      className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer active:scale-98 transition-transform
+        ${inc ? 'bg-purple-50 border border-purple-200' : 'active:bg-gray-50'}`}>
+      {j.image_url
+        ? <img src={thumbUrl(j.image_url,80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0"/>
+        : <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0
+            ${inc ? 'bg-purple-100' : 'bg-gray-100'}`}>
+            <Diamond size={16} className={inc ? 'text-purple-400' : 'text-gray-300'}/>
+          </div>}
+      <div className="flex-1 min-w-0">
+        <div className={`text-sm font-semibold ${inc ? 'text-purple-800' : 'text-gray-800'}`}>{j.code}</div>
+        <div className={`text-xs truncate ${inc ? 'text-purple-500' : 'text-gray-500'}`}>
+          {j.name}
+          {j.size ? ` · ${j.size}` : ''}
+          {inc && j.eta_date ? ` · về ${fmtDate(j.eta_date)}` : ''}
+        </div>
+      </div>
+      <div className="text-right flex-shrink-0">
+        <div className={`text-xs font-semibold ${inc ? 'text-purple-600' : 'text-green-600'}`}>
+          {fmtMoney(j.sell_price||0)}
+        </div>
+        <div className={`text-[10px] ${inc ? 'text-purple-500 font-medium' : 'text-gray-400'}`}>
+          {inc ? `Đang về ${j.stock_qty}` : `Còn ${j.stock_qty}`}
+        </div>
+      </div>
+    </div>
+  )
 
   return (
     <Modal isOpen={true} onClose={onClose} title="Chọn sản phẩm">
       <div className="px-4 pb-4">
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Tìm mã hoặc tên..."
           className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm mb-3"/>
-        <div className="space-y-1 max-h-64 overflow-y-auto">
-          {filtered.map(j => (
-            <div key={j.id} onClick={() => onPick(j)}
-              className="flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer active:bg-purple-50">
-              {j.image_url
-                ? <img src={thumbUrl(j.image_url,80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0"/>
-                : <div className="w-10 h-10 rounded-lg bg-purple-50 flex items-center justify-center flex-shrink-0">
-                    <Diamond size={16} className="text-purple-300"/>
-                  </div>
-              }
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-semibold text-gray-800">{j.code}</div>
-                {j.name && <div className="text-xs text-gray-500 truncate">{j.name}</div>}
+
+        <div className="space-y-1 max-h-72 overflow-y-auto">
+          {inStock.length > 0 && (
+            <>
+              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
+                Trong kho
               </div>
-              <div className="text-right flex-shrink-0">
-                <div className="text-xs font-semibold text-green-600">{fmtMoney(j.sell_price||0)}</div>
-                <div className="text-[10px] text-gray-400">Còn {j.stock_qty}</div>
+              {inStock.map(j => <Row key={j.id} j={j}/>)}
+            </>
+          )}
+
+          {incoming.length > 0 && (
+            <>
+              <div className="text-[10px] font-semibold text-purple-400 uppercase tracking-wider px-1 pt-2 pb-1">
+                Đang về — bán trước được
               </div>
-            </div>
-          ))}
-          {filtered.length === 0 && <div className="text-center py-6 text-gray-400 text-sm">Không tìm thấy</div>}
+              {incoming.map(j => <Row key={j.id} j={j} incoming/>)}
+            </>
+          )}
+
+          {inStock.length === 0 && incoming.length === 0 && (
+            <div className="text-center py-6 text-gray-400 text-sm">Không tìm thấy</div>
+          )}
         </div>
+
+        {incoming.length > 0 && (
+          <div className="mt-3 px-3 py-2 bg-amber-50 rounded-xl text-[10px] text-amber-800 leading-relaxed">
+            Bán hàng đang về → đơn tự đánh dấu <b>Chưa giao</b>. Khi hàng về kho, tick giao cho khách.
+          </div>
+        )}
       </div>
     </Modal>
   )
