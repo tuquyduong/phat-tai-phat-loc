@@ -2,10 +2,9 @@
 // HOME PAGE - UPDATED
 // Thêm: Đổi mật khẩu + Backup/Restore
 // ============================================
-import { useState, useMemo } from 'react'
-import { RefreshCw, Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
-import { formatMoney, sumBy } from '../lib/helpers'
-import { setPassword, checkPassword, createSession, supabase } from '../lib/supabase'
+import { useState } from 'react'
+import { Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
+import { setPassword, checkPassword, supabase } from '../lib/supabase'
 import { useToast } from '../components/Toast'
 
 // Backup tables list
@@ -17,7 +16,7 @@ const BACKUP_TABLES = [
   'stocks', 'stock_transactions', 'dividends'
 ]
 
-export default function Home({ orders = [], customers = [], onNavigate, onRefresh, activeModules }) {
+export default function Home({ onNavigate, activeModules }) {
   const toast = useToast()
 
   // Password states
@@ -31,52 +30,13 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
   // Backup states
   const [backupLoading, setBackupLoading] = useState(false)
 
-  // Stats (giữ nguyên)
-  const stats = useMemo(() => {
-    const pending = orders.filter(o => o.status !== 'completed')
-    let totalDebt = 0
-    const debtorSet = new Set()
-    let needDelivery = 0
-
-    pending.forEach(o => {
-      const totalAmount = Number(o.final_amount) || (o.quantity * o.unit_price)
-      const paid = o.payments
-        ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
-        ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
-      const debt = totalAmount - paid
-      if (debt > 0) { totalDebt += debt; debtorSet.add(o.customer_id) }
-      const delivered = sumBy(o.deliveries, 'quantity')
-      if (delivered < o.quantity) needDelivery++
-    })
-
-    return { pendingCount: pending.length, totalDebt, debtorCount: debtorSet.size, needDelivery, totalOrders: orders.length, customerCount: customers.length }
-  }, [orders, customers])
-
-  const alertCount = useMemo(() => {
-    let count = 0
-    const now = new Date()
-    orders.forEach(o => {
-      if (o.status === 'completed') return
-      const days = Math.floor((now - new Date(o.order_date)) / 86400000)
-      const totalAmount = Number(o.final_amount) || (o.quantity * o.unit_price)
-      const paid = o.payments
-        ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
-        ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
-      const delivered = sumBy(o.deliveries, 'quantity')
-      if (delivered < o.quantity && days > 3) count++
-      if (totalAmount - paid > 0 && days > 7) count++
-    })
-    return count
-  }, [orders])
-
   // Module cards (giữ nguyên)
   const modules = [
-    { id: 'orders', icon: '📦', label: 'Đơn hàng', value: `${stats.pendingCount} đơn`, sub: `Công nợ: ${formatMoney(stats.totalDebt)}`, color: '#3B82F6', bg: 'bg-blue-50', border: 'border-blue-200' },
-    { id: 'expenses', icon: '💰', label: 'Thu Chi', value: 'Mở →', sub: 'Quản lý thu chi', color: '#10B981', bg: 'bg-emerald-50', border: 'border-emerald-200' },
-    { id: 'lab', icon: '🧪', label: 'Lab Hub', value: 'Mở →', sub: 'Công thức & Nguyên liệu', color: '#8B5CF6', bg: 'bg-purple-50', border: 'border-purple-200' },
-    { id: 'invest', icon: '📈', label: 'Đầu tư', value: 'Mở →', sub: 'Danh mục chứng khoán', color: '#F59E0B', bg: 'bg-amber-50', border: 'border-amber-200' },
+    { id: 'jewelry',  icon: '💎', label: 'Trang sức', value: 'Mở →', sub: 'Kho, bán hàng, nhập hàng', color: '#8B5CF6', bg: 'bg-purple-50', border: 'border-purple-200' },
+    { id: 'expenses', icon: '💰', label: 'Thu Chi',   value: 'Mở →', sub: 'Quản lý thu chi', color: '#10B981', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+    { id: 'lab',      icon: '🧪', label: 'Lab Hub',   value: 'Mở →', sub: 'Công thức & Nguyên liệu', color: '#3B82F6', bg: 'bg-blue-50', border: 'border-blue-200' },
   ]
-  const visibleModules = modules.filter(m => m.id === 'orders' || activeModules.includes(m.id))
+  const visibleModules = modules.filter(m => activeModules.includes(m.id))
 
   // ============================================
   // ĐỔI MẬT KHẨU
@@ -92,7 +52,6 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
       const valid = await checkPassword(currentPw)
       if (!valid) { toast.error('Mật khẩu hiện tại không đúng'); return }
       await setPassword(newPw)
-      await createSession()   // session cũ gắn với hash cũ → tạo lại
       toast.success('Đã đổi mật khẩu thành công!')
       setCurrentPw(''); setNewPw(''); setConfirmPw(''); setShowSecurity(false)
     } catch (err) {
@@ -189,33 +148,9 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
       <div className="bg-gradient-to-r from-green-500 to-emerald-600 text-white px-4 pt-4 pb-6"
         style={{ borderRadius: '0 0 1.5rem 1.5rem' }}>
         <div className="max-w-2xl mx-auto">
-          <div className="flex items-center justify-between mb-4">
-            <div>
-              <h1 className="text-lg font-bold">Chi Mai</h1>
-              <p className="text-green-200 text-xs">Phát Tài Phát Lộc</p>
-            </div>
-            <button onClick={onRefresh} className="p-2 hover:bg-white/20 rounded-full transition-colors">
-              <RefreshCw size={18} />
-            </button>
-          </div>
-
-          <div className="bg-white/15 rounded-xl p-3 backdrop-blur-sm">
-            <div className="flex items-center justify-between text-center">
-              <div className="flex-1">
-                <p className="text-green-100 text-xs">Đang xử lý</p>
-                <p className="text-xl font-bold">{stats.pendingCount}</p>
-              </div>
-              <div className="w-px h-10 bg-white/30" />
-              <div className="flex-1">
-                <p className="text-green-100 text-xs">Công nợ</p>
-                <p className="text-xl font-bold">{formatMoney(stats.totalDebt)}</p>
-              </div>
-              <div className="w-px h-10 bg-white/30" />
-              <div className="flex-1">
-                <p className="text-green-100 text-xs">Cần xử lý</p>
-                <p className="text-xl font-bold">{alertCount > 0 ? `🔔 ${alertCount}` : '✅ 0'}</p>
-              </div>
-            </div>
+          <div>
+            <h1 className="text-lg font-bold">Chi Mai</h1>
+            <p className="text-green-200 text-xs">Phát Tài Phát Lộc</p>
           </div>
         </div>
       </div>
@@ -234,37 +169,6 @@ export default function Home({ orders = [], customers = [], onNavigate, onRefres
           ))}
         </div>
       </div>
-
-      {/* Alerts */}
-      {alertCount > 0 && (
-        <div className="max-w-2xl mx-auto px-4 mt-4">
-          <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-            <div className="flex items-center justify-between mb-2">
-              <span className="font-bold text-red-700 text-sm">🔔 Cần xử lý ({alertCount})</span>
-              <button onClick={() => onNavigate('orders')} className="text-xs text-red-500 font-bold">Xem đơn hàng →</button>
-            </div>
-            <div className="space-y-1.5">
-              {orders.filter(o => o.status !== 'completed').slice(0, 3).map(o => {
-                const days = Math.floor((new Date() - new Date(o.order_date)) / 86400000)
-                const totalAmount = Number(o.final_amount) || (o.quantity * o.unit_price)
-                const paid = o.payments
-                  ?.filter(p => p.type === 'payment' || p.type === 'balance_used' || !p.type)
-                  ?.reduce((sum, p) => sum + Number(p.amount), 0) || 0
-                const delivered = sumBy(o.deliveries, 'quantity')
-                const hasDeliveryAlert = delivered < o.quantity && days > 3
-                const hasPaymentAlert = totalAmount - paid > 0 && days > 7
-                if (!hasDeliveryAlert && !hasPaymentAlert) return null
-                return (
-                  <div key={o.id} className="text-xs text-red-600">
-                    {hasDeliveryAlert && <p>📦 {o.customer?.name}: chưa giao đủ ({days} ngày)</p>}
-                    {hasPaymentAlert && <p>💰 {o.customer?.name}: nợ {formatMoney(totalAmount - paid)}</p>}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* ============================================ */}
       {/* HỆ THỐNG: Bảo mật + Backup */}

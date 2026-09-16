@@ -5,16 +5,15 @@
 
 const ALL_TABS = [
   { id: 'home', icon: '🏠', label: 'Home' },
-  { id: 'orders', icon: '📦', label: 'Đơn hàng' },
   { id: 'expenses', icon: '💰', label: 'Thu Chi' },
   { id: 'lab', icon: '🧪', label: 'Lab' },
   { id: 'jewelry', icon: '💎', label: 'Trang sức' },
 ]
 
 export default function BottomTabs({ activeTab, onTabChange, activeModules = [] }) {
-  // Luôn hiện Home + Orders, các tab khác tùy thuộc activeModules
+  // Luôn hiện Home, các tab khác tùy thuộc activeModules
   const visibleTabs = ALL_TABS.filter(tab =>
-    tab.id === 'home' || tab.id === 'orders' || activeModules.includes(tab.id)
+    tab.id === 'home' || activeModules.includes(tab.id)
   )
 
   return (

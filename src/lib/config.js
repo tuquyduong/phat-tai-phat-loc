@@ -40,10 +40,10 @@ export async function deleteConfig(id) {
 export async function getActiveModules() {
   try {
     const { data } = await supabase
-      .from('settings').select('value').eq('key', 'active_modules').single()
-    return JSON.parse(data?.value || '["orders","expenses","lab","jewelry"]')
+      .from('settings').select('value').eq('key', 'active_modules').maybeSingle()
+    return JSON.parse(data?.value || '["expenses","lab","jewelry"]')
   } catch {
-    return ['orders', 'expenses', 'lab', 'jewelry']
+    return ['expenses', 'lab', 'jewelry']
   }
 }
 

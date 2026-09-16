@@ -2,7 +2,7 @@
 // APP SHELL - v2 (thêm ToastProvider cho module mới)
 // App.jsx gốc KHÔNG bị sửa
 // ============================================
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import App from './App'
 import { ToastProvider } from './components/Toast'
 import BottomTabs from './components/shared/BottomTabs'
@@ -10,17 +10,15 @@ import Home from './pages/Home'
 import Expenses from './pages/Expenses'
 import Lab from './pages/Lab'
 import Jewelry from './pages/Jewelry'
-import { getOrders, getCustomers, verifySessionDetailed, hasLocalSession } from './lib/supabase'
+import { verifySessionDetailed, hasLocalSession } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
-  const [activeModule, setActiveModule] = useState('orders')
+  const [activeModule, setActiveModule] = useState('home')
   const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
-  const [activeModules, setActiveModulesState] = useState(['orders', 'expenses', 'lab', 'jewelry'])
+  const [activeModules, setActiveModulesState] = useState(['expenses', 'lab', 'jewelry'])
 
-  // Data cho Home page
-  const [orders, setOrders] = useState([])
-  const [customers, setCustomers] = useState([])
+
 
   // Kiểm tra auth từ localStorage
   useEffect(() => {
@@ -66,22 +64,9 @@ export default function AppShell() {
   }, [isAuthenticated])
 
   // Load data cho Home
-  const loadHomeData = useCallback(async () => {
-    try {
-      const [o, c] = await Promise.all([getOrders(), getCustomers()])
-      setOrders(o || [])
-      setCustomers(c || [])
-    } catch {}
-  }, [])
 
-  useEffect(() => {
-    if (isAuthenticated && activeModule === 'home') {
-      loadHomeData()
-    }
-  }, [isAuthenticated, activeModule, loadHomeData])
-
-  // Chưa login hoặc tab Orders → App gốc 100%
-  if (!isAuthenticated || activeModule === 'orders') {
+  // Chưa login → App gốc lo màn đăng nhập
+  if (!isAuthenticated) {
     return (
       <>
         <div className={isAuthenticated ? 'pb-16' : ''}>
@@ -104,10 +89,7 @@ export default function AppShell() {
       case 'home':
         return (
           <Home
-            orders={orders}
-            customers={customers}
             onNavigate={setActiveModule}
-            onRefresh={loadHomeData}
             activeModules={activeModules}
           />
         )
