@@ -2049,28 +2049,35 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
       if (item) {
         await updateJewelry(item.id, payload)
       } else {
-        // Thêm mới → kiểm tra mã đã tồn tại chưa
-        const exist = await findJewelryByCode(payload.code)
+        // Thêm mới → kiểm tra mã đã tồn tại chưa.
+        // Nếu bước này lỗi (mất mạng) thì vẫn thử lưu,
+        // database còn ràng buộc mã duy nhất chặn lần nữa.
+        let exist = null
+        try { exist = await findJewelryByCode(payload.code) }
+        catch { exist = null }
+
         if (exist) {
-          setDupe({ exist, payload })   // mở hộp thoại hỏi
+          setDupe({ exist, payload })   // mở hộp thoại hỏi cộng dồn
           setSaving(false)
           return
         }
         await createJewelry(payload)
       }
       if (imgWarning) toast.error(imgWarning)
-      else            toast.success(item ? 'Đã cập nhật' : 'Đã thêm sản phẩm')
+      else            toast.success(item ? '✓ Đã cập nhật' : '✓ Đã thêm sản phẩm')
       onSaved()
     } catch (err) {
       const m = err.message || ''
       if (/duplicate key|unique constraint/i.test(m))
-        toast.error(`Mã "${form.code.trim()}" đã tồn tại`)
+        toast.error(`✕ Mã "${form.code.trim()}" đã có trong kho — mở lại form để cộng dồn`)
       else if (/check constraint/i.test(m))
-        toast.error('Loại sản phẩm không hợp lệ — cần chạy migration SQL')
+        toast.error('✕ Loại sản phẩm không hợp lệ — cần chạy migration SQL')
       else if (/column .* does not exist/i.test(m))
-        toast.error('Thiếu cột trong database — cần chạy migration SQL')
+        toast.error('✕ Thiếu cột trong database — cần chạy migration SQL')
+      else if (/network|fetch|failed to fetch/i.test(m))
+        toast.error('✕ Mất kết nối — kiểm tra mạng rồi thử lại')
       else
-        toast.error('Lỗi: ' + m)
+        toast.error('✕ Không lưu được: ' + (m || 'lỗi không rõ'))
     }
     finally { setSaving(false) }
   }
@@ -2282,9 +2289,11 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
     setSaving(true)
     try {
       const r = await addStockToExisting(exist.id, addQty, payload)
-      toast.success(`${exist.code}: ${r.oldQty} + ${r.added} = ${r.total} cái`)
+      toast.success(`✓ Đã lưu — ${exist.code}: ${r.oldQty} + ${r.added} = ${r.total} cái`)
       onMerged()
-    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    } catch (err) {
+      toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ'))
+    }
     finally { setSaving(false) }
   }
 
