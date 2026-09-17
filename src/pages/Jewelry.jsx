@@ -9,7 +9,6 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { getLocalDateString } from '../lib/helpers'
 import MountsTab from './JewelryMounts'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
@@ -17,6 +16,8 @@ import {
   receiveOrder,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
+  findJewelryByCode, addStockToExisting,
+  getIntakes, getAllIntakes, groupIntakesByDay, fmtIntakeTime, intakeDate,
   CSV_COLUMNS, downloadCsvTemplate, parseCsv, bulkCreateJewelry,
   getCustomerNotes, saveCustomerNote,
   getSuppliers,
@@ -150,6 +151,7 @@ export default function Jewelry() {
         {!detail && modTab === 'so' && (
           <SubFilter value={soView} onChange={setSoView} options={[
             ['report', 'Báo cáo'],
+            ['intake', 'Sổ nhập'],
             ['trips',  `Chuyến (${trips.length})`],
           ]}/>
         )}
@@ -208,6 +210,8 @@ export default function Jewelry() {
       ) : (
         soView === 'report'
           ? <BcTab stats={stats}/>
+          : soView === 'intake'
+          ? <IntakeTab trips={trips} toast={toast}/>
           : <TripsTab trips={trips} jewelry={jewelry}
               activeTrip={activeTrip}
               onSelect={handleSetTrip}
@@ -322,6 +326,8 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
       case 'stock':   return [...list].sort((a,b) => b.available - a.available)
       case 'price_h': return [...list].sort((a,b) => (b.sell_price||0) - (a.sell_price||0))
       case 'price_l': return [...list].sort((a,b) => (a.sell_price||0) - (b.sell_price||0))
+      case 'fifo':    return [...list].sort((a,b) =>
+        ((a.entry_date || '9999').localeCompare(b.entry_date || '9999')))
       case 'nophoto': return [...list].sort((a,b) =>
         (a.image_url ? 1 : 0) - (b.image_url ? 1 : 0) ||
         new Date(b.created_at) - new Date(a.created_at))
@@ -440,6 +446,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
         <select value={sort} onChange={e => setSort(e.target.value)}
           className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-white text-gray-600">
           <option value="new">Mới nhập trước</option>
+          <option value="fifo">Nhập lâu nhất trước</option>
           <option value="nophoto">Chưa có ảnh trước</option>
           <option value="slow">Tồn lâu nhất</option>
           <option value="stock">Tồn kho nhiều</option>
@@ -809,7 +816,7 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
           {ahead > 0 && ` ${ahead} cái đã bán trước sẽ tự trừ — còn ${Math.max(0, qty - ahead)} cái bán tiếp.`}
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose}
             className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
           <button onClick={handleConfirm} disabled={saving || tooFew}
@@ -1417,6 +1424,13 @@ function BcTab({ stats }) {
 // ============================================
 function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
   const toast = useToast()
+  const [intakes, setIntakes] = useState([])
+
+  useEffect(() => {
+    let alive = true
+    getIntakes(item.id).then(r => { if (alive) setIntakes(r) }).catch(() => {})
+    return () => { alive = false }
+  }, [item.id])
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const sold      = sales.reduce((s,x) => s + Number(x.qty), 0)
   const reserved  = sales.filter(s => !s.delivered).reduce((s,x) => s + Number(x.qty), 0)
@@ -1491,8 +1505,50 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
         </button>
       </div>
 
+      {/* Lịch sử nhập */}
+      {intakes.length > 0 && (
+        <>
+          <div className="px-3 pb-1 pt-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+            Lịch sử nhập ({intakes.length} lần)
+          </div>
+          {intakes.map(r => {
+            const d = intakeDate(r.intake_at).split('-')
+            return (
+              <div key={r.id} className="bg-white border-b border-gray-100 px-4 py-2">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-6 h-6 rounded-full bg-purple-50 flex items-center justify-center flex-shrink-0">
+                    <span className="text-purple-600 text-[11px] font-bold">+</span>
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs text-gray-700">
+                      <b className="text-purple-700">+{r.qty} cái</b>
+                      {r.cost_price ? ` · ${fmtMoney(r.cost_price)}/cái` : ''}
+                    </div>
+                    <div className="text-[10px] text-gray-400">
+                      {d[2]}/{d[1]}/{d[0]?.slice(2)} lúc {fmtIntakeTime(r.intake_at)}
+                      {r.supplier_name ? ` · ${r.supplier_name}` : ''}
+                    </div>
+                  </div>
+                  <div className="text-right flex-shrink-0">
+                    {r.cost_price > 0 && (
+                      <div className="text-xs font-semibold text-purple-600">
+                        {fmtMoney(r.qty * r.cost_price)}
+                      </div>
+                    )}
+                    {r.trip_name && (
+                      <div className="text-[9px] text-green-600">✈ {r.trip_name}</div>
+                    )}
+                  </div>
+                </div>
+                {r.note && <div className="text-[10px] text-gray-400 italic mt-0.5 pl-8">💬 {r.note}</div>}
+              </div>
+            )
+          })}
+        </>
+      )}
+
       {/* Lịch sử bán */}
-      <div className="px-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+      <div className="px-3 pb-1 pt-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
         Lịch sử bán ({sales.length})
       </div>
       {sales.length === 0 ? (
@@ -1527,6 +1583,134 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
       ))}
       <div className="h-4"/>
     </div>
+  )
+}
+
+// ============================================
+// SỔ NHẬP — toàn bộ lần nhập, gộp theo ngày
+// ============================================
+function IntakeTab({ trips, toast }) {
+  const [rows,    setRows]    = useState([])
+  const [loading, setLoading] = useState(true)
+  const [tripId,  setTripId]  = useState('')
+  const [search,  setSearch]  = useState('')
+
+  useEffect(() => {
+    let alive = true
+    setLoading(true)
+    getAllIntakes({ tripId: tripId || undefined, limit: 1000 })
+      .then(r => { if (alive) setRows(r) })
+      .catch(() => toast.error('Lỗi tải sổ nhập'))
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [tripId, toast])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return rows
+    const q = search.toLowerCase()
+    return rows.filter(r =>
+      (r.code || '').toLowerCase().includes(q) ||
+      (r.name || '').toLowerCase().includes(q) ||
+      (r.supplier_name || '').toLowerCase().includes(q)
+    )
+  }, [rows, search])
+
+  const days = useMemo(() => groupIntakesByDay(filtered), [filtered])
+  const totalQty  = filtered.reduce((s,r) => s + (Number(r.qty)||0), 0)
+  const totalCost = filtered.reduce((s,r) => s + (Number(r.qty)||0) * (Number(r.cost_price)||0), 0)
+
+  const fmtDay = d => { if(!d) return ''; const [y,m,dd]=d.split('-'); return `${dd}/${m}/${y}` }
+  const srcLabel = s => ({
+    new:'Thêm mới', merge:'Nhập thêm', csv:'Từ file', receive:'Hàng về', order:'Đặt hàng',
+  })[s] || s
+
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2 p-3">
+        <div className="bg-white rounded-xl border border-gray-100 p-3">
+          <div className="text-[10px] text-gray-500">Tổng nhập</div>
+          <div className="text-lg font-semibold text-purple-600 mt-0.5">{totalQty} cái</div>
+        </div>
+        <div className="bg-white rounded-xl border border-gray-100 p-3">
+          <div className="text-[10px] text-gray-500">Tiền hàng</div>
+          <div className="text-lg font-semibold text-amber-600 mt-0.5">{fmtMoney(totalCost)}</div>
+        </div>
+      </div>
+
+      <div className="px-3 pb-2 bg-white border-b border-gray-100 space-y-2">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Tìm mã, tên, nhà cung cấp..."
+            className="w-full pl-8 pr-8 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50
+              focus:outline-none focus:border-purple-400"/>
+          {search && (
+            <button onClick={()=>setSearch('')} className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 p-0.5">
+              <X size={13}/>
+            </button>
+          )}
+        </div>
+        {trips.length > 0 && (
+          <select value={tripId} onChange={e=>setTripId(e.target.value)}
+            className="w-full px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-gray-600">
+            <option value="">Tất cả chuyến</option>
+            {trips.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+          </select>
+        )}
+      </div>
+
+      {loading ? (
+        <div className="flex items-center justify-center py-16 text-gray-400">
+          <RefreshCw size={22} className="animate-spin"/>
+        </div>
+      ) : days.length === 0 ? (
+        <div className="flex flex-col items-center justify-center py-16 text-gray-400">
+          <Package size={30} className="mb-2 opacity-30"/>
+          <p className="text-sm">{search ? `Không tìm thấy "${search}"` : 'Chưa có lần nhập nào'}</p>
+        </div>
+      ) : days.map(day => (
+        <div key={day.date}>
+          <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-y border-gray-100">
+            <span className="text-[11px] font-semibold text-gray-600">{fmtDay(day.date)}</span>
+            <span className="text-[10px] text-gray-500">
+              {day.totalQty} cái
+              {day.totalCost > 0 && ` · ${fmtMoney(day.totalCost)}`}
+            </span>
+          </div>
+          {day.rows.map(r => (
+            <div key={r.id} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
+              <div className="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0 bg-purple-50
+                flex items-center justify-center">
+                {r.image_url
+                  ? <img src={thumbUrl(r.image_url, 80)} alt="" className="w-full h-full object-cover"/>
+                  : <Diamond size={15} className="text-purple-200"/>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs font-semibold text-gray-800 truncate">
+                  {r.code}{r.name ? ` · ${r.name}` : ''}
+                </div>
+                <div className="text-[10px] text-gray-400 flex items-center gap-1.5 flex-wrap">
+                  <span>{fmtIntakeTime(r.intake_at)}</span>
+                  <span className="px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                    {srcLabel(r.source)}
+                  </span>
+                  {r.supplier_name && <span>{r.supplier_name}</span>}
+                  {r.trip_name && <span className="text-green-600">✈ {r.trip_name}</span>}
+                </div>
+                {r.note && <div className="text-[10px] text-gray-400 italic">💬 {r.note}</div>}
+              </div>
+              <div className="text-right flex-shrink-0">
+                <div className="text-xs font-bold text-purple-700">+{r.qty}</div>
+                {r.cost_price > 0 && (
+                  <div className="text-[10px] text-gray-400">{fmtMoney(r.qty * r.cost_price)}</div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+      <div className="h-4"/>
+    </>
   )
 }
 
@@ -1731,7 +1915,7 @@ function TripForm({ onSave, onCancel, initial }) {
   const [form, setForm] = useState({
     name:        initial?.name || '',
     destination: initial?.destination || '',
-    trip_date:   initial?.trip_date || getLocalDateString(),
+    trip_date:   initial?.trip_date || todayLocal(),
     note:        initial?.note || '',
   })
   const [saving, setSaving] = useState(false)
@@ -1768,7 +1952,8 @@ function TripForm({ onSave, onCancel, initial }) {
           placeholder="Ngân sách, mục tiêu..."
           className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
       </div>
-      <div className="flex gap-2">
+      <div className="sticky bottom-0 -mx-4 px-4 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+        style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
         <button onClick={onCancel} className="flex-1 py-2.5 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
         <button onClick={handleSave} disabled={saving || !form.name.trim()}
           className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
@@ -1796,6 +1981,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
   const [resizing,setResizing]= useState(false)
   const [acSupp,  setAcSupp]  = useState(false)  // autocomplete NCC
   const [acList,  setAcList]  = useState([])
+  const [dupe,    setDupe]    = useState(null)  // SP trùng mã đang hỏi
   const fileRef   = useRef()
 
   useEffect(() => {
@@ -1811,7 +1997,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
       setImgPrev(item.image_url || null)
     } else {
       setForm({ ...EMPTY, trip_id: activeTrip?.id || '',
-        order_date: mode === 'ordered' ? getLocalDateString() : '' })
+        order_date: mode === 'ordered' ? todayLocal() : '' })
       setImgPrev(null)
     }
     setImgFile(null)
@@ -1860,8 +2046,18 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
         order_date:       form.order_date || null,
         eta_date:         form.eta_date   || null,
       }
-      if (item) await updateJewelry(item.id, payload)
-      else       await createJewelry(payload)
+      if (item) {
+        await updateJewelry(item.id, payload)
+      } else {
+        // Thêm mới → kiểm tra mã đã tồn tại chưa
+        const exist = await findJewelryByCode(payload.code)
+        if (exist) {
+          setDupe({ exist, payload })   // mở hộp thoại hỏi
+          setSaving(false)
+          return
+        }
+        await createJewelry(payload)
+      }
       if (imgWarning) toast.error(imgWarning)
       else            toast.success(item ? 'Đã cập nhật' : 'Đã thêm sản phẩm')
       onSaved()
@@ -1901,7 +2097,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={item ? `Sửa ${item.code}` : (mode === 'ordered' ? 'Thêm hàng đang về' : 'Thêm trang sức')}>
-      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[70vh]">
+      <div className="px-5 pb-6 space-y-3">
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile}/>
         <div onClick={() => fileRef.current?.click()} className="cursor-pointer">
           {imgPrev ? (
@@ -2044,7 +2240,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
             placeholder="Size, chất liệu..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
           <button onClick={handleSubmit} disabled={saving || !form.code.trim()}
             className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
@@ -2052,7 +2248,101 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
           </button>
         </div>
       </div>
+
+      {/* Hộp thoại khi mã đã tồn tại */}
+      {dupe && (
+        <DupeCodeDialog
+          exist={dupe.exist}
+          payload={dupe.payload}
+          onCancel={() => setDupe(null)}
+          onMerged={() => { setDupe(null); onSaved() }}
+          toast={toast}/>
+      )}
     </Modal>
+  )
+}
+
+// ============================================
+// HỘP THOẠI MÃ ĐÃ TỒN TẠI
+// ============================================
+function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
+  const [saving, setSaving] = useState(false)
+
+  const addQty  = Number(payload.stock_qty) || 0
+  const oldQty  = Number(exist.stock_qty)   || 0
+  const total   = oldQty + addQty
+
+  const oldCost = Number(exist.cost_price)   || 0
+  const newCost = payload.cost_price != null ? Number(payload.cost_price) : null
+  const avgCost = (newCost != null && total > 0)
+    ? Math.round((oldCost * oldQty + newCost * addQty) / total)
+    : oldCost
+
+  const handleMerge = async () => {
+    setSaving(true)
+    try {
+      const r = await addStockToExisting(exist.id, addQty, payload)
+      toast.success(`${exist.code}: ${r.oldQty} + ${r.added} = ${r.total} cái`)
+      onMerged()
+    } catch (err) { toast.error('Lỗi: ' + err.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-5 bg-black/50">
+      <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3">
+        <div className="text-center">
+          <div className="text-3xl mb-1">📦</div>
+          <div className="text-base font-bold text-gray-800">Mã này đã có trong kho</div>
+          <div className="text-xs text-gray-500 mt-0.5">
+            {exist.code}{exist.name ? ` · ${exist.name}` : ''}
+          </div>
+        </div>
+
+        <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Tồn hiện tại</span>
+            <span className="font-semibold text-gray-800">{oldQty} cái</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Nhập thêm</span>
+            <span className="font-semibold text-purple-600">+{addQty} cái</span>
+          </div>
+          <div className="flex justify-between text-sm pt-1.5 border-t border-gray-200">
+            <span className="font-medium text-gray-700">Sau khi cộng</span>
+            <span className="font-bold text-green-600">{total} cái</span>
+          </div>
+        </div>
+
+        {newCost != null && newCost !== oldCost && (
+          <div className="bg-amber-50 rounded-xl p-3 space-y-1">
+            <div className="text-[11px] font-semibold text-amber-800">Giá vốn tính lại theo bình quân</div>
+            <div className="flex justify-between text-[11px] text-amber-700">
+              <span>Cũ {fmtMoney(oldCost)} × {oldQty} · mới {fmtMoney(newCost)} × {addQty}</span>
+            </div>
+            <div className="flex justify-between text-xs font-semibold text-amber-900">
+              <span>Giá vốn mới</span><span>{fmtMoney(avgCost)}/cái</span>
+            </div>
+          </div>
+        )}
+
+        <div className="text-[11px] text-gray-500 leading-relaxed px-1">
+          Các thông tin khác bạn vừa điền (giá bán, nhà cung cấp, ghi chú, chuyến) sẽ ghi đè lên bản cũ.
+          Ảnh cũ giữ nguyên.
+        </div>
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onCancel} disabled={saving}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            Huỷ
+          </button>
+          <button onClick={handleMerge} disabled={saving}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+            {saving ? 'Đang cộng...' : 'Cộng vào kho'}
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -2103,19 +2393,19 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
         customer_phone: editSale.customer_phone || '',
         due_date:       editSale.due_date || '',
         note:           editSale.note || '',
-        sold_at:        editSale.sold_at || getLocalDateString(),
+        sold_at:        editSale.sold_at || todayLocal(),
         delivered:      editSale.delivered ?? true,
         paid:           editSale.paid ?? true,
       })
       setImgPrev(editSale.item_image || null)
     } else if (item) {
       setForm({ ...EMPTY, mode: 'stock', jewelry_id: item.id,
-        sell_price: String(item.sell_price || ''), sold_at: getLocalDateString(),
+        sell_price: String(item.sell_price || ''), sold_at: todayLocal(),
         // Hàng đang về → không thể giao ngay
         delivered: item.status !== 'ordered' })
       setImgPrev(null)
     } else {
-      setForm({ ...EMPTY, sold_at: getLocalDateString() })
+      setForm({ ...EMPTY, sold_at: todayLocal() })
       setImgPrev(null)
     }
     setImgFile(null)
@@ -2187,7 +2477,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={editSale ? 'Sửa đơn' : 'Đơn hàng mới'}>
-      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[75vh]">
+      <div className="px-5 pb-6 space-y-3">
 
         {/* Chọn loại hàng */}
         {!editSale && (
@@ -2382,7 +2672,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
             placeholder="Giảm giá, khắc chữ..." className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
             Huỷ
           </button>
@@ -2431,8 +2721,10 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
     setUseTrip(true)
   }, [isOpen, defaultStatus])
 
-  const okRows  = rows.filter(r => r.ok)
-  const badRows = rows.filter(r => !r.ok)
+  const okRows    = rows.filter(r => r.ok)
+  const badRows   = rows.filter(r => !r.ok)
+  const newRows   = okRows.filter(r => !r.merge)
+  const mergeRows = okRows.filter(r =>  r.merge)
 
   const handleFile = (e) => {
     const file = e.target.files?.[0]
@@ -2460,18 +2752,19 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
         trip_id: useTrip && activeTrip ? activeTrip.id : null,
       })
       setResult(r)
-      if (r.failed.length === 0) toast.success(`Đã nhập ${r.inserted} sản phẩm`)
-      else                       toast.error(`${r.inserted} thành công, ${r.failed.length} lỗi`)
+      const done = r.inserted + r.merged
+      if (r.failed.length === 0) toast.success(`Xong ${done} dòng`)
+      else                       toast.error(`${done} thành công, ${r.failed.length} lỗi`)
       // Luôn báo cho danh sách tải lại — kể cả khi có dòng lỗi,
       // vì những dòng thành công đã nằm trong kho rồi
-      if (r.inserted > 0) onRefresh()
+      if (r.inserted > 0 || r.merged > 0) onRefresh()
     } catch (e) { toast.error('Lỗi: ' + e.message) }
     finally { setSaving(false) }
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Nhập hàng từ file">
-      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[75vh]">
+      <div className="px-5 pb-6 space-y-3">
 
         <input ref={fileRef} type="file" accept=".csv,text/csv,application/vnd.ms-excel,text/plain"
           className="hidden" onChange={handleFile}/>
@@ -2530,8 +2823,14 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
           <>
             <div className="flex gap-2">
               <div className="flex-1 bg-green-50 rounded-xl px-3 py-2">
-                <div className="text-[10px] text-green-600">Hợp lệ</div>
-                <div className="text-lg font-bold text-green-700">{okRows.length}</div>
+                <div className="text-[10px] text-green-600">Thêm mới</div>
+                <div className="text-lg font-bold text-green-700">{newRows.length}</div>
+              </div>
+              <div className={`flex-1 rounded-xl px-3 py-2 ${mergeRows.length ? 'bg-purple-50' : 'bg-gray-50'}`}>
+                <div className={`text-[10px] ${mergeRows.length ? 'text-purple-600' : 'text-gray-400'}`}>Cộng dồn</div>
+                <div className={`text-lg font-bold ${mergeRows.length ? 'text-purple-700' : 'text-gray-300'}`}>
+                  {mergeRows.length}
+                </div>
               </div>
               <div className={`flex-1 rounded-xl px-3 py-2 ${badRows.length ? 'bg-red-50' : 'bg-gray-50'}`}>
                 <div className={`text-[10px] ${badRows.length ? 'text-red-600' : 'text-gray-400'}`}>Lỗi</div>
@@ -2540,6 +2839,13 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
                 </div>
               </div>
             </div>
+
+            {mergeRows.length > 0 && (
+              <div className="px-3 py-2 bg-purple-50 rounded-xl text-[11px] text-purple-700 leading-relaxed">
+                <b>{mergeRows.length} mã đã có trong kho</b> — số lượng sẽ được cộng thêm vào tồn hiện tại,
+                giá vốn tính lại theo bình quân.
+              </div>
+            )}
 
             {badRows.length > 0 && (
               <div className="bg-red-50 rounded-xl p-2.5 max-h-32 overflow-y-auto">
@@ -2568,6 +2874,11 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
                       <div className="flex justify-between gap-2">
                         <span className="text-[11px] font-semibold text-gray-800 truncate">
                           {r.data.code}{r.data.name ? ` · ${r.data.name}` : ''}
+                          {r.merge && (
+                            <span className="ml-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">
+                              cộng dồn
+                            </span>
+                          )}
                         </span>
                         <span className="text-[11px] text-purple-600 font-medium flex-shrink-0">
                           {r.data.sell_price ? fmtMoney(r.data.sell_price) : '—'}
@@ -2625,7 +2936,9 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
             <div className="bg-green-50 rounded-xl p-3 text-center">
               <div className="text-2xl mb-1">✅</div>
               <div className="text-sm font-semibold text-green-800">
-                Đã nhập {result.inserted} sản phẩm
+                {result.inserted > 0 && `Thêm mới ${result.inserted} sản phẩm`}
+                {result.inserted > 0 && result.merged > 0 && ' · '}
+                {result.merged > 0 && `Cộng dồn ${result.merged} mã`}
               </div>
             </div>
             {result.failed.length > 0 && (
@@ -2643,7 +2956,7 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
           </div>
         )}
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose}
             className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
             {result ? 'Đóng' : 'Huỷ'}
@@ -2651,7 +2964,7 @@ function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeT
           {!result && (
             <button onClick={handleSave} disabled={saving || okRows.length === 0}
               className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-40">
-              {saving ? 'Đang lưu...' : `Lưu ${okRows.length} sản phẩm`}
+              {saving ? 'Đang lưu...' : `Lưu ${okRows.length} dòng`}
             </button>
           )}
         </div>
@@ -2747,7 +3060,7 @@ function CategoryManager({ isOpen, categories, jewelry = [], onClose, onSaved, t
         </div>
 
         {/* Thêm loại mới */}
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <input value={newCat} onChange={e => setNewCat(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAdd()}
             placeholder="Tên loại mới..."
@@ -2759,7 +3072,7 @@ function CategoryManager({ isOpen, categories, jewelry = [], onClose, onSaved, t
           </button>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose}
             className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
             Huỷ
@@ -2791,14 +3104,32 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
   })
   const availOf = j => Math.max(0, (Number(j.stock_qty) || 0) - (reservedMap[j.id] || 0))
 
-  const inStock  = jewelry.filter(j => j.status !== 'ordered' && availOf(j) > 0 && match(j))
-  const incoming = jewelry.filter(j => j.status === 'ordered' && match(j))
+  // Ngày vào kho: ưu tiên ngày nhận hàng, không có thì lấy ngày tạo
+  const entryOf = j => j.received_at || (j.created_at || '').slice(0, 10)
+  const daysOf  = j => {
+    const d = entryOf(j)
+    if (!d) return 0
+    return Math.floor((Date.now() - new Date(d + 'T00:00:00').getTime()) / 86400000)
+  }
+
+  // FIFO — hàng nhập trước xếp lên trước để bán trước
+  const inStock = jewelry
+    .filter(j => j.status !== 'ordered' && availOf(j) > 0 && match(j))
+    .sort((a, b) => (entryOf(a) || '9999').localeCompare(entryOf(b) || '9999'))
+
+  // Hàng đang về: món dự kiến về sớm nhất lên trước
+  const incoming = jewelry
+    .filter(j => j.status === 'ordered' && match(j))
+    .sort((a, b) => (a.eta_date || '9999').localeCompare(b.eta_date || '9999'))
+
   const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}` }
 
-  const Row = ({ j, incoming: inc }) => (
+  const Row = ({ j, incoming: inc, first }) => (
     <div onClick={() => onPick(j)}
       className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer active:scale-98 transition-transform
-        ${inc ? 'bg-purple-50 border border-purple-200' : 'active:bg-gray-50'}`}>
+        ${inc   ? 'bg-purple-50 border border-purple-200'
+        : first ? 'bg-green-50 border border-green-200'
+        :         'active:bg-gray-50'}`}>
       {j.image_url
         ? <img src={thumbUrl(j.image_url,80)} alt="" className="w-10 h-10 rounded-lg object-cover flex-shrink-0"/>
         : <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0
@@ -2812,6 +3143,16 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
           {j.size ? ` · ${j.size}` : ''}
           {inc && j.eta_date ? ` · về ${fmtDate(j.eta_date)}` : ''}
         </div>
+        {!inc && entryOf(j) && (
+          <div className="text-[10px] text-gray-400 mt-0.5 flex items-center gap-1">
+            <span>Nhập {fmtDate(entryOf(j))}</span>
+            {daysOf(j) >= 30 && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 font-medium">
+                tồn {daysOf(j)}n
+              </span>
+            )}
+          </div>
+        )}
       </div>
       <div className="text-right flex-shrink-0">
         <div className={`text-xs font-semibold ${inc ? 'text-purple-600' : 'text-green-600'}`}>
@@ -2833,10 +3174,13 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
         <div className="space-y-1 max-h-72 overflow-y-auto">
           {inStock.length > 0 && (
             <>
-              <div className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 pb-1">
-                Trong kho
+              <div className="flex items-center justify-between px-1 pb-1">
+                <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
+                  Trong kho
+                </span>
+                <span className="text-[9px] text-gray-400">hàng nhập trước xếp trên</span>
               </div>
-              {inStock.map(j => <Row key={j.id} j={j}/>)}
+              {inStock.map((j, i) => <Row key={j.id} j={j} first={i === 0}/>)}
             </>
           )}
 

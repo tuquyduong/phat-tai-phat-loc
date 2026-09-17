@@ -410,7 +410,7 @@ function MountForm({ isOpen, mount, onClose, onSaved, toast }) {
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={mount ? `Sửa ${mount.name}` : 'Thêm ổ mẫu'}>
-      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[72vh]">
+      <div className="px-5 pb-6 space-y-3">
         <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleFile}/>
         <div onClick={() => fileRef.current?.click()} className="cursor-pointer">
           {imgPrev ? (
@@ -510,7 +510,7 @@ function MountForm({ isOpen, mount, onClose, onSaved, toast }) {
             className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
         </div>
 
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
             Huỷ
           </button>
@@ -556,7 +556,7 @@ function GoldPriceModal({ isOpen, price, onClose, onSaved, toast }) {
         <div className="px-3 py-2 bg-gray-50 rounded-xl text-[11px] text-gray-500 leading-relaxed">
           Đặt một lần, mọi ổ mẫu tự tính lại giá ước tính. Đổi khi giá vàng thay đổi.
         </div>
-        <div className="flex gap-2 pt-1">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
             Huỷ
           </button>

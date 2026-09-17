@@ -54,8 +54,9 @@ export default function Modal({ isOpen, onClose, title, children, size = 'md' })
         )}
 
         {/* Body - full scroll area */}
-        <div className="flex-1 overflow-y-auto overscroll-contain"
-          style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        {/* Vùng cuộn. Lề an toàn dưới do hàng nút ghim đáy của từng form tự lo,
+            đặt ở đây nữa sẽ thừa một khoảng trống trên iPhone có thanh gạt. */}
+        <div className="flex-1 overflow-y-auto overscroll-contain">
           {children}
         </div>
       </div>
