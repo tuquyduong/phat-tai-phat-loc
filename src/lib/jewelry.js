@@ -486,7 +486,6 @@ export function calcStats(jewelry, sales) {
   })
 
   const inStock = withDays.filter(j => j.available > 0).length
-  const reservedCount = withDays.filter(j => j.stock_state === 'reserved').length
 
   const slowMoving = withDays
     .filter(j => j.available > 0 && j.days_in_stock >= 30)
@@ -575,7 +574,6 @@ export function calcStats(jewelry, sales) {
     totalItems, inStock, totalSold, totalRevenue,
     monthRevenue, monthActual, monthSalesCount,
     slowMovingCount: slowMoving.length,
-    reservedCount,
     slowMoving, bestSellers, customers, saleLog, withDays, catRevenue,
     stockValue: inStockJw.reduce(
       (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.sell_price)||0), 0

@@ -351,7 +351,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
         {[
           ['Tổng SP', jewelry.length, 'text-purple-600'],
           ['Còn bán được', jewelry.filter(j=>j.available>0).length, 'text-green-600'],
-          ['Chờ giao', jewelry.filter(j=>j.stock_state==='reserved').length, 'text-blue-600'],
+          ['Có đơn chờ giao', jewelry.filter(j=>j.reserved>0).length, 'text-red-600'],
           ['Tồn lâu >30n', jewelry.filter(j=>j.available>0&&j.days_in_stock>=30).length, 'text-amber-600'],
         ].map(([l,v,c]) => (
           <div key={l} className="bg-white rounded-xl border border-gray-100 p-3">
@@ -458,16 +458,18 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
       ) : (
         <div className="grid grid-cols-2 gap-2.5 p-3">
           {filtered.map(item => {
-            const st = item.stock_state
-            const badgeCls =
-              st === 'out'      ? 'bg-red-100 text-red-600'
-            : st === 'reserved' ? 'bg-blue-100 text-blue-700'
-            : item.available <= 1 ? 'bg-amber-100 text-amber-700'
-            :                      'bg-green-100 text-green-700'
-            const badgeText =
-              st === 'out'      ? 'Hết'
-            : st === 'reserved' ? 'Chờ giao'
-            :                     `Còn ${item.available}`
+            const st  = item.stock_state
+            const sold = item.reserved                    // đã bán, chưa giao
+            const total = Number(item.stock_qty) || 0     // tổng còn trong tủ
+            // Có đơn chưa giao → nhãn chính là tỉ lệ đã bán (đỏ)
+            const badgeCls = sold > 0
+              ? 'bg-red-100 text-red-700'
+              : st === 'out'        ? 'bg-red-100 text-red-600'
+              : item.available <= 1 ? 'bg-amber-100 text-amber-700'
+              :                       'bg-green-100 text-green-700'
+            const badgeText = sold > 0
+              ? `Đã bán ${sold}/${total}`
+              : st === 'out' ? 'Hết' : `Còn ${item.available}`
             return (
               <div key={item.id}
                 className={`bg-white rounded-xl overflow-hidden border
@@ -482,9 +484,9 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                   <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${badgeCls}`}>
                     {badgeText}
                   </span>
-                  {st === 'ok' && item.reserved > 0 && (
-                    <span className="absolute top-7 right-1.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
-                      {item.reserved} chờ giao
+                  {sold > 0 && (
+                    <span className="absolute top-7 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
+                      Chờ giao
                     </span>
                   )}
                   {item.is_new ? (
@@ -1450,7 +1452,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
                        const [y,m,dd] = d.split('-'); return dd ? `${dd}/${m}/${y}` : null })()
             : null],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-gray-800' : 'text-red-500'],
-          ['Đã bán, chờ giao', reserved > 0 ? `${reserved} cái` : null, 'text-blue-600'],
+          ['Đã bán, chờ giao', reserved > 0 ? `${reserved}/${item.stock_qty} cái` : null, 'text-red-600'],
           ['Còn bán được', `${available} cái`,
             available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
           ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
