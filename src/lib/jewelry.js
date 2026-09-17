@@ -6,19 +6,54 @@ import { supabase } from './supabase'
 const BUCKET = 'jewelry-images'
 
 // ============================================
-// NGÀY THÁNG THEO GIỜ ĐỊA PHƯƠNG
-// toISOString() trả giờ UTC — ở VN (UTC+7) từ 0h đến 7h sáng
-// sẽ ra ngày HÔM QUA, nên phải tự ghép từ giờ máy.
+// NGÀY GIỜ THEO MÚI GIỜ VIỆT NAM (UTC+7)
+// Ép cố định, không phụ thuộc máy — để khi đi nước ngoài
+// nhập hàng, mốc thời gian vẫn là giờ Việt Nam.
 // ============================================
-export function todayLocal(date = new Date()) {
-  const y = date.getFullYear()
-  const m = String(date.getMonth() + 1).padStart(2, '0')
-  const d = String(date.getDate()).padStart(2, '0')
-  return `${y}-${m}-${d}`
+export const VN_TZ = 'Asia/Ho_Chi_Minh'
+
+// Lấy từng phần ngày giờ theo giờ VN
+function vnParts(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date)
+  if (isNaN(d.getTime())) return null
+  try {
+    const f = new Intl.DateTimeFormat('en-CA', {
+      timeZone: VN_TZ, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+    const o = {}
+    for (const p of f.formatToParts(d)) if (p.type !== 'literal') o[p.type] = p.value
+    // hour có thể là '24' ở một số môi trường → đưa về '00'
+    if (o.hour === '24') o.hour = '00'
+    return o
+  } catch {
+    // Môi trường không hỗ trợ Intl → tự cộng 7 tiếng
+    const t = new Date(d.getTime() + 7 * 3600 * 1000)
+    return {
+      year:  String(t.getUTCFullYear()),
+      month: String(t.getUTCMonth() + 1).padStart(2, '0'),
+      day:   String(t.getUTCDate()).padStart(2, '0'),
+      hour:  String(t.getUTCHours()).padStart(2, '0'),
+      minute:String(t.getUTCMinutes()).padStart(2, '0'),
+    }
+  }
 }
 
+// '2026-09-17' theo giờ VN
+export function todayLocal(date = new Date()) {
+  const p = vnParts(date)
+  return p ? `${p.year}-${p.month}-${p.day}` : ''
+}
+
+// '2026-09' theo giờ VN
 export function monthLocal(date = new Date()) {
   return todayLocal(date).slice(0, 7)
+}
+
+// '14:35' theo giờ VN
+export function timeLocal(date = new Date()) {
+  const p = vnParts(date)
+  return p ? `${p.hour}:${p.minute}` : ''
 }
 
 // ============================================
@@ -92,7 +127,75 @@ export async function createJewelry(item) {
   const { data, error } = await supabase
     .from('jewelry').insert([cleanJewelry(item)]).select().single()
   if (error) throw error
+  // Chỉ ghi sổ khi hàng THỰC SỰ vào kho.
+  // Hàng đang về sẽ được ghi lúc bấm "Hàng đã về" (receiveOrder),
+  // ghi cả hai chỗ sẽ đếm hàng hai lần.
+  if (data.status !== 'ordered') {
+    await logIntake({
+      jewelry_id: data.id, qty: data.stock_qty, cost_price: data.cost_price,
+      supplier_name: data.supplier_name, trip_id: data.trip_id, source: 'new',
+    }).catch(() => {})
+  }
   return data
+}
+
+// Tìm sản phẩm theo mã (không phân biệt hoa thường)
+export async function findJewelryByCode(code) {
+  const c = String(code || '').trim()
+  if (!c) return null
+  const { data } = await supabase
+    .from('jewelry').select('*').ilike('code', c).maybeSingle()
+  return data || null
+}
+
+// Nhập thêm cho mã đã có — cộng dồn tồn, tính lại giá vốn trung bình
+export async function addStockToExisting(id, addQty, newItem = {}) {
+  const { data: cur, error: ge } = await supabase
+    .from('jewelry').select('*').eq('id', id).single()
+  if (ge) throw ge
+
+  const oldQty  = nonNeg(cur.stock_qty)
+  const add     = nonNeg(addQty)
+  const total   = oldQty + add
+
+  // Giá vốn trung bình có trọng số — chỉ tính lại khi lô mới có giá vốn
+  let costPrice = cur.cost_price
+  const newCost = newItem.cost_price != null && newItem.cost_price !== ''
+    ? nonNeg(newItem.cost_price) : null
+  if (newCost != null && total > 0) {
+    const oldCost = nonNeg(cur.cost_price)
+    costPrice = oldQty > 0
+      ? Math.round((oldCost * oldQty + newCost * add) / total)
+      : newCost
+  }
+
+  const patch = {
+    stock_qty:  total,
+    cost_price: costPrice,
+    updated_at: new Date().toISOString(),
+  }
+  // Các trường có điền ở lô mới thì cập nhật đè
+  for (const f of ['sell_price','supplier_name','supplier_contact','note','size','trip_id']) {
+    const v = newItem[f]
+    if (v !== undefined && v !== null && v !== '') patch[f] = v
+  }
+  // Hàng đang về mà nhập thêm vào kho → chuyển thành đã về
+  if (cur.status === 'ordered' && newItem.status === 'in_stock') patch.status = 'in_stock'
+
+  const { data, error } = await supabase
+    .from('jewelry').update(patch).eq('id', id).select().single()
+  if (error) throw error
+  // Cộng dồn vào hàng vẫn đang về → chưa vào kho, chưa ghi sổ
+  if ((patch.status || cur.status) !== 'ordered') {
+    await logIntake({
+      jewelry_id: id, qty: add, cost_price: newCost ?? cur.cost_price,
+      supplier_name: newItem.supplier_name || cur.supplier_name,
+      trip_id: newItem.trip_id || cur.trip_id,
+      source: newItem.source || 'merge',
+      note: newItem.intake_note,
+    }).catch(() => {})
+  }
+  return { item: data, oldQty, added: add, total, oldCost: cur.cost_price, newCost: costPrice }
 }
 
 export async function updateJewelry(id, updates) {
@@ -217,6 +320,7 @@ export async function receiveOrder(jewelryId, actualQty) {
   if (ge) throw ge
 
   const received = Number(actualQty)
+  const oldQtyOrdered = Number(item.stock_qty) || 0
   if (!(received >= 0)) throw new Error('Số lượng thực nhận không hợp lệ')
 
   const soldAhead = await getReserved(jewelryId)
@@ -232,6 +336,16 @@ export async function receiveOrder(jewelryId, actualQty) {
     updated_at:  new Date().toISOString(),
   }).eq('id', jewelryId)
   if (error) throw error
+
+  // Ghi sổ: thời điểm hàng thực sự về kho
+  const { data: full } = await supabase
+    .from('jewelry').select('cost_price, supplier_name, trip_id').eq('id', jewelryId).maybeSingle()
+  await logIntake({
+    jewelry_id: jewelryId, qty: received,
+    cost_price: full?.cost_price, supplier_name: full?.supplier_name,
+    trip_id: full?.trip_id, source: 'receive',
+    note: received !== oldQtyOrdered ? `Đặt ${oldQtyOrdered}, nhận ${received}` : null,
+  }).catch(() => {})
 
   return { received, soldAhead, available: received - soldAhead }
 }
@@ -883,16 +997,17 @@ export function parseCsv(text, { existingCodes = [], categories = [] } = {}) {
     }
 
     const errors = []
+    let merge = false
     if (!code) errors.push('thiếu mã')
-    else if (codeSet.has(code.toLowerCase()))  errors.push('mã đã có trong kho')
-    else if (seen.has(code.toLowerCase()))     errors.push('mã trùng trong file')
+    else if (seen.has(code.toLowerCase()))    errors.push('mã trùng trong file')
+    else if (codeSet.has(code.toLowerCase())) merge = true   // sẽ cộng dồn vào SP có sẵn
     if (code) seen.add(code.toLowerCase())
 
     if (categories.length && data.category && !categories.includes(data.category))
       errors.push(`loại "${data.category}" chưa có`)
     if (data.stock_qty != null && data.stock_qty < 0) errors.push('số lượng âm')
 
-    return { line: i + 2, data, errors, ok: errors.length === 0 }
+    return { line: i + 2, data, errors, merge, ok: errors.length === 0 }
   })
 
   return { rows, error: null }
@@ -900,31 +1015,148 @@ export function parseCsv(text, { existingCodes = [], categories = [] } = {}) {
 
 // Lưu hàng loạt — chia lô để tránh quá tải
 export async function bulkCreateJewelry(rows, { status = 'in_stock', trip_id = null } = {}) {
-  const payload = rows.map(r => cleanJewelry({
-    ...r.data,
-    status,
-    trip_id,
-    image_url: null,
-  }))
+  const newRows   = rows.filter(r => !r.merge)
+  const mergeRows = rows.filter(r =>  r.merge)
 
-  let inserted = 0
+  let inserted = 0, merged = 0
   const failed = []
-  const SIZE = 50
 
+  // --- Nhóm 1: thêm mới ---
+  const payload = newRows.map(r => cleanJewelry({
+    ...r.data, status, trip_id, image_url: null,
+  }))
+  const SIZE = 50
   for (let i = 0; i < payload.length; i += SIZE) {
     const chunk = payload.slice(i, i + SIZE)
-    const { data, error } = await supabase.from('jewelry').insert(chunk).select('id')
+    const { data, error } = await supabase.from('jewelry').insert(chunk).select('id, stock_qty, cost_price, supplier_name, trip_id')
     if (error) {
-      // Lô lỗi → thử từng dòng để biết dòng nào hỏng
       for (const one of chunk) {
-        const { error: e1 } = await supabase.from('jewelry').insert([one])
+        const { data: d1, error: e1 } = await supabase.from('jewelry').insert([one])
+          .select('id, stock_qty, cost_price, supplier_name, trip_id').single()
         if (e1) failed.push({ code: one.code, message: e1.message })
-        else inserted++
+        else { inserted++; if (status !== 'ordered') await logIntake({ ...d1, jewelry_id: d1.id, qty: d1.stock_qty, source: 'csv' }).catch(()=>{}) }
       }
     } else {
       inserted += data?.length || chunk.length
+      if (status !== 'ordered') {
+        for (const d of (data || [])) {
+          await logIntake({ ...d, jewelry_id: d.id, qty: d.stock_qty, source: 'csv' }).catch(()=>{})
+        }
+      }
     }
   }
 
-  return { inserted, failed }
+  // --- Nhóm 2: cộng dồn vào mã đã có ---
+  for (const r of mergeRows) {
+    try {
+      const exist = await findJewelryByCode(r.data.code)
+      if (!exist) {
+        // Mã biến mất giữa chừng → thêm mới
+        const { data: dn, error } = await supabase.from('jewelry')
+          .insert([cleanJewelry({ ...r.data, status, trip_id, image_url: null })])
+          .select('id, stock_qty, cost_price, supplier_name, trip_id').single()
+        if (error) failed.push({ code: r.data.code, message: error.message })
+        else { inserted++; if (status !== 'ordered') await logIntake({ ...dn, jewelry_id: dn.id, qty: dn.stock_qty, source: 'csv' }).catch(()=>{}) }
+        continue
+      }
+      await addStockToExisting(exist.id, r.data.stock_qty, { ...r.data, status, trip_id, source: 'csv' })
+      merged++
+    } catch (e) {
+      failed.push({ code: r.data.code, message: e.message })
+    }
+  }
+
+  return { inserted, merged, failed }
+}
+
+// ============================================
+// SỔ NHẬP HÀNG — ghi nhận mỗi lần nhập
+// Chỉ để tra cứu, KHÔNG tham gia tính tồn kho
+// ============================================
+export async function logIntake({ jewelry_id, qty, cost_price, supplier_name,
+                                  trip_id, source = 'new', note }) {
+  const n = nonNeg(qty)
+  if (!jewelry_id || n <= 0) return null
+  const { data, error } = await supabase.from('jewelry_intakes').insert([{
+    jewelry_id,
+    qty:           n,
+    cost_price:    cost_price != null && cost_price !== '' ? nonNeg(cost_price) : null,
+    supplier_name: supplier_name?.trim() || null,
+    trip_id:       trip_id || null,
+    source,
+    note:          note?.trim() || null,
+    intake_at:     new Date().toISOString(),
+  }]).select().single()
+  if (error) {
+    // Ghi sổ hỏng không được chặn việc nhập hàng
+    console.warn('Không ghi được sổ nhập:', error.message)
+    return null
+  }
+  return data
+}
+
+// Lịch sử nhập của 1 sản phẩm
+export async function getIntakes(jewelryId) {
+  const { data, error } = await supabase
+    .from('jewelry_intakes')
+    .select('*, jewelry_trips(name)')
+    .eq('jewelry_id', jewelryId)
+    .order('intake_at', { ascending: false })
+  if (error) throw error
+  return (data || []).map(r => ({
+    ...r,
+    trip_name: r.jewelry_trips?.name || null,
+    jewelry_trips: undefined,
+  }))
+}
+
+// Toàn bộ sổ nhập, lọc theo khoảng thời gian hoặc chuyến
+export async function getAllIntakes({ from, to, tripId, limit = 300 } = {}) {
+  let q = supabase
+    .from('jewelry_intakes')
+    .select('*, jewelry(code, name, image_url), jewelry_trips(name)')
+    .order('intake_at', { ascending: false })
+    .limit(limit)
+  if (from)   q = q.gte('intake_at', from)
+  if (to)     q = q.lte('intake_at', to)
+  if (tripId) q = q.eq('trip_id', tripId)
+  const { data, error } = await q
+  if (error) throw error
+  return (data || []).map(r => ({
+    ...r,
+    code:      r.jewelry?.code || null,
+    name:      r.jewelry?.name || null,
+    image_url: r.jewelry?.image_url || null,
+    trip_name: r.jewelry_trips?.name || null,
+    jewelry: undefined, jewelry_trips: undefined,
+  }))
+}
+
+export async function deleteIntake(id) {
+  const { error } = await supabase.from('jewelry_intakes').delete().eq('id', id)
+  if (error) throw error
+}
+
+// Gộp theo ngày để hiển thị
+export function groupIntakesByDay(list) {
+  const map = {}
+  list.forEach(r => {
+    // Lấy ngày theo giờ máy, không cắt chuỗi UTC
+    const d = r.intake_at ? todayLocal(new Date(r.intake_at)) : ''
+    if (!map[d]) map[d] = { date: d, rows: [], totalQty: 0, totalCost: 0 }
+    map[d].rows.push(r)
+    map[d].totalQty  += Number(r.qty) || 0
+    map[d].totalCost += (Number(r.qty) || 0) * (Number(r.cost_price) || 0)
+  })
+  return Object.values(map).sort((a, b) => b.date.localeCompare(a.date))
+}
+
+// Giờ:phút theo máy người dùng
+// Ngày của một lần nhập, theo giờ máy
+export function intakeDate(iso) {
+  return iso ? todayLocal(new Date(iso)) : ''
+}
+
+export function fmtIntakeTime(iso) {
+  return iso ? timeLocal(new Date(iso)) : ''
 }

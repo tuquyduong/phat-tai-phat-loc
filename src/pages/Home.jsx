@@ -12,7 +12,7 @@ const BACKUP_TABLES = [
   'customers', 'orders', 'deliveries', 'payments', 'products', 'settings',
   'app_config', 'transactions', 'ingredients', 'formulas', 'formula_ingredients',
   'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
-  'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts',
+  'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
   'stocks', 'stock_transactions', 'dividends'
 ]
 
@@ -110,7 +110,7 @@ export default function Home({ onNavigate, activeModules }) {
           'orders', 'deliveries', 'payments',
           'ingredients', 'formulas', 'formula_ingredients',
           'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
-          'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts',
+          'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
           'stocks', 'stock_transactions', 'dividends', 'transactions'
         ]
 
