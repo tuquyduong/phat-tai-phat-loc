@@ -16,7 +16,7 @@ import DashboardDetail from './components/DashboardDetail'
 import CustomerDetail from './components/CustomerDetail'
 import Reports from './components/Reports'
 import { ToastProvider, useToast } from './components/Toast'
-import { DashboardSkeleton, ListSkeleton } from './components/Skeleton'
+import { ListSkeleton } from './components/Skeleton'
 import PWAInstallPrompt from './components/PWAInstallPrompt'
 
 // Tabs

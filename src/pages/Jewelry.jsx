@@ -22,7 +22,7 @@ import {
   getSuppliers,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
-  calcStats, getCustomerNames, fmtMoney, fmtInput, parseInput,
+  calcStats, getCustomerNames, fmtMoney, fmtInput, parseInput, todayLocal,
 } from '../lib/jewelry'
 
 // ============================================
@@ -80,7 +80,11 @@ export default function Jewelry() {
     setActiveTrip(null); setActiveTripState(null)
   }
   const handleDelete = async (item) => {
-    if (!confirm(`Xoá "${item.code}"? Lịch sử bán sẽ xoá theo.`)) return
+    const pending = sales.filter(s => s.jewelry_id === item.id && !s.delivered)
+    const msg = pending.length > 0
+      ? `Xoá "${item.code}"?\n\nĐang có ${pending.length} đơn CHƯA GIAO cho món này — xoá sẽ mất luôn các đơn đó.`
+      : `Xoá "${item.code}"? Lịch sử bán sẽ xoá theo.`
+    if (!confirm(msg)) return
     try { await deleteJewelry(item.id); toast.success('Đã xoá'); loadData() }
     catch { toast.error('Lỗi') }
   }
@@ -260,6 +264,7 @@ export default function Jewelry() {
         item={sellItem && sellItem !== 'new' ? sellItem : null}
         editSale={editSale}
         jewelry={jewelry}
+        allSales={sales}
         customerNames={custNames}
         onClose={() => { setSellItem(null); setEditSale(null) }}
         onSaved={() => { setSellItem(null); setEditSale(null); loadData() }}
@@ -314,7 +319,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
     }
     switch(sort) {
       case 'slow':    return [...list].sort((a,b) => b.days_in_stock - a.days_in_stock)
-      case 'stock':   return [...list].sort((a,b) => b.stock_remaining - a.stock_remaining)
+      case 'stock':   return [...list].sort((a,b) => b.available - a.available)
       case 'price_h': return [...list].sort((a,b) => (b.sell_price||0) - (a.sell_price||0))
       case 'price_l': return [...list].sort((a,b) => (a.sell_price||0) - (b.sell_price||0))
       case 'nophoto': return [...list].sort((a,b) =>
@@ -345,9 +350,9 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
       <div className="grid grid-cols-2 gap-2 p-3">
         {[
           ['Tổng SP', jewelry.length, 'text-purple-600'],
-          ['Còn tồn', jewelry.filter(j=>j.stock_remaining>0).length, 'text-green-600'],
-          ['Hết hàng', jewelry.filter(j=>j.stock_remaining<=0).length, 'text-red-500'],
-          ['Tồn lâu >30n', jewelry.filter(j=>j.stock_remaining>0&&j.days_in_stock>=30).length, 'text-amber-600'],
+          ['Còn bán được', jewelry.filter(j=>j.available>0).length, 'text-green-600'],
+          ['Chờ giao', jewelry.filter(j=>j.stock_state==='reserved').length, 'text-blue-600'],
+          ['Tồn lâu >30n', jewelry.filter(j=>j.available>0&&j.days_in_stock>=30).length, 'text-amber-600'],
         ].map(([l,v,c]) => (
           <div key={l} className="bg-white rounded-xl border border-gray-100 p-3">
             <div className="text-[10px] text-gray-500">{l}</div>
@@ -453,8 +458,16 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
       ) : (
         <div className="grid grid-cols-2 gap-2.5 p-3">
           {filtered.map(item => {
-            const s = item.stock_remaining
-            const level = s <= 0 ? 'out' : s <= 1 ? 'low' : 'ok'
+            const st = item.stock_state
+            const badgeCls =
+              st === 'out'      ? 'bg-red-100 text-red-600'
+            : st === 'reserved' ? 'bg-blue-100 text-blue-700'
+            : item.available <= 1 ? 'bg-amber-100 text-amber-700'
+            :                      'bg-green-100 text-green-700'
+            const badgeText =
+              st === 'out'      ? 'Hết'
+            : st === 'reserved' ? 'Chờ giao'
+            :                     `Còn ${item.available}`
             return (
               <div key={item.id}
                 className={`bg-white rounded-xl overflow-hidden border
@@ -466,15 +479,19 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                     ? <img src={thumbUrl(item.image_url, 400)} alt={item.code} className="w-full h-full object-contain"/>
                     : <Diamond size={34} className="text-purple-300"/>
                   }
-                  <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full
-                    ${level==='out' ? 'bg-red-100 text-red-600' : level==='low' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
-                    {s <= 0 ? 'Hết' : `Còn ${s}`}
+                  <span className={`absolute top-1.5 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full ${badgeCls}`}>
+                    {badgeText}
                   </span>
+                  {st === 'ok' && item.reserved > 0 && (
+                    <span className="absolute top-7 right-1.5 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-blue-50 text-blue-600">
+                      {item.reserved} chờ giao
+                    </span>
+                  )}
                   {item.is_new ? (
                     <span className="absolute top-1.5 left-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-600 text-white">
                       MỚI
                     </span>
-                  ) : item.days_in_stock >= 30 && s > 0 ? (
+                  ) : item.days_in_stock >= 30 && item.available > 0 ? (
                     <span className="absolute top-1.5 left-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
                       {item.days_in_stock}n
                     </span>
@@ -542,7 +559,7 @@ function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
   const [recvItem, setRecvItem] = useState(null)
   const [search,   setSearch]   = useState('')
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
-  const today10 = new Date().toISOString().slice(0,10)
+  const today10 = todayLocal()
 
   const list = useMemo(() => {
     let base = stats.incoming
@@ -812,7 +829,7 @@ function BanTab({ sales, stats, onRefresh, onEdit, toast }) {
   const [busy,   setBusy]   = useState(null)
 
   const fmtDate = d => { if(!d) return ''; const [y,mo,day]=d.split('-'); return `${day}/${mo}/${y.slice(2)}` }
-  const today10 = new Date().toISOString().slice(0,10)
+  const today10 = todayLocal()
 
   const list = useMemo(() => {
     let base = view === 'pending' ? stats.pending
@@ -1291,7 +1308,7 @@ function BcTab({ stats }) {
             <div className="flex justify-between px-4 py-2.5">
               <span className="text-xs text-gray-500">Giá trị tồn lâu</span>
               <span className="text-xs font-semibold text-amber-600">
-                {fmtMoney(stats.slowMoving.reduce((s,j)=>s+(j.stock_remaining*(j.sell_price||0)),0))}
+                {fmtMoney(stats.slowMoving.reduce((s,j)=>s+(j.available*(j.sell_price||0)),0))}
               </span>
             </div>
           </div>
@@ -1308,7 +1325,7 @@ function BcTab({ stats }) {
                     {j.code}{j.name ? ` · ${j.name}` : ''}
                   </div>
                   <div className="text-[10px] text-gray-400">
-                    Tồn {j.stock_remaining} · {j.supplier_name || 'NCC chưa ghi'}
+                    Tồn {j.available} · {j.supplier_name || 'NCC chưa ghi'}
                     {j.trip_name && ` · ✈ ${j.trip_name}`}
                   </div>
                 </div>
@@ -1399,7 +1416,9 @@ function BcTab({ stats }) {
 function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
   const toast = useToast()
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
-  const sold    = sales.reduce((s,x) => s + Number(x.qty), 0)
+  const sold      = sales.reduce((s,x) => s + Number(x.qty), 0)
+  const reserved  = sales.filter(s => !s.delivered).reduce((s,x) => s + Number(x.qty), 0)
+  const available = Math.max(0, (Number(item.stock_qty) || 0) - reserved)
   const revenue = sales.reduce((s,x) => s + Number(x.qty)*Number(x.sell_price), 0)
   const tripName = item.trip_name || trips.find(t => t.id === item.trip_id)?.name
 
@@ -1430,7 +1449,10 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
             ? (() => { const d = (item.received_at || item.created_at || '').slice(0,10)
                        const [y,m,dd] = d.split('-'); return dd ? `${dd}/${m}/${y}` : null })()
             : null],
-          ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-green-600' : 'text-red-500'],
+          ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-gray-800' : 'text-red-500'],
+          ['Đã bán, chờ giao', reserved > 0 ? `${reserved} cái` : null, 'text-blue-600'],
+          ['Còn bán được', `${available} cái`,
+            available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
           ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
           ['Giá bán', item.sell_price ? fmtMoney(item.sell_price) : null],
           ['Đã bán', sold > 0 ? `${sold} cái · ${fmtMoney(revenue)}` : null],
@@ -1447,12 +1469,16 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
       </div>
 
       <div className="flex gap-2 p-3">
-        {item.stock_qty > 0 && (
+        {available > 0 ? (
           <button onClick={onSell}
             className="flex-1 py-2.5 bg-green-600 text-white rounded-xl text-xs font-semibold active:scale-95">
             Ghi bán
           </button>
-        )}
+        ) : reserved > 0 ? (
+          <div className="flex-1 py-2.5 bg-blue-50 text-blue-600 rounded-xl text-xs font-semibold text-center">
+            Đã bán hết · chờ giao {reserved}
+          </div>
+        ) : null}
         <button onClick={onEdit}
           className="flex-1 py-2.5 bg-purple-50 border border-purple-200 text-purple-600 rounded-xl text-xs font-semibold active:scale-95">
           Sửa
@@ -2031,7 +2057,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
 // ============================================
 // SALE FORM — tạo / sửa đơn (có sẵn hoặc order)
 // ============================================
-function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose, onSaved, toast }) {
+function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], customerNames, onClose, onSaved, toast }) {
   const EMPTY = {
     mode: 'stock',          // stock | order
     jewelry_id: '', item_name: '',
@@ -2053,6 +2079,13 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
   const picked = form.jewelry_id
     ? (jewelry.find(j => j.id === form.jewelry_id) || item || null)
     : null
+
+  // Còn bán được = tồn − đã bán chưa giao (không tính đơn đang sửa)
+  const pickedAvail = picked
+    ? Math.max(0, (Number(picked.stock_qty) || 0) - allSales
+        .filter(s => s.jewelry_id === picked.id && !s.delivered && s.id !== editSale?.id)
+        .reduce((sum, s) => sum + (Number(s.qty) || 0), 0))
+    : 0
 
   useEffect(() => {
     if (!isOpen) { setAcShow(false); setPickOpen(false); return }
@@ -2114,6 +2147,18 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
     if (form.mode === 'order' && !form.item_name.trim()) { toast.error('Nhập tên hàng'); return }
     if (!form.sell_price) { toast.error('Nhập giá bán'); return }
 
+    // Chặn sớm trên giao diện — DB vẫn kiểm tra lại lần nữa
+    if (form.mode === 'stock' && picked) {
+      const want = Number(form.qty) || 1
+      const cap  = editSale?.delivered
+        ? (Number(picked.stock_qty) || 0) + (Number(editSale.qty) || 0)  // đã giao: cộng lại phần đã trừ
+        : pickedAvail
+      if (want > cap) {
+        toast.error(`Chỉ còn ${cap} cái — không bán quá số này`)
+        return
+      }
+    }
+
     setSaving(true)
     try {
       if (editSale) {
@@ -2173,7 +2218,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
                     {picked.name}{picked.size ? ` · size ${picked.size}` : ''}
                     {picked.status === 'ordered'
                       ? ` · Đang về ${picked.stock_qty}`
-                      : ` · Còn ${picked.stock_qty}`}
+                      : ` · Còn bán ${pickedAvail}`}
                   </div>
                 </div>
                 {!editSale && <ChevronDown size={14} className="text-purple-400 flex-shrink-0"/>}
@@ -2254,7 +2299,16 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
         <div className="border-t border-gray-100 pt-2"/>
         <div className="grid grid-cols-2 gap-2">
           <div>
-            <label className="text-[11px] text-gray-500 block mb-1">Số lượng</label>
+            <label className="text-[11px] text-gray-500 block mb-1">
+              Số lượng
+              {form.mode === 'stock' && picked && (
+                <span className="text-gray-400"> · tối đa {
+                  editSale?.delivered
+                    ? (Number(picked.stock_qty)||0) + (Number(editSale.qty)||0)
+                    : pickedAvail
+                }</span>
+              )}
+            </label>
             <input type="number" min="1" value={form.qty} onChange={e=>f('qty',e.target.value)}
               className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
           </div>
@@ -2338,7 +2392,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
       </div>
 
       {pickOpen && (
-        <PickJewelryModal jewelry={jewelry}
+        <PickJewelryModal jewelry={jewelry} sales={allSales}
           onPick={j => {
             setForm(prev => ({
               ...prev,
@@ -2721,14 +2775,21 @@ function CategoryManager({ isOpen, categories, jewelry = [], onClose, onSaved, t
 // ============================================
 // PICK JEWELRY MODAL — kho + hàng đang về
 // ============================================
-function PickJewelryModal({ jewelry, onPick, onClose }) {
+function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
   const [q, setQ] = useState('')
 
   const match = j =>
     j.code.toLowerCase().includes(q.toLowerCase()) ||
     j.name?.toLowerCase().includes(q.toLowerCase())
 
-  const inStock  = jewelry.filter(j => j.status !== 'ordered' && j.stock_qty > 0 && match(j))
+  // Số đã bán chưa giao theo từng SP
+  const reservedMap = {}
+  sales.filter(s => !s.delivered && s.jewelry_id).forEach(s => {
+    reservedMap[s.jewelry_id] = (reservedMap[s.jewelry_id] || 0) + (Number(s.qty) || 0)
+  })
+  const availOf = j => Math.max(0, (Number(j.stock_qty) || 0) - (reservedMap[j.id] || 0))
+
+  const inStock  = jewelry.filter(j => j.status !== 'ordered' && availOf(j) > 0 && match(j))
   const incoming = jewelry.filter(j => j.status === 'ordered' && match(j))
   const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}` }
 
@@ -2755,7 +2816,7 @@ function PickJewelryModal({ jewelry, onPick, onClose }) {
           {fmtMoney(j.sell_price||0)}
         </div>
         <div className={`text-[10px] ${inc ? 'text-purple-500 font-medium' : 'text-gray-400'}`}>
-          {inc ? `Đang về ${j.stock_qty}` : `Còn ${j.stock_qty}`}
+          {inc ? `Đang về ${j.stock_qty}` : `Còn ${availOf(j)}`}
         </div>
       </div>
     </div>
