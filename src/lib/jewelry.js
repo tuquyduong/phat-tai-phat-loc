@@ -381,11 +381,18 @@ export function calcStats(jewelry, sales) {
   const monthSalesCount = monthSales.length
 
   // Days in stock
-  const withDays = inStockJw.map(j => ({
-    ...j,
-    days_in_stock:   Math.floor((today - new Date(j.created_at)) / 86400000),
-    stock_remaining: Number(j.stock_qty) || 0,
-  }))
+  const withDays = inStockJw.map(j => {
+    const days = Math.floor((today - new Date(j.created_at)) / 86400000)
+    return {
+      ...j,
+      days_in_stock:   days,
+      stock_remaining: Number(j.stock_qty) || 0,
+      // Ngày vào kho: ngày nhận hàng nếu có, không thì ngày tạo
+      entry_date:      j.received_at || (j.created_at || '').slice(0, 10),
+      is_new:          days <= 3,
+      needs_photo:     !j.image_url,
+    }
+  })
 
   const slowMoving = withDays
     .filter(j => j.stock_remaining > 0 && j.days_in_stock >= 30)
@@ -661,4 +668,162 @@ export function estimateMount(mount, goldPrice) {
   const labor = Number(mount.labor_cost) || 0
   const gold  = chi * (Number(goldPrice) || 0)
   return { gold, labor, total: gold + labor }
+}
+
+// ============================================
+// NHẬP HÀNG LOẠT TỪ FILE CSV
+// ============================================
+export const CSV_COLUMNS = [
+  { key: 'code',             label: 'ma',          required: true,  example: 'NK-001' },
+  { key: 'category',         label: 'loai',        required: true,  example: 'Nhẫn' },
+  { key: 'name',             label: 'ten',         required: false, example: 'Nhẫn vàng 18k' },
+  { key: 'size',             label: 'size',        required: false, example: '15' },
+  { key: 'stock_qty',        label: 'so_luong',    required: false, example: '5' },
+  { key: 'cost_price',       label: 'gia_von',     required: false, example: '1850000' },
+  { key: 'sell_price',       label: 'gia_ban',     required: false, example: '3200000' },
+  { key: 'supplier_name',    label: 'ncc',         required: false, example: 'Kim Thanh HN' },
+  { key: 'supplier_contact', label: 'sdt_ncc',     required: false, example: '0912345678' },
+  { key: 'tracking_number',  label: 'ma_van_don',  required: false, example: 'SF1234567890' },
+  { key: 'order_date',       label: 'ngay_dat',    required: false, example: '2026-09-16' },
+  { key: 'eta_date',         label: 'du_kien_ve',  required: false, example: '2026-09-25' },
+  { key: 'note',             label: 'ghi_chu',     required: false, example: 'Chấu tròn' },
+]
+
+// Sinh nội dung file mẫu (kèm BOM để Excel đọc đúng tiếng Việt)
+export function buildCsvTemplate() {
+  const header = CSV_COLUMNS.map(c => c.label).join(',')
+  const sample = CSV_COLUMNS.map(c => c.example).join(',')
+  const blank  = CSV_COLUMNS.map(() => '').join(',')
+  return '\uFEFF' + [header, sample, blank].join('\n')
+}
+
+export function downloadCsvTemplate(filename = 'mau-nhap-hang.csv') {
+  const blob = new Blob([buildCsvTemplate()], { type: 'text/csv;charset=utf-8' })
+  const url  = URL.createObjectURL(blob)
+  const a    = document.createElement('a')
+  a.href = url; a.download = filename
+  document.body.appendChild(a); a.click()
+  document.body.removeChild(a)
+  setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// Tách 1 dòng CSV, xử lý dấu ngoặc kép và dấu phẩy bên trong
+function splitCsvLine(line) {
+  const out = []
+  let cur = '', inQuote = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuote && line[i+1] === '"') { cur += '"'; i++ }
+      else inQuote = !inQuote
+    } else if (ch === ',' && !inQuote) {
+      out.push(cur); cur = ''
+    } else cur += ch
+  }
+  out.push(cur)
+  return out.map(s => s.trim())
+}
+
+// Đọc file CSV → danh sách dòng đã phân tích, kèm lỗi từng dòng
+export function parseCsv(text, { existingCodes = [], categories = [] } = {}) {
+  const clean = text.replace(/^\uFEFF/, '').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  const lines = clean.split('\n').filter(l => l.trim() !== '')
+  if (lines.length < 2) return { rows: [], error: 'File trống hoặc chỉ có dòng tiêu đề' }
+
+  const header = splitCsvLine(lines[0]).map(h => h.toLowerCase())
+  const idx = {}
+  CSV_COLUMNS.forEach(c => { idx[c.key] = header.indexOf(c.label) })
+
+  if (idx.code === -1) {
+    return { rows: [], error: 'Thiếu cột "ma" — hãy tải lại file mẫu' }
+  }
+
+  const seen = new Set()
+  const codeSet = new Set(existingCodes.map(c => String(c).toLowerCase()))
+
+  const rows = lines.slice(1).map((line, i) => {
+    const cells = splitCsvLine(line)
+    const get = key => (idx[key] >= 0 ? (cells[idx[key]] ?? '') : '')
+    // Hiểu cả "3200000", "3.200.000", "3,200,000", "3 200 000"
+    const num = v => {
+      let s = String(v).trim()
+      if (s === '') return null
+      s = s.replace(/[^\d.,-]/g, '')
+      if (!/\d/.test(s)) return null        // không có chữ số nào → bỏ
+      const dots = (s.match(/\./g) || []).length
+      const commas = (s.match(/,/g) || []).length
+      if (dots > 1 || (dots === 1 && commas === 0 && /\.\d{3}$/.test(s))) {
+        s = s.replace(/\./g, '')          // 3.200.000 → 3200000
+      }
+      if (commas > 1 || (commas === 1 && /,\d{3}$/.test(s))) {
+        s = s.replace(/,/g, '')            // 3,200,000 → 3200000
+      } else {
+        s = s.replace(/,/g, '.')           // 1,5 → 1.5 (số lẻ kiểu VN)
+      }
+      const n = Number(s)
+      return Number.isFinite(n) ? n : null
+    }
+
+    const code = get('code')
+    const data = {
+      code,
+      category:         get('category') || 'Khác',
+      name:             get('name')             || null,
+      size:             get('size')             || null,
+      stock_qty:        num(get('stock_qty')) ?? 1,
+      cost_price:       num(get('cost_price')),
+      sell_price:       num(get('sell_price')),
+      supplier_name:    get('supplier_name')    || null,
+      supplier_contact: get('supplier_contact') || null,
+      tracking_number:  get('tracking_number')  || null,
+      order_date:       get('order_date')       || null,
+      eta_date:         get('eta_date')         || null,
+      note:             get('note')             || null,
+    }
+
+    const errors = []
+    if (!code) errors.push('thiếu mã')
+    else if (codeSet.has(code.toLowerCase()))  errors.push('mã đã có trong kho')
+    else if (seen.has(code.toLowerCase()))     errors.push('mã trùng trong file')
+    if (code) seen.add(code.toLowerCase())
+
+    if (categories.length && data.category && !categories.includes(data.category))
+      errors.push(`loại "${data.category}" chưa có`)
+    if (data.stock_qty != null && data.stock_qty < 0) errors.push('số lượng âm')
+
+    return { line: i + 2, data, errors, ok: errors.length === 0 }
+  })
+
+  return { rows, error: null }
+}
+
+// Lưu hàng loạt — chia lô để tránh quá tải
+export async function bulkCreateJewelry(rows, { status = 'in_stock', trip_id = null } = {}) {
+  const payload = rows.map(r => ({
+    ...r.data,
+    status,
+    trip_id,
+    image_url: null,
+  }))
+
+  let inserted = 0
+  const failed = []
+  const SIZE = 50
+
+  for (let i = 0; i < payload.length; i += SIZE) {
+    const chunk = payload.slice(i, i + SIZE)
+    const { data, error } = await supabase.from('jewelry').insert(chunk).select('id')
+    if (error) {
+      // Lô lỗi → thử từng dòng để biết dòng nào hỏng
+      for (const one of chunk) {
+        const { error: e1 } = await supabase.from('jewelry').insert([one])
+        if (e1) failed.push({ code: one.code, message: e1.message })
+        else inserted++
+      }
+    } else {
+      inserted += data?.length || chunk.length
+    }
+  }
+
+  return { inserted, failed }
 }

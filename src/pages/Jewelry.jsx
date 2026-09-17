@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
   RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle, PackageCheck,
-  Camera, Clock,
+  Camera, Clock, FileSpreadsheet, Upload, Download, AlertTriangle,
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
@@ -17,6 +17,7 @@ import {
   receiveOrder,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
+  CSV_COLUMNS, downloadCsvTemplate, parseCsv, bulkCreateJewelry,
   getCustomerNotes, saveCustomerNote,
   getSuppliers,
   getActiveTrip, setActiveTrip,
@@ -47,6 +48,7 @@ export default function Jewelry() {
   const [showTripPicker, setShowTripPicker] = useState(false)
   const [categories,    setCategories]    = useState(DEFAULT_CATEGORIES)
   const [showCatMgr,    setShowCatMgr]    = useState(false)
+  const [showImport,    setShowImport]    = useState(false)
   const [customerNotes, setCustomerNotes] = useState({})
   const [suppliers,     setSuppliers]     = useState([])
 
@@ -103,6 +105,11 @@ export default function Jewelry() {
           </button>
           {!detail && (
             <>
+              {modTab === 'kho' && (
+                <button onClick={() => setShowImport(true)} className="p-2 text-gray-400" title="Nhập từ file">
+                  <FileSpreadsheet size={17}/>
+                </button>
+              )}
               <button onClick={() => setShowCatMgr(true)} className="p-2 text-gray-400" title="Quản lý loại">
                 <Settings size={17}/>
               </button>
@@ -123,6 +130,25 @@ export default function Jewelry() {
             ))}
           </div>
         )}
+        {/* Thanh lọc trong tab — dính cùng header */}
+        {!detail && modTab === 'kho' && (
+          <SubFilter value={khoView} onChange={setKhoView} options={[
+            ['stock',    `Trong kho (${stats.inStock})`],
+            ['incoming', `Đang về (${stats.incomingCount})`],
+          ]}/>
+        )}
+        {!detail && modTab === 'ban' && (
+          <SubFilter value={banView} onChange={setBanView} options={[
+            ['orders',    `Đơn hàng (${sales.length})`],
+            ['customers', `Khách (${stats.customers.length})`],
+          ]}/>
+        )}
+        {!detail && modTab === 'so' && (
+          <SubFilter value={soView} onChange={setSoView} options={[
+            ['report', 'Báo cáo'],
+            ['trips',  `Chuyến (${trips.length})`],
+          ]}/>
+        )}
       </div>
 
       {/* Content */}
@@ -137,12 +163,7 @@ export default function Jewelry() {
           onEdit={() => { setDetail(null); setEditing(detail); setShowAdd(true) }}
           onDelete={() => { handleDelete(detail); setDetail(null) }}/>
       ) : modTab === 'kho' ? (
-        <>
-          <SubFilter value={khoView} onChange={setKhoView} options={[
-            ['stock',    `Trong kho (${stats.inStock})`],
-            ['incoming', `Đang về (${stats.incomingCount})`],
-          ]}/>
-          {khoView === 'stock' ? (
+        khoView === 'stock' ? (
             <KhoTab items={stats.withDays}
               categories={categories}
               onSelect={setDetail}
@@ -159,15 +180,9 @@ export default function Jewelry() {
               onDelete={handleDelete}
               onRefresh={loadData}
               toast={toast}/>
-          )}
-        </>
+        )
       ) : modTab === 'ban' ? (
-        <>
-          <SubFilter value={banView} onChange={setBanView} options={[
-            ['orders',    `Đơn hàng (${sales.length})`],
-            ['customers', `Khách (${stats.customers.length})`],
-          ]}/>
-          {banView === 'orders' ? (
+        banView === 'orders' ? (
             <BanTab sales={sales} stats={stats}
               onRefresh={loadData}
               onEdit={s => setEditSale(s)}
@@ -183,24 +198,17 @@ export default function Jewelry() {
                   setCustomerNotes(updated)
                 } catch { toast.error('Lỗi lưu ghi chú') }
               }}/>
-          )}
-        </>
+        )
       ) : modTab === 'omau' ? (
         <MountsTab toast={toast}/>
       ) : (
-        <>
-          <SubFilter value={soView} onChange={setSoView} options={[
-            ['report', 'Báo cáo'],
-            ['trips',  `Chuyến (${trips.length})`],
-          ]}/>
-          {soView === 'report'
-            ? <BcTab stats={stats}/>
-            : <TripsTab trips={trips} jewelry={jewelry}
-                activeTrip={activeTrip}
-                onSelect={handleSetTrip}
-                onRefresh={loadData}
-                toast={toast}/>}
-        </>
+        soView === 'report'
+          ? <BcTab stats={stats}/>
+          : <TripsTab trips={trips} jewelry={jewelry}
+              activeTrip={activeTrip}
+              onSelect={handleSetTrip}
+              onRefresh={loadData}
+              toast={toast}/>
       )}
 
       {/* FAB */}
@@ -233,6 +241,14 @@ export default function Jewelry() {
         suppliers={suppliers}
         activeTrip={activeTrip}
         onSaved={() => { setShowAdd(false); setEditing(null); loadData(); getSuppliers().then(setSuppliers).catch(()=>{}) }}
+        toast={toast}/>
+      <ImportModal isOpen={showImport}
+        existingCodes={jewelry.map(j => j.code)}
+        categories={categories}
+        defaultStatus={modTab === 'kho' && khoView === 'incoming' ? 'ordered' : 'in_stock'}
+        activeTrip={activeTrip}
+        onClose={() => setShowImport(false)}
+        onRefresh={loadData}
         toast={toast}/>
       <CategoryManager isOpen={showCatMgr}
         categories={categories}
@@ -301,9 +317,21 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
       case 'stock':   return [...list].sort((a,b) => b.stock_remaining - a.stock_remaining)
       case 'price_h': return [...list].sort((a,b) => (b.sell_price||0) - (a.sell_price||0))
       case 'price_l': return [...list].sort((a,b) => (a.sell_price||0) - (b.sell_price||0))
+      case 'nophoto': return [...list].sort((a,b) =>
+        (a.image_url ? 1 : 0) - (b.image_url ? 1 : 0) ||
+        new Date(b.created_at) - new Date(a.created_at))
       default:        return [...list].sort((a,b) => new Date(b.created_at) - new Date(a.created_at))
     }
   }, [jewelry, cat, sort, search])
+
+  const newCount     = useMemo(() => jewelry.filter(j => j.is_new).length, [jewelry])
+  const noPhotoCount = useMemo(() => jewelry.filter(j => j.needs_photo).length, [jewelry])
+
+  const fmtDay = d => {
+    if (!d) return ''
+    const [y, m, day] = String(d).slice(0, 10).split('-')
+    return `${day}/${m}`
+  }
 
   const catCounts = useMemo(() => {
     const counts = { 'Tất cả': jewelry.length }
@@ -388,12 +416,26 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
 
       {/* Sort bar */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-white border-b border-gray-100">
-        <span className="text-[10px] text-gray-400">
-          {filtered.length} sản phẩm{search && ` · "${search}"`}
-        </span>
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] text-gray-400">
+            {filtered.length} sản phẩm{search && ` · "${search}"`}
+          </span>
+          {newCount > 0 && (
+            <span className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-50 text-purple-600">
+              {newCount} mới
+            </span>
+          )}
+          {noPhotoCount > 0 && (
+            <button onClick={() => setSort('nophoto')}
+              className="text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 active:scale-95">
+              {noPhotoCount} thiếu ảnh
+            </button>
+          )}
+        </div>
         <select value={sort} onChange={e => setSort(e.target.value)}
           className="text-xs px-2 py-1 border border-gray-200 rounded-lg bg-white text-gray-600">
-          <option value="new">Mới thêm trước</option>
+          <option value="new">Mới nhập trước</option>
+          <option value="nophoto">Chưa có ảnh trước</option>
           <option value="slow">Tồn lâu nhất</option>
           <option value="stock">Tồn kho nhiều</option>
           <option value="price_h">Giá cao → thấp</option>
@@ -414,7 +456,9 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
             const s = item.stock_remaining
             const level = s <= 0 ? 'out' : s <= 1 ? 'low' : 'ok'
             return (
-              <div key={item.id} className="bg-white rounded-xl border border-gray-100 overflow-hidden">
+              <div key={item.id}
+                className={`bg-white rounded-xl overflow-hidden border
+                  ${item.is_new ? 'border-purple-300 ring-1 ring-purple-100' : 'border-gray-100'}`}>
                 <div onClick={() => onSelect(item)}
                   className={`aspect-square relative flex items-center justify-center overflow-hidden cursor-pointer
                     ${item.image_url ? 'bg-gray-50' : 'bg-gradient-to-br from-purple-50 to-purple-200'}`}>
@@ -426,9 +470,18 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                     ${level==='out' ? 'bg-red-100 text-red-600' : level==='low' ? 'bg-amber-100 text-amber-700' : 'bg-green-100 text-green-700'}`}>
                     {s <= 0 ? 'Hết' : `Còn ${s}`}
                   </span>
-                  {item.days_in_stock >= 30 && s > 0 && (
+                  {item.is_new ? (
+                    <span className="absolute top-1.5 left-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-600 text-white">
+                      MỚI
+                    </span>
+                  ) : item.days_in_stock >= 30 && s > 0 ? (
                     <span className="absolute top-1.5 left-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
                       {item.days_in_stock}n
+                    </span>
+                  ) : null}
+                  {item.needs_photo && (
+                    <span className="absolute inset-x-0 bottom-0 py-1 bg-black/45 text-white text-[9px] text-center font-medium">
+                      Chưa có ảnh — bấm để thêm
                     </span>
                   )}
                   <span className="absolute bottom-1.5 left-1.5 text-[9px] px-1.5 py-0.5 rounded-full bg-black/40 text-white">
@@ -453,6 +506,11 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                       </span>
                     )}
                   </div>
+                  {item.entry_date && (
+                    <div className="text-[9px] text-gray-400 mt-0.5">
+                      Nhập {fmtDay(item.entry_date)}
+                    </div>
+                  )}
                 </div>
                 <div className="flex border-t border-gray-100">
                   <button onClick={() => onEdit(item)}
@@ -1368,6 +1426,10 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
           ['Mã SP', item.code],
           ['Tên', item.name],
           ['Size', item.size],
+          ['Ngày nhập', item.received_at || (item.created_at || '').slice(0,10)
+            ? (() => { const d = (item.received_at || item.created_at || '').slice(0,10)
+                       const [y,m,dd] = d.split('-'); return dd ? `${dd}/${m}/${y}` : null })()
+            : null],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-green-600' : 'text-red-500'],
           ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
           ['Giá bán', item.sell_price ? fmtMoney(item.sell_price) : null],
@@ -2289,6 +2351,255 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], customerNames, onClose
           }}
           onClose={() => setPickOpen(false)}/>
       )}
+    </Modal>
+  )
+}
+
+// ============================================
+// IMPORT MODAL — nhập hàng loạt từ CSV
+// ============================================
+function ImportModal({ isOpen, existingCodes, categories, defaultStatus, activeTrip, onClose, onRefresh, toast }) {
+  const [rows,    setRows]    = useState([])
+  const [err,     setErr]     = useState('')
+  const [fileName,setFileName]= useState('')
+  const [status,  setStatus]  = useState('in_stock')
+  const [useTrip, setUseTrip] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+  const [result,  setResult]  = useState(null)
+  const fileRef = useRef()
+
+  useEffect(() => {
+    if (!isOpen) return
+    setRows([]); setErr(''); setFileName(''); setResult(null)
+    setStatus(defaultStatus || 'in_stock')
+    setUseTrip(true)
+  }, [isOpen, defaultStatus])
+
+  const okRows  = rows.filter(r => r.ok)
+  const badRows = rows.filter(r => !r.ok)
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setFileName(file.name)
+    const reader = new FileReader()
+    reader.onload = ev => {
+      const { rows: parsed, error } = parseCsv(String(ev.target.result), {
+        existingCodes, categories,
+      })
+      if (error) { setErr(error); setRows([]) }
+      else       { setErr(''); setRows(parsed) }
+    }
+    reader.onerror = () => setErr('Không đọc được file')
+    reader.readAsText(file, 'utf-8')
+    e.target.value = ''   // cho phép chọn lại cùng file
+  }
+
+  const handleSave = async () => {
+    if (okRows.length === 0) return
+    setSaving(true)
+    try {
+      const r = await bulkCreateJewelry(okRows, {
+        status,
+        trip_id: useTrip && activeTrip ? activeTrip.id : null,
+      })
+      setResult(r)
+      if (r.failed.length === 0) toast.success(`Đã nhập ${r.inserted} sản phẩm`)
+      else                       toast.error(`${r.inserted} thành công, ${r.failed.length} lỗi`)
+      // Luôn báo cho danh sách tải lại — kể cả khi có dòng lỗi,
+      // vì những dòng thành công đã nằm trong kho rồi
+      if (r.inserted > 0) onRefresh()
+    } catch (e) { toast.error('Lỗi: ' + e.message) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="Nhập hàng từ file">
+      <div className="px-5 pb-6 space-y-3 overflow-y-auto max-h-[75vh]">
+
+        <input ref={fileRef} type="file" accept=".csv,text/csv,application/vnd.ms-excel,text/plain"
+          className="hidden" onChange={handleFile}/>
+
+        {/* Hai nút chính — ẩn bớt sau khi đã có dữ liệu */}
+        {!result && (
+          <div className="flex gap-2">
+            <button onClick={() => downloadCsvTemplate()}
+              className="flex-1 py-2.5 bg-white border border-purple-200 text-purple-600 rounded-xl
+                text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98">
+              <Download size={14}/> Tải mẫu
+            </button>
+            <button onClick={() => fileRef.current?.click()}
+              className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl
+                text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98">
+              <Upload size={14}/> {rows.length ? 'Chọn file khác' : 'Chọn file'}
+            </button>
+          </div>
+        )}
+
+        {fileName && !result && (
+          <div className="text-[10px] text-gray-400 text-center truncate">📄 {fileName}</div>
+        )}
+
+        {/* Hướng dẫn — chỉ hiện khi chưa chọn file */}
+        {rows.length === 0 && !result && (
+          <details className="bg-gray-50 rounded-xl px-3 py-2">
+            <summary className="text-[11px] font-semibold text-gray-600 cursor-pointer">
+              Cách làm &amp; các cột trong file
+            </summary>
+            <p className="text-[10px] text-gray-500 leading-relaxed mt-2 mb-2">
+              Tải mẫu về, mở bằng Excel, mỗi dòng một sản phẩm, lưu lại dạng CSV rồi chọn file đó.
+              Ảnh không nhập được qua file — thêm sau ở từng sản phẩm.
+            </p>
+            <div className="space-y-0.5">
+              {CSV_COLUMNS.map(c => (
+                <div key={c.key} className="flex justify-between text-[10px] py-0.5 border-b border-gray-200 last:border-0">
+                  <span className="font-mono text-gray-700">{c.label}</span>
+                  <span className="text-gray-400">
+                    {c.required ? <b className="text-red-500">bắt buộc</b> : c.example}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
+
+        {err && (
+          <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-xl text-[11px] text-red-700">
+            {err}
+          </div>
+        )}
+
+        {/* Xem trước */}
+        {rows.length > 0 && !result && (
+          <>
+            <div className="flex gap-2">
+              <div className="flex-1 bg-green-50 rounded-xl px-3 py-2">
+                <div className="text-[10px] text-green-600">Hợp lệ</div>
+                <div className="text-lg font-bold text-green-700">{okRows.length}</div>
+              </div>
+              <div className={`flex-1 rounded-xl px-3 py-2 ${badRows.length ? 'bg-red-50' : 'bg-gray-50'}`}>
+                <div className={`text-[10px] ${badRows.length ? 'text-red-600' : 'text-gray-400'}`}>Lỗi</div>
+                <div className={`text-lg font-bold ${badRows.length ? 'text-red-700' : 'text-gray-300'}`}>
+                  {badRows.length}
+                </div>
+              </div>
+            </div>
+
+            {badRows.length > 0 && (
+              <div className="bg-red-50 rounded-xl p-2.5 max-h-32 overflow-y-auto">
+                <div className="text-[10px] font-semibold text-red-700 mb-1 flex items-center gap-1">
+                  <AlertTriangle size={11}/> Dòng có lỗi — sẽ bỏ qua
+                </div>
+                {badRows.slice(0, 20).map(r => (
+                  <div key={r.line} className="text-[10px] text-red-600 py-0.5">
+                    Dòng {r.line}: <b>{r.data.code || '(trống)'}</b> — {r.errors.join(', ')}
+                  </div>
+                ))}
+                {badRows.length > 20 && (
+                  <div className="text-[10px] text-red-400 pt-1">…và {badRows.length - 20} dòng nữa</div>
+                )}
+              </div>
+            )}
+
+            {okRows.length > 0 && (
+              <div className="border border-gray-200 rounded-xl overflow-hidden">
+                <div className="px-3 py-1.5 bg-gray-50 text-[10px] font-semibold text-gray-500">
+                  Xem trước {Math.min(okRows.length, 8)}/{okRows.length} dòng
+                </div>
+                <div className="max-h-44 overflow-y-auto">
+                  {okRows.slice(0, 8).map(r => (
+                    <div key={r.line} className="px-3 py-2 border-b border-gray-100 last:border-0">
+                      <div className="flex justify-between gap-2">
+                        <span className="text-[11px] font-semibold text-gray-800 truncate">
+                          {r.data.code}{r.data.name ? ` · ${r.data.name}` : ''}
+                        </span>
+                        <span className="text-[11px] text-purple-600 font-medium flex-shrink-0">
+                          {r.data.sell_price ? fmtMoney(r.data.sell_price) : '—'}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-gray-400">
+                        {[
+                          r.data.category,
+                          r.data.size ? `size ${r.data.size}` : null,
+                          `SL ${r.data.stock_qty}`,
+                          r.data.supplier_name,
+                        ].filter(Boolean).join(' · ')}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Tuỳ chọn khi lưu */}
+            <div className="border-t border-gray-100 pt-2"/>
+            <div>
+              <label className="text-[11px] text-gray-500 block mb-1.5">Nhập vào</label>
+              <div className="flex gap-2">
+                {[['in_stock','Kho hàng'],['ordered','Hàng đang về']].map(([id,label]) => (
+                  <button key={id} onClick={() => setStatus(id)}
+                    className={`flex-1 py-2 rounded-xl text-[11px] font-medium border active:scale-98
+                      ${status===id ? 'bg-purple-600 text-white border-purple-600 font-semibold'
+                                    : 'bg-white text-gray-500 border-gray-200'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {activeTrip && (
+              <button onClick={() => setUseTrip(v => !v)}
+                className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border active:scale-98
+                  ${useTrip ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
+                <div className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0
+                  ${useTrip ? 'bg-green-500' : 'border border-gray-300'}`}>
+                  {useTrip && <Check size={11} className="text-white"/>}
+                </div>
+                <span className={`text-[11px] flex-1 text-left ${useTrip ? 'text-green-800' : 'text-gray-500'}`}>
+                  Gắn vào chuyến <b>{activeTrip.name}</b>
+                </span>
+              </button>
+            )}
+          </>
+        )}
+
+        {/* Kết quả */}
+        {result && (
+          <div className="space-y-2">
+            <div className="bg-green-50 rounded-xl p-3 text-center">
+              <div className="text-2xl mb-1">✅</div>
+              <div className="text-sm font-semibold text-green-800">
+                Đã nhập {result.inserted} sản phẩm
+              </div>
+            </div>
+            {result.failed.length > 0 && (
+              <div className="bg-red-50 rounded-xl p-2.5 max-h-32 overflow-y-auto">
+                <div className="text-[10px] font-semibold text-red-700 mb-1">
+                  {result.failed.length} dòng không lưu được
+                </div>
+                {result.failed.map((f,i) => (
+                  <div key={i} className="text-[10px] text-red-600 py-0.5">
+                    <b>{f.code}</b> — {f.message}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            {result ? 'Đóng' : 'Huỷ'}
+          </button>
+          {!result && (
+            <button onClick={handleSave} disabled={saving || okRows.length === 0}
+              className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-40">
+              {saving ? 'Đang lưu...' : `Lưu ${okRows.length} sản phẩm`}
+            </button>
+          )}
+        </div>
+      </div>
     </Modal>
   )
 }
