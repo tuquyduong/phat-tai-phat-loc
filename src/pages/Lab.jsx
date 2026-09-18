@@ -833,20 +833,48 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
 // ============================================
 // INGREDIENTS TAB - Quick edit stock
 // ============================================
+// Mức tồn kho: 0 = âm (sai số liệu), 1 = hết, 2 = sắp hết, 3 = đủ
+function stockLevel(i) {
+  const q = Number(i.stock_qty) || 0
+  if (q < 0)   return 0
+  if (q === 0) return 1
+  const t = getAlertThreshold(i)
+  return (t > 0 && q < t) ? 2 : 3
+}
+
 function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
   const [showForm, setShowForm]   = useState(false)
   const [editing, setEditing]     = useState(null)
   const [editStock, setEditStock] = useState(null) // { id, qty }
   const [selectedIng, setSelectedIng] = useState(null)
   const [showThreshold, setShowThreshold] = useState(false)
+  const [sortBy, setSortBy] = useState('urgent')   // urgent|name|most|least|negative
 
   const filtered = useMemo(() => {
-    if (!search) return ingredients
-    const s = search.toLowerCase()
-    return ingredients.filter(i => i.name.toLowerCase().includes(s) || i.supplier?.toLowerCase().includes(s))
-  }, [ingredients, search])
+    let list = ingredients
+    if (search) {
+      const s = search.toLowerCase()
+      list = list.filter(i => i.name.toLowerCase().includes(s) || i.supplier?.toLowerCase().includes(s))
+    }
+    const byName = (a, b) => a.name.localeCompare(b.name, 'vi')
+    const qty = i => Number(i.stock_qty) || 0
 
-  const alertOut  = ingredients.filter(i => Number(i.stock_qty) <= 0)
+    switch (sortBy) {
+      case 'urgent':   // cần xử lý trước: âm → hết → sắp hết → đủ
+        return [...list].sort((a, b) => stockLevel(a) - stockLevel(b) || byName(a, b))
+      case 'least':    // còn ít nhất lên đầu
+        return [...list].sort((a, b) => qty(a) - qty(b) || byName(a, b))
+      case 'most':     // còn nhiều nhất lên đầu
+        return [...list].sort((a, b) => qty(b) - qty(a) || byName(a, b))
+      case 'negative': // chỉ những món tồn âm
+        return list.filter(i => qty(i) < 0).sort(byName)
+      default:         // theo tên
+        return [...list].sort(byName)
+    }
+  }, [ingredients, search, sortBy])
+
+  const alertNeg  = ingredients.filter(i => Number(i.stock_qty) < 0)
+  const alertOut  = ingredients.filter(i => Number(i.stock_qty) === 0)
   const alertWarn = ingredients.filter(i => {
     const t = getAlertThreshold(i)
     return t > 0 && Number(i.stock_qty) > 0 && Number(i.stock_qty) < t
@@ -885,48 +913,119 @@ function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
     <>
       <SearchBar value={search} onChange={setSearch} placeholder="Tìm nguyên liệu..." />
 
-      {/* Nút cài ngưỡng */}
-      <div className="flex justify-end mb-1">
+      {/* Sắp xếp + cài ngưỡng */}
+      <div className="flex items-center gap-2 mb-2">
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="flex-1 px-3 py-2 text-xs border border-gray-200 rounded-xl bg-white text-gray-700">
+          <option value="urgent">Cần xử lý trước</option>
+          <option value="least">Còn ít nhất</option>
+          <option value="most">Còn nhiều nhất</option>
+          <option value="name">Theo tên A → Z</option>
+          <option value="negative">Chỉ món tồn âm{alertNeg.length > 0 ? ` (${alertNeg.length})` : ''}</option>
+        </select>
         <button onClick={() => setShowThreshold(true)}
-          className="flex items-center gap-1 px-2.5 py-1.5 text-xs text-gray-500 hover:text-purple-600 active:scale-90">
-          <Settings size={13} /> Cài ngưỡng cảnh báo
+          className="px-2.5 py-2 rounded-xl border border-gray-200 text-gray-400 active:scale-95"
+          title="Cài ngưỡng cảnh báo">
+          <Settings size={14} />
         </button>
       </div>
 
+      {/* Bấm vào để lọc nhanh */}
+      <div className="flex gap-1.5 mb-2 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
+        {alertNeg.length > 0 && (
+          <button onClick={() => setSortBy(sortBy === 'negative' ? 'urgent' : 'negative')}
+            className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0
+              border active:scale-95 transition-colors
+              ${sortBy === 'negative'
+                ? 'bg-red-600 text-white border-red-600'
+                : 'bg-red-100 text-red-700 border-red-200'}`}>
+            ⚠ {alertNeg.length} âm{sortBy === 'negative' ? ' ✕' : ''}
+          </button>
+        )}
+        {alertOut.length > 0 && (
+          <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0
+            bg-red-50 text-red-600 border border-red-200">
+            {alertOut.length} hết
+          </span>
+        )}
+        {alertWarn.length > 0 && (
+          <span className="px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap flex-shrink-0
+            bg-amber-50 text-amber-700 border border-amber-200">
+            {alertWarn.length} sắp hết
+          </span>
+        )}
+        <span className="px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap flex-shrink-0
+          bg-gray-50 text-gray-500 border border-gray-200">
+          {filtered.length}/{ingredients.length} món
+        </span>
+      </div>
+
       {/* Alert banner — chỉ hiện khi có vấn đề */}
-      {(alertOut.length > 0 || alertWarn.length > 0) && (
+      {(alertNeg.length > 0 || alertOut.length > 0 || alertWarn.length > 0) && (
         <div className={`mb-3 px-4 py-2.5 rounded-xl flex items-center gap-2 text-sm
-          ${alertOut.length > 0 ? 'bg-red-50 border border-red-200' : 'bg-amber-50 border border-amber-200'}`}>
-          <span>{alertOut.length > 0 ? '🔴' : '🟡'}</span>
-          <span className={alertOut.length > 0 ? 'text-red-700' : 'text-amber-700'}>
+          ${(alertNeg.length > 0 || alertOut.length > 0) ? 'bg-red-50 border border-red-200' : 'bg-amber-50 border border-amber-200'}`}>
+          <span>{(alertNeg.length > 0 || alertOut.length > 0) ? '🔴' : '🟡'}</span>
+          <span className={(alertNeg.length > 0 || alertOut.length > 0) ? 'text-red-700' : 'text-amber-700'}>
+            {alertNeg.length > 0 && <><b>{alertNeg.length} NL tồn ÂM — cần kiểm lại</b>{(alertOut.length > 0 || alertWarn.length > 0) && ' · '}</>}
             {alertOut.length > 0 && <><b>{alertOut.length} NL hết hàng</b>{alertWarn.length > 0 && ' · '}</>}
-            {alertWarn.length > 0 && <span>{alertWarn.length} NL sắp hết (&lt; 500g)</span>}
+            {alertWarn.length > 0 && <span>{alertWarn.length} NL sắp hết</span>}
           </span>
         </div>
       )}
 
       {filtered.length === 0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
-          <div className="text-4xl mb-2">📦</div>
-          <p className="text-gray-500 text-sm">{search ? 'Không tìm thấy' : 'Chưa có nguyên liệu'}</p>
-          <button onClick={() => { setEditing(null); setShowForm(true) }} className="mt-3 text-purple-600 font-medium text-sm">+ Thêm</button>
+          {sortBy === 'negative' ? (
+            <>
+              <div className="text-4xl mb-2">✅</div>
+              <p className="text-gray-600 text-sm font-medium">Không có nguyên liệu nào tồn âm</p>
+              <p className="text-gray-400 text-xs mt-1">Số liệu đang khớp</p>
+              <button onClick={() => setSortBy('urgent')}
+                className="mt-3 text-purple-600 font-medium text-sm">Xem tất cả</button>
+            </>
+          ) : search ? (
+            <>
+              <div className="text-4xl mb-2">🔍</div>
+              <p className="text-gray-500 text-sm">Không tìm thấy "{search}"</p>
+              <button onClick={() => setSearch('')}
+                className="mt-3 text-purple-600 font-medium text-sm">Xoá tìm kiếm</button>
+            </>
+          ) : (
+            <>
+              <div className="text-4xl mb-2">📦</div>
+              <p className="text-gray-500 text-sm">Chưa có nguyên liệu</p>
+              <button onClick={() => { setEditing(null); setShowForm(true) }}
+                className="mt-3 text-purple-600 font-medium text-sm">+ Thêm</button>
+            </>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
           {filtered.map(i => {
             const stockNum  = Number(i.stock_qty)
             const threshold = getAlertThreshold(i)
-            const level     = stockNum <= 0 ? 'out' : (threshold > 0 && stockNum < threshold) ? 'warn' : 'ok'
+            const level     = stockNum <  0 ? 'neg'
+                            : stockNum === 0 ? 'out'
+                            : (threshold > 0 && stockNum < threshold) ? 'warn' : 'ok'
             return (
               <div key={i.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
                 <div className="flex items-center gap-2">
                   {/* Dot trạng thái */}
                   <span className={`w-2 h-2 rounded-full flex-shrink-0
-                    ${level === 'out' ? 'bg-red-500 animate-pulse' : level === 'warn' ? 'bg-amber-400' : 'bg-green-400'}`} />
+                    ${level === 'neg'  ? 'bg-red-600 animate-pulse'
+                    : level === 'out'  ? 'bg-red-500'
+                    : level === 'warn' ? 'bg-amber-400' : 'bg-green-400'}`} />
 
                   {/* Tên — click để vào detail */}
                   <div className="flex-1 min-w-0 cursor-pointer" onClick={() => setSelectedIng(i)}>
-                    <p className="text-sm font-medium text-gray-800 truncate">{i.name}</p>
+                    <p className="text-sm font-medium text-gray-800 truncate">
+                      {i.name}
+                      {level === 'neg' && (
+                        <span className="ml-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-red-100 text-red-700 align-middle">
+                          TỒN ÂM
+                        </span>
+                      )}
+                    </p>
                     <p className="text-xs text-gray-400">
                       {i.price_per_unit > 0 && <span>{formatMoney(i.price_per_unit)}/{i.unit}</span>}
                       {i.supplier && <span className="ml-2">• {i.supplier}</span>}
