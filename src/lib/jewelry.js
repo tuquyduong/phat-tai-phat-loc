@@ -117,15 +117,22 @@ export async function getJewelry() {
 
 function cleanJewelry(item) {
   const out = { ...item }
-  if ('stock_qty'  in out) out.stock_qty  = nonNeg(out.stock_qty)
+  if ('stock_qty'    in out) out.stock_qty    = nonNeg(out.stock_qty)
+  if ('incoming_qty' in out) out.incoming_qty = nonNeg(out.incoming_qty)
   if ('cost_price' in out && out.cost_price != null) out.cost_price = nonNeg(out.cost_price)
   if ('sell_price' in out && out.sell_price != null) out.sell_price = nonNeg(out.sell_price)
   return out
 }
 
 export async function createJewelry(item) {
+  const payload = cleanJewelry(item)
+  // Hàng đặt chưa về → số lượng nằm ở cột "đang về", tồn kho bằng 0
+  if (payload.status === 'ordered') {
+    payload.incoming_qty = nonNeg(payload.stock_qty)
+    payload.stock_qty    = 0
+  }
   const { data, error } = await supabase
-    .from('jewelry').insert([cleanJewelry(item)]).select().single()
+    .from('jewelry').insert([payload]).select().single()
   if (error) throw error
   // Chỉ ghi sổ khi hàng THỰC SỰ vào kho.
   // Hàng đang về sẽ được ghi lúc bấm "Hàng đã về" (receiveOrder),
@@ -149,44 +156,58 @@ export async function findJewelryByCode(code) {
 }
 
 // Nhập thêm cho mã đã có — cộng dồn tồn, tính lại giá vốn trung bình
+// Nhập thêm cho mã đã có.
+// mode 'in_stock'  → hàng đã cầm trong tay, cộng vào tồn kho
+// mode 'ordered'   → hàng mới đặt, cộng vào cột "đang về", tồn kho không đổi
 export async function addStockToExisting(id, addQty, newItem = {}) {
   const { data: cur, error: ge } = await supabase
     .from('jewelry').select('*').eq('id', id).single()
   if (ge) throw ge
 
-  const oldQty  = nonNeg(cur.stock_qty)
-  const add     = nonNeg(addQty)
-  const total   = oldQty + add
+  const add = nonNeg(addQty)
+  // Nhập vào đâu: theo status truyền lên. Nếu không nói rõ thì giữ nguyên
+  // trạng thái hiện tại của món — hàng đang về không tự nhảy vào kho.
+  const toIncoming = newItem.status
+    ? newItem.status === 'ordered'
+    : cur.status === 'ordered'
 
-  // Giá vốn trung bình có trọng số — chỉ tính lại khi lô mới có giá vốn
+  const oldStock    = nonNeg(cur.stock_qty)
+  const oldIncoming = nonNeg(cur.incoming_qty)
+
+  // Giá vốn bình quân tính trên tổng số cái sẽ có (tồn + đang về)
+  const oldTotal = oldStock + oldIncoming
+  const newTotal = oldTotal + add
   let costPrice = cur.cost_price
   const newCost = newItem.cost_price != null && newItem.cost_price !== ''
     ? nonNeg(newItem.cost_price) : null
-  if (newCost != null && total > 0) {
+  if (newCost != null && newTotal > 0) {
     const oldCost = nonNeg(cur.cost_price)
-    costPrice = oldQty > 0
-      ? Math.round((oldCost * oldQty + newCost * add) / total)
+    costPrice = oldTotal > 0
+      ? Math.round((oldCost * oldTotal + newCost * add) / newTotal)
       : newCost
   }
 
-  const patch = {
-    stock_qty:  total,
-    cost_price: costPrice,
-    updated_at: new Date().toISOString(),
+  const patch = { cost_price: costPrice, updated_at: new Date().toISOString() }
+  if (toIncoming) {
+    patch.incoming_qty = oldIncoming + add   // tồn kho giữ nguyên
+  } else {
+    patch.stock_qty = oldStock + add
+    // Hàng đang về mà nhập thẳng vào kho → coi như đã về
+    if (cur.status === 'ordered') patch.status = 'in_stock'
   }
-  // Các trường có điền ở lô mới thì cập nhật đè
-  for (const f of ['sell_price','supplier_name','supplier_contact','note','size','trip_id']) {
+
+  for (const f of ['sell_price','supplier_name','supplier_contact','note','size','trip_id',
+                   'tracking_number','order_date','eta_date']) {
     const v = newItem[f]
     if (v !== undefined && v !== null && v !== '') patch[f] = v
   }
-  // Hàng đang về mà nhập thêm vào kho → chuyển thành đã về
-  if (cur.status === 'ordered' && newItem.status === 'in_stock') patch.status = 'in_stock'
 
   const { data, error } = await supabase
     .from('jewelry').update(patch).eq('id', id).select().single()
   if (error) throw error
-  // Cộng dồn vào hàng vẫn đang về → chưa vào kho, chưa ghi sổ
-  if ((patch.status || cur.status) !== 'ordered') {
+
+  // Chỉ ghi sổ khi hàng thực sự vào kho
+  if (!toIncoming) {
     await logIntake({
       jewelry_id: id, qty: add, cost_price: newCost ?? cur.cost_price,
       supplier_name: newItem.supplier_name || cur.supplier_name,
@@ -195,10 +216,31 @@ export async function addStockToExisting(id, addQty, newItem = {}) {
       note: newItem.intake_note,
     }).catch(() => {})
   }
-  return { item: data, oldQty, added: add, total, oldCost: cur.cost_price, newCost: costPrice }
+
+  return {
+    item: data, added: add, toIncoming,
+    oldStock, newStock: toIncoming ? oldStock : oldStock + add,
+    oldIncoming, newIncoming: toIncoming ? oldIncoming + add : oldIncoming,
+    oldCost: cur.cost_price, newCost: costPrice,
+    // giữ tên cũ cho chỗ nào còn dùng
+    oldQty: oldStock, total: toIncoming ? oldStock : oldStock + add,
+  }
 }
 
 export async function updateJewelry(id, updates) {
+  // Món đang về: ô "Số lượng đặt" phải ghi vào cột hàng đang về,
+  // không phải tồn kho — nếu không hàng chưa về sẽ thành bán được.
+  if ('stock_qty' in updates) {
+    const { data: cur } = await supabase
+      .from('jewelry').select('status').eq('id', id).maybeSingle()
+    const goingToOrdered = updates.status
+      ? updates.status === 'ordered'
+      : cur?.status === 'ordered'
+    if (goingToOrdered) {
+      updates = { ...updates, incoming_qty: nonNeg(updates.stock_qty), stock_qty: 0 }
+    }
+  }
+
   // Đổi ảnh → xoá ảnh cũ khỏi Storage để không tích tụ file mồ côi
   if ('image_url' in updates) {
     const { data: prev } = await supabase
@@ -266,7 +308,7 @@ export async function createSale(sale) {
   let stockItem = null
   if (isInStock) {
     const { data, error: ge } = await supabase
-      .from('jewelry').select('stock_qty, status').eq('id', sale.jewelry_id).single()
+      .from('jewelry').select('stock_qty, incoming_qty, status').eq('id', sale.jewelry_id).single()
     if (ge) throw ge
     stockItem = data
     if (stockItem.status === 'ordered' && row.delivered) {
@@ -296,7 +338,9 @@ export async function createSale(sale) {
   // Hàng có sẵn chưa giao, hoặc hàng ĐANG VỀ → chưa trừ kho, nhưng vẫn giới hạn số lượng
   if (isInStock) {
     const soldAhead = await getReserved(sale.jewelry_id)
-    const limit = Number(stockItem.stock_qty) || 0
+    const limit = stockItem.status === 'ordered'
+      ? nonNeg(stockItem.incoming_qty)
+      : nonNeg(stockItem.stock_qty)
     if (soldAhead + sellQty > limit) {
       const left = Math.max(0, limit - soldAhead)
       throw new Error(stockItem.status === 'ordered'
@@ -314,40 +358,48 @@ export async function createSale(sale) {
 // ============================================
 // NHẬN HÀNG VỀ — đổi status, cập nhật số thực nhận
 // ============================================
+// Nhận hàng về: chuyển số thực nhận từ cột "đang về" sang tồn kho
 export async function receiveOrder(jewelryId, actualQty) {
   const { data: item, error: ge } = await supabase
-    .from('jewelry').select('stock_qty, code').eq('id', jewelryId).single()
+    .from('jewelry')
+    .select('stock_qty, incoming_qty, code, cost_price, supplier_name, trip_id')
+    .eq('id', jewelryId).single()
   if (ge) throw ge
 
-  const received = Number(actualQty)
-  const oldQtyOrdered = Number(item.stock_qty) || 0
+  const received  = Number(actualQty)
+  const ordered   = nonNeg(item.incoming_qty)   // số đã đặt, đang trên đường
+  const oldStock  = nonNeg(item.stock_qty)      // số đã có sẵn trong tủ
   if (!(received >= 0)) throw new Error('Số lượng thực nhận không hợp lệ')
 
+  // Đã bán trước bao nhiêu — phải đủ hàng để giao
   const soldAhead = await getReserved(jewelryId)
-
-  if (received < soldAhead) {
-    throw new Error(`Đã bán trước ${soldAhead} cái — số thực nhận không được nhỏ hơn`)
+  if (oldStock + received < soldAhead) {
+    throw new Error(`Đã bán trước ${soldAhead} cái — tổng sau khi nhận không được ít hơn`)
   }
 
+  const newStock = oldStock + received
+
   const { error } = await supabase.from('jewelry').update({
-    status:      'in_stock',
-    stock_qty:   received,
-    received_at: todayLocal(),
-    updated_at:  new Date().toISOString(),
+    status:       'in_stock',
+    stock_qty:    newStock,
+    incoming_qty: 0,              // hết hàng đang về
+    received_at:  todayLocal(),
+    updated_at:   new Date().toISOString(),
   }).eq('id', jewelryId)
   if (error) throw error
 
-  // Ghi sổ: thời điểm hàng thực sự về kho
-  const { data: full } = await supabase
-    .from('jewelry').select('cost_price, supplier_name, trip_id').eq('id', jewelryId).maybeSingle()
   await logIntake({
     jewelry_id: jewelryId, qty: received,
-    cost_price: full?.cost_price, supplier_name: full?.supplier_name,
-    trip_id: full?.trip_id, source: 'receive',
-    note: received !== oldQtyOrdered ? `Đặt ${oldQtyOrdered}, nhận ${received}` : null,
+    cost_price: item.cost_price, supplier_name: item.supplier_name,
+    trip_id: item.trip_id, source: 'receive',
+    note: received !== ordered ? `Đặt ${ordered}, nhận ${received}` : null,
   }).catch(() => {})
 
-  return { received, soldAhead, available: received - soldAhead }
+  return {
+    received, ordered, soldAhead,
+    oldStock, newStock,
+    available: newStock - soldAhead,
+  }
 }
 
 // Tick "đã giao" / "đã thanh toán"
@@ -490,21 +542,23 @@ export async function deleteSale(saleId) {
 export async function getJewelryTrips() {
   const { data, error } = await supabase
     .from('jewelry_trips')
-    .select('*, jewelry(id, stock_qty, cost_price, status)')
+    .select('*, jewelry(id, stock_qty, incoming_qty, cost_price, status)')
     .order('trip_date', { ascending: false })
   if (error) throw error
-  const val = list => list.reduce(
+  const valStock = list => list.reduce(
     (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.cost_price)||0), 0)
+  const valInc = list => list.reduce(
+    (s, j) => s + (Number(j.incoming_qty)||0) * (Number(j.cost_price)||0), 0)
   return (data || []).map(t => {
     const all = t.jewelry || []
     const arrived  = all.filter(j => j.status !== 'ordered')
-    const incoming = all.filter(j => j.status === 'ordered')
+    const incoming = all.filter(j => (Number(j.incoming_qty)||0) > 0)
     return {
       ...t,
       item_count:     arrived.length,
       incoming_count: incoming.length,
-      stock_value:    val(arrived),
-      incoming_value: val(incoming),
+      stock_value:    valStock(arrived),
+      incoming_value: valInc(incoming),
       jewelry: undefined,
     }
   })
@@ -560,8 +614,10 @@ export function calcStats(jewelry, sales) {
   const today    = new Date()
   const thisMonth = monthLocal()
 
-  // Tách hàng đang về khỏi hàng trong kho
-  const incoming  = jewelry.filter(j => j.status === 'ordered')
+  // Một mã có thể vừa có hàng trong tủ, vừa có hàng đang về.
+  // Tab Kho:     món đã từng về kho (status khác 'ordered')
+  // Tab Đang về: món còn số lượng đang trên đường
+  const incoming  = jewelry.filter(j => (Number(j.incoming_qty) || 0) > 0)
   const inStockJw = jewelry.filter(j => j.status !== 'ordered')
 
   const totalItems   = inStockJw.length
@@ -593,6 +649,7 @@ export function calcStats(jewelry, sales) {
       available,                      // còn bán được
       // 'ok' còn hàng · 'reserved' hết hàng bán nhưng đang chờ giao · 'out' hết sạch
       stock_state: available > 0 ? 'ok' : (reserved > 0 ? 'reserved' : 'out'),
+      incoming:        nonNeg(j.incoming_qty),   // đang trên đường về
       entry_date:      j.received_at || (j.created_at || '').slice(0, 10),
       is_new:          days <= 3,
       needs_photo:     !j.image_url,
@@ -696,7 +753,7 @@ export function calcStats(jewelry, sales) {
     incoming,
     incomingCount: incoming.length,
     incomingValue: incoming.reduce(
-      (s, j) => s + (Number(j.stock_qty)||0) * (Number(j.cost_price)||0), 0
+      (s, j) => s + (Number(j.incoming_qty)||0) * (Number(j.cost_price)||0), 0
     ),
     incomingLate: incoming.filter(j =>
       j.eta_date && j.eta_date < todayLocal()).length,
@@ -1022,9 +1079,15 @@ export async function bulkCreateJewelry(rows, { status = 'in_stock', trip_id = n
   const failed = []
 
   // --- Nhóm 1: thêm mới ---
-  const payload = newRows.map(r => cleanJewelry({
-    ...r.data, status, trip_id, image_url: null,
-  }))
+  const payload = newRows.map(r => {
+    const row = cleanJewelry({ ...r.data, status, trip_id, image_url: null })
+    // Nhập vào tab Đang về → số lượng là hàng đang trên đường, tồn kho = 0
+    if (status === 'ordered') {
+      row.incoming_qty = nonNeg(row.stock_qty)
+      row.stock_qty    = 0
+    }
+    return row
+  })
   const SIZE = 50
   for (let i = 0; i < payload.length; i += SIZE) {
     const chunk = payload.slice(i, i + SIZE)
@@ -1052,8 +1115,10 @@ export async function bulkCreateJewelry(rows, { status = 'in_stock', trip_id = n
       const exist = await findJewelryByCode(r.data.code)
       if (!exist) {
         // Mã biến mất giữa chừng → thêm mới
+        const one = cleanJewelry({ ...r.data, status, trip_id, image_url: null })
+        if (status === 'ordered') { one.incoming_qty = nonNeg(one.stock_qty); one.stock_qty = 0 }
         const { data: dn, error } = await supabase.from('jewelry')
-          .insert([cleanJewelry({ ...r.data, status, trip_id, image_url: null })])
+          .insert([one])
           .select('id, stock_qty, cost_price, supplier_name, trip_id').single()
         if (error) failed.push({ code: r.data.code, message: error.message })
         else { inserted++; if (status !== 'ordered') await logIntake({ ...dn, jewelry_id: dn.id, qty: dn.stock_qty, source: 'csv' }).catch(()=>{}) }

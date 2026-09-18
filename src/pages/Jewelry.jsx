@@ -82,9 +82,12 @@ export default function Jewelry() {
   }
   const handleDelete = async (item) => {
     const pending = sales.filter(s => s.jewelry_id === item.id && !s.delivered)
-    const msg = pending.length > 0
-      ? `Xoá "${item.code}"?\n\nĐang có ${pending.length} đơn CHƯA GIAO cho món này — xoá sẽ mất luôn các đơn đó.`
-      : `Xoá "${item.code}"? Lịch sử bán sẽ xoá theo.`
+    const inc = Number(item.incoming_qty) || 0
+    const lines = [`Xoá "${item.code}"?`]
+    if (inc > 0) lines.push(`Còn ${inc} cái ĐANG VỀ — xoá sẽ mất theo dõi lô hàng này.`)
+    if (pending.length > 0) lines.push(`Đang có ${pending.length} đơn CHƯA GIAO — xoá sẽ mất luôn các đơn đó.`)
+    if (inc === 0 && pending.length === 0) lines.push('Lịch sử bán sẽ xoá theo.')
+    const msg = lines.join('\n\n')
     if (!confirm(msg)) return
     try { await deleteJewelry(item.id); toast.success('Đã xoá'); loadData() }
     catch { toast.error('Lỗi') }
@@ -496,6 +499,12 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                       Chờ giao
                     </span>
                   )}
+                  {item.incoming > 0 && (
+                    <span className={`absolute ${sold > 0 ? 'top-[52px]' : 'top-7'} right-1.5
+                      text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700`}>
+                      {item.incoming} đang về
+                    </span>
+                  )}
                   {item.is_new ? (
                     <span className="absolute top-1.5 left-1.5 text-[9px] font-bold px-1.5 py-0.5 rounded-full bg-purple-600 text-white">
                       MỚI
@@ -641,7 +650,8 @@ function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
       ) : list.map(j => {
         const ahead = soldAhead[j.id] || 0
         const late  = j.eta_date && j.eta_date < today10
-        const cost  = (Number(j.stock_qty)||0) * (Number(j.cost_price)||0)
+        const cost  = (Number(j.incoming_qty)||0) * (Number(j.cost_price)||0)
+        const inTu  = Number(j.stock_qty) || 0
 
         return (
           <div key={j.id} className="bg-white border-b border-gray-100 px-4 py-3">
@@ -660,7 +670,7 @@ function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
                       {j.code}{j.name ? ` · ${j.name}` : ''}
                     </div>
                     <div className="text-[10px] text-gray-400">
-                      {j.stock_qty} cái
+                      {j.incoming_qty} cái đang về
                       {j.supplier_name && ` · ${j.supplier_name}`}
                     </div>
                   </div>
@@ -689,6 +699,11 @@ function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
                   {j.trip_name && (
                     <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700">
                       ✈ {j.trip_name}
+                    </span>
+                  )}
+                  {inTu > 0 && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-green-50 text-green-700 font-medium">
+                      Đã có {inTu} trong kho
                     </span>
                   )}
                   {ahead > 0 && (
@@ -742,14 +757,15 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
   const [qty,    setQty]    = useState(0)
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { if (item) setQty(Number(item.stock_qty) || 0) }, [item])
+  useEffect(() => { if (item) setQty(Number(item.incoming_qty) || 0) }, [item])
 
   if (!item) return null
 
-  const ordered = Number(item.stock_qty) || 0
+  const ordered = Number(item.incoming_qty) || 0   // số đã đặt
+  const inTu    = Number(item.stock_qty) || 0       // số đang có sẵn
   const ahead   = item.soldAhead || 0
   const short   = ordered - qty
-  const tooFew  = qty < ahead
+  const tooFew  = inTu + qty < ahead
 
   const handleConfirm = async () => {
     setSaving(true)
@@ -792,8 +808,18 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
                   flex items-center justify-center active:scale-90">+</button>
             </div>
           </div>
-          {ahead > 0 && (
+          {inTu > 0 && (
             <div className="flex items-center justify-between pt-1 border-t border-gray-200">
+              <span className="text-xs text-gray-500">Đang có trong tủ</span>
+              <span className="text-sm font-semibold text-green-600">{inTu} cái</span>
+            </div>
+          )}
+          <div className="flex items-center justify-between pt-1 border-t border-gray-200">
+            <span className="text-xs font-medium text-gray-700">Tồn kho sau khi nhận</span>
+            <span className="text-sm font-bold text-green-700">{inTu + qty} cái</span>
+          </div>
+          {ahead > 0 && (
+            <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">Đã bán trước</span>
               <span className="text-sm font-semibold text-amber-600">{ahead} cái</span>
             </div>
@@ -802,7 +828,7 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
 
         {tooFew && (
           <div className="px-3 py-2 bg-red-50 border border-red-200 rounded-xl text-[11px] text-red-700 leading-relaxed">
-            Đã bán trước {ahead} cái — số thực nhận không được nhỏ hơn.
+            Đã bán trước {ahead} cái — tổng sau khi nhận ({inTu + qty}) không được ít hơn.
           </div>
         )}
         {!tooFew && short > 0 && (
@@ -812,8 +838,10 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
         )}
 
         <div className="px-3 py-2 bg-gray-50 rounded-xl text-[11px] text-gray-500 leading-relaxed">
-          Món này chuyển sang <b>Kho hàng</b>, giữ nguyên ảnh, giá, NCC và chuyến.
-          {ahead > 0 && ` ${ahead} cái đã bán trước sẽ tự trừ — còn ${Math.max(0, qty - ahead)} cái bán tiếp.`}
+          {inTu > 0
+            ? <>Cộng {qty} cái vào {inTu} cái đang có — tồn kho thành <b>{inTu + qty}</b> cái.</>
+            : <>Món này chuyển sang <b>Kho hàng</b>, giữ nguyên ảnh, giá, NCC và chuyến.</>}
+          {ahead > 0 && ` ${ahead} cái đã bán trước sẽ tự trừ — còn ${Math.max(0, inTu + qty - ahead)} cái bán tiếp.`}
         </div>
 
         <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
@@ -1466,6 +1494,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
                        const [y,m,dd] = d.split('-'); return dd ? `${dd}/${m}/${y}` : null })()
             : null],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-gray-800' : 'text-red-500'],
+          ['Đang về', item.incoming_qty > 0 ? `${item.incoming_qty} cái` : null, 'text-purple-600'],
           ['Đã bán, chờ giao', reserved > 0 ? `${reserved}/${item.stock_qty} cái` : null, 'text-red-600'],
           ['Còn bán được', `${available} cái`,
             available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
@@ -1989,7 +2018,10 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
     if (item) {
       setForm({
         code: item.code||'', category: item.category||'Nhẫn', name: item.name||'',
-        size: item.size||'', stock_qty: item.stock_qty||1, cost_price: item.cost_price||'',
+        size: item.size||'',
+        // Món đang về: ô số lượng lấy từ cột hàng đang về
+        stock_qty: (item.status === 'ordered' ? item.incoming_qty : item.stock_qty) || 1,
+        cost_price: item.cost_price||'',
         sell_price: item.sell_price||'', supplier_name: item.supplier_name||'',
         supplier_contact: item.supplier_contact||'', trip_id: item.trip_id||'', note: item.note||'',
         tracking_number: item.tracking_number||'', order_date: item.order_date||'', eta_date: item.eta_date||'',
@@ -2275,21 +2307,30 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
 function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
   const [saving, setSaving] = useState(false)
 
-  const addQty  = Number(payload.stock_qty) || 0
-  const oldQty  = Number(exist.stock_qty)   || 0
-  const total   = oldQty + addQty
+  const toIncoming = payload.status === 'ordered'   // đang thêm ở tab Đang về
+  const addQty     = Number(payload.stock_qty) || 0
+  const oldStock   = Number(exist.stock_qty)    || 0
+  const oldInc     = Number(exist.incoming_qty) || 0
 
-  const oldCost = Number(exist.cost_price)   || 0
-  const newCost = payload.cost_price != null ? Number(payload.cost_price) : null
-  const avgCost = (newCost != null && total > 0)
-    ? Math.round((oldCost * oldQty + newCost * addQty) / total)
+  const newStock = toIncoming ? oldStock : oldStock + addQty
+  const newInc   = toIncoming ? oldInc + addQty : oldInc
+
+  // Giá vốn bình quân trên tổng số cái sẽ có
+  const oldTotal = oldStock + oldInc
+  const newTotal = oldTotal + addQty
+  const oldCost  = Number(exist.cost_price) || 0
+  const newCost  = payload.cost_price != null ? Number(payload.cost_price) : null
+  const avgCost  = (newCost != null && newTotal > 0)
+    ? Math.round((oldCost * oldTotal + newCost * addQty) / newTotal)
     : oldCost
 
   const handleMerge = async () => {
     setSaving(true)
     try {
       const r = await addStockToExisting(exist.id, addQty, payload)
-      toast.success(`✓ Đã lưu — ${exist.code}: ${r.oldQty} + ${r.added} = ${r.total} cái`)
+      toast.success(toIncoming
+        ? `✓ Đã lưu — ${exist.code}: ${r.newIncoming} cái đang về`
+        : `✓ Đã lưu — ${exist.code}: ${r.oldStock} + ${r.added} = ${r.newStock} cái`)
       onMerged()
     } catch (err) {
       toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ'))
@@ -2298,7 +2339,7 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-5 bg-black/50">
+    <div className="fixed inset-0 z-[80] flex items-center justify-center p-5 bg-black/50">
       <div className="bg-white rounded-2xl w-full max-w-sm p-5 space-y-3">
         <div className="text-center">
           <div className="text-3xl mb-1">📦</div>
@@ -2308,26 +2349,48 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
           </div>
         </div>
 
+        {toIncoming && (
+          <div className="px-3 py-2 bg-purple-50 rounded-xl text-[11px] text-purple-700 leading-relaxed">
+            Bạn đang thêm ở tab <b>Đang về</b> — {addQty} cái này chưa về tới, nên
+            không cộng vào tồn kho mà ghi riêng là hàng đang về.
+          </div>
+        )}
+
         <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
           <div className="flex justify-between text-xs">
-            <span className="text-gray-500">Tồn hiện tại</span>
-            <span className="font-semibold text-gray-800">{oldQty} cái</span>
+            <span className="text-gray-500">Đang có trong tủ</span>
+            <span className="font-semibold text-green-600">{oldStock} cái</span>
           </div>
+          {(oldInc > 0 || toIncoming) && (
+            <div className="flex justify-between text-xs">
+              <span className="text-gray-500">Đang về (trước)</span>
+              <span className="font-semibold text-gray-800">{oldInc} cái</span>
+            </div>
+          )}
           <div className="flex justify-between text-xs">
-            <span className="text-gray-500">Nhập thêm</span>
+            <span className="text-gray-500">{toIncoming ? 'Đặt thêm' : 'Nhập thêm'}</span>
             <span className="font-semibold text-purple-600">+{addQty} cái</span>
           </div>
           <div className="flex justify-between text-sm pt-1.5 border-t border-gray-200">
-            <span className="font-medium text-gray-700">Sau khi cộng</span>
-            <span className="font-bold text-green-600">{total} cái</span>
+            <span className="font-medium text-gray-700">
+              {toIncoming ? 'Đang về (sau)' : 'Tồn kho sau'}
+            </span>
+            <span className={`font-bold ${toIncoming ? 'text-purple-700' : 'text-green-600'}`}>
+              {toIncoming ? newInc : newStock} cái
+            </span>
           </div>
+          {toIncoming && (
+            <div className="text-[10px] text-gray-400 text-center pt-0.5">
+              Tồn kho vẫn là {oldStock} cái — chỉ khi bấm "Hàng đã về" mới cộng vào
+            </div>
+          )}
         </div>
 
         {newCost != null && newCost !== oldCost && (
           <div className="bg-amber-50 rounded-xl p-3 space-y-1">
-            <div className="text-[11px] font-semibold text-amber-800">Giá vốn tính lại theo bình quân</div>
-            <div className="flex justify-between text-[11px] text-amber-700">
-              <span>Cũ {fmtMoney(oldCost)} × {oldQty} · mới {fmtMoney(newCost)} × {addQty}</span>
+            <div className="text-[11px] font-semibold text-amber-800">Giá vốn tính lại bình quân</div>
+            <div className="text-[11px] text-amber-700">
+              Cũ {fmtMoney(oldCost)} × {oldTotal} · mới {fmtMoney(newCost)} × {addQty}
             </div>
             <div className="flex justify-between text-xs font-semibold text-amber-900">
               <span>Giá vốn mới</span><span>{fmtMoney(avgCost)}/cái</span>
@@ -2336,8 +2399,8 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
         )}
 
         <div className="text-[11px] text-gray-500 leading-relaxed px-1">
-          Các thông tin khác bạn vừa điền (giá bán, nhà cung cấp, ghi chú, chuyến) sẽ ghi đè lên bản cũ.
-          Ảnh cũ giữ nguyên.
+          Thông tin khác bạn vừa điền (giá bán, NCC, ghi chú, chuyến, mã vận đơn)
+          sẽ ghi đè lên bản cũ. Ảnh cũ giữ nguyên.
         </div>
 
         <div className="flex gap-2 pt-1">
@@ -2347,7 +2410,7 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
           </button>
           <button onClick={handleMerge} disabled={saving}
             className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
-            {saving ? 'Đang cộng...' : 'Cộng vào kho'}
+            {saving ? 'Đang lưu...' : toIncoming ? 'Thêm vào hàng đang về' : 'Cộng vào kho'}
           </button>
         </div>
       </div>
@@ -2355,9 +2418,6 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
   )
 }
 
-// ============================================
-// SALE FORM — tạo / sửa đơn (có sẵn hoặc order)
-// ============================================
 function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], customerNames, onClose, onSaved, toast }) {
   const EMPTY = {
     mode: 'stock',          // stock | order
@@ -2518,7 +2578,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
                   <div className="text-[10px] text-purple-500">
                     {picked.name}{picked.size ? ` · size ${picked.size}` : ''}
                     {picked.status === 'ordered'
-                      ? ` · Đang về ${picked.stock_qty}`
+                      ? ` · Đang về ${picked.incoming_qty ?? 0}`
                       : ` · Còn bán ${pickedAvail}`}
                   </div>
                 </div>
@@ -3128,7 +3188,7 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
 
   // Hàng đang về: món dự kiến về sớm nhất lên trước
   const incoming = jewelry
-    .filter(j => j.status === 'ordered' && match(j))
+    .filter(j => (Number(j.incoming_qty) || 0) > 0 && match(j))
     .sort((a, b) => (a.eta_date || '9999').localeCompare(b.eta_date || '9999'))
 
   const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}` }
@@ -3168,7 +3228,7 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
           {fmtMoney(j.sell_price||0)}
         </div>
         <div className={`text-[10px] ${inc ? 'text-purple-500 font-medium' : 'text-gray-400'}`}>
-          {inc ? `Đang về ${j.stock_qty}` : `Còn ${availOf(j)}`}
+          {inc ? `Đang về ${j.incoming_qty}` : `Còn ${availOf(j)}`}
         </div>
       </div>
     </div>

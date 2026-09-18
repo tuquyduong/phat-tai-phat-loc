@@ -65,25 +65,57 @@ export default function Home({ onNavigate, activeModules }) {
   const handleBackup = async () => {
     setBackupLoading(true)
     try {
-      const backup = { version: '2.4', created_at: new Date().toISOString(), tables: {} }
+      const backup = { version: '2.5', created_at: new Date().toISOString(), tables: {} }
+      const failedTables = []
+
+      // Supabase trả tối đa 1000 dòng mỗi lần gọi — phải lấy theo từng trang,
+      // nếu không bảng nhiều dòng sẽ bị cắt mà không báo gì.
+      const PAGE = 1000
       for (const table of BACKUP_TABLES) {
         try {
-          const { data, error } = await supabase.from(table).select('*')
-          if (!error && data) backup.tables[table] = data
-        } catch {}
+          const rows = []
+          for (let from = 0; ; from += PAGE) {
+            const { data, error } = await supabase
+              .from(table).select('*').range(from, from + PAGE - 1)
+            if (error) throw error
+            if (!data || data.length === 0) break
+            rows.push(...data)
+            if (data.length < PAGE) break     // đã hết
+          }
+          backup.tables[table] = rows
+        } catch (e) {
+          failedTables.push(table)
+        }
       }
-      backup.localStorage = { order_tracker_settings: localStorage.getItem('order_tracker_settings') }
 
+      backup.localStorage = { order_tracker_settings: localStorage.getItem('order_tracker_settings') }
+      backup.failed_tables = failedTables
+
+      // Có bảng không lấy được → hỏi trước khi tải file thiếu
+      if (failedTables.length > 0) {
+        const ok = confirm(
+          `Không đọc được ${failedTables.length} bảng:\n${failedTables.join(', ')}\n\n` +
+          `File backup sẽ THIẾU các bảng này. Vẫn tải về?`
+        )
+        if (!ok) { toast.error('Đã huỷ backup'); return }
+      }
+
+      const d = new Date()
+      const stamp = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
       const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `chimai_backup_${new Date().toISOString().split('T')[0]}.json`
+      a.download = `chimai_backup_${stamp}.json`
       document.body.appendChild(a); a.click(); document.body.removeChild(a)
       URL.revokeObjectURL(url)
 
       const totalRows = Object.values(backup.tables).reduce((s, t) => s + t.length, 0)
-      toast.success(`Đã tải backup: ${Object.keys(backup.tables).length} bảng, ${totalRows} dòng`)
+      const okCount   = Object.keys(backup.tables).length
+      if (failedTables.length > 0)
+        toast.error(`Backup thiếu ${failedTables.length} bảng — ${okCount} bảng, ${totalRows} dòng`)
+      else
+        toast.success(`✓ Đã tải backup: ${okCount} bảng, ${totalRows} dòng`)
     } catch (err) { toast.error('Lỗi backup: ' + err.message) }
     finally { setBackupLoading(false) }
   }
@@ -114,25 +146,106 @@ export default function Home({ onNavigate, activeModules }) {
           'stocks', 'stock_transactions', 'dividends', 'transactions'
         ]
 
+        // Cảnh báo nếu file backup vốn đã thiếu bảng
+        if (backup.failed_tables?.length > 0) {
+          const ok = confirm(
+            `File backup này THIẾU ${backup.failed_tables.length} bảng:\n` +
+            `${backup.failed_tables.join(', ')}\n\n` +
+            `Khôi phục sẽ không có dữ liệu các bảng đó. Tiếp tục?`
+          )
+          if (!ok) { toast.error('Đã huỷ khôi phục'); return }
+        }
+
+        // ── Lớp 1: tự sao lưu hiện trạng trước khi động vào gì ──
+        // Nếu khôi phục hỏng giữa chừng, bạn vẫn còn file này để quay lại.
+        try {
+          const safety = { version: '2.5', created_at: new Date().toISOString(),
+                           note: 'Tự sao lưu trước khi khôi phục', tables: {} }
+          for (const tbl of BACKUP_TABLES) {
+            const rows = []
+            for (let from = 0; ; from += 1000) {
+              const { data, error } = await supabase.from(tbl).select('*').range(from, from + 999)
+              if (error) break
+              if (!data || data.length === 0) break
+              rows.push(...data)
+              if (data.length < 1000) break
+            }
+            if (rows.length) safety.tables[tbl] = rows
+          }
+          const d0 = new Date()
+          const st = `${d0.getFullYear()}${String(d0.getMonth()+1).padStart(2,'0')}${String(d0.getDate()).padStart(2,'0')}_${String(d0.getHours()).padStart(2,'0')}${String(d0.getMinutes()).padStart(2,'0')}`
+          const b0 = new Blob([JSON.stringify(safety)], { type: 'application/json' })
+          const u0 = URL.createObjectURL(b0)
+          const a0 = document.createElement('a')
+          a0.href = u0; a0.download = `chimai_TRUOC-KHI-KHOIPHUC_${st}.json`
+          document.body.appendChild(a0); a0.click(); document.body.removeChild(a0)
+          URL.revokeObjectURL(u0)
+        } catch {
+          if (!confirm('Không tự sao lưu được hiện trạng.\n\nVẫn tiếp tục khôi phục?')) {
+            toast.error('Đã huỷ khôi phục'); return
+          }
+        }
+
+        // ── Lớp 2: khôi phục từng bảng trong một giao dịch ──
         let restored = 0
+        const failed = []
+        let useRpc = true
+
         for (const table of restoreOrder) {
           const rows = backup.tables[table]
           if (!rows || rows.length === 0) continue
-          try {
-            if (table === 'settings') {
-              await supabase.from(table).delete().neq('key', '')
+
+          if (useRpc) {
+            // Hàm restore_table xoá và chèn cùng lúc.
+            // Lỗi ở bất kỳ đâu → database tự quay lui, dữ liệu cũ còn nguyên.
+            const { data, error } = await supabase.rpc('restore_table', {
+              p_table: table, p_rows: rows,
+            })
+            if (!error) { restored += data?.rows ?? rows.length; continue }
+
+            // Chưa cài hàm trong database → chuyển sang cách cũ cho mọi bảng
+            if (/function .*restore_table.* does not exist|PGRST202/i.test(error.message || '')) {
+              useRpc = false
             } else {
-              await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
+              failed.push(`${table} (${(error.message || '').slice(0, 60)})`)
+              continue
             }
-            const { error } = await supabase.from(table).insert(rows)
-            if (!error) restored += rows.length
-          } catch {}
+          }
+
+          // ── Đường lui: chèn thử 1 dòng trước khi xoá ──
+          const { error: probeErr } = await supabase.from(table).insert(rows.slice(0, 1))
+          if (probeErr) { failed.push(`${table} (${probeErr.message.slice(0, 60)})`); continue }
+          try {
+            if (table === 'settings') await supabase.from(table).delete().neq('key', '')
+            else await supabase.from(table).delete().neq('id', '00000000-0000-0000-0000-000000000000')
+            let okRows = 0
+            for (let i = 0; i < rows.length; i += 500) {
+              const { error } = await supabase.from(table).insert(rows.slice(i, i + 500))
+              if (error) { failed.push(`${table} dòng ${i + 1}+ (${error.message.slice(0, 50)})`); break }
+              okRows += Math.min(500, rows.length - i)
+            }
+            restored += okRows
+          } catch (e) {
+            failed.push(`${table} (${e.message?.slice(0, 60) || 'lỗi không rõ'})`)
+          }
         }
+
         if (backup.localStorage?.order_tracker_settings) {
           localStorage.setItem('order_tracker_settings', backup.localStorage.order_tracker_settings)
         }
-        toast.success(`Đã restore ${restored} dòng dữ liệu. Đang reload...`)
-        setTimeout(() => window.location.reload(), 1500)
+
+        if (failed.length > 0) {
+          alert(
+            `Khôi phục xong nhưng có ${failed.length} lỗi:\n\n${failed.join('\n')}\n\n` +
+            `Đã khôi phục ${restored} dòng.\n` +
+            `File "chimai_TRUOC-KHI-KHOIPHUC_..." vừa tải về giữ nguyên hiện trạng cũ — ` +
+            `dùng nó nếu cần quay lại.`
+          )
+          toast.error(`Khôi phục ${restored} dòng, ${failed.length} lỗi`)
+        } else {
+          toast.success(`✓ Đã khôi phục ${restored} dòng. Đang tải lại...`)
+        }
+        setTimeout(() => window.location.reload(), failed.length > 0 ? 3000 : 1500)
       } catch (err) { toast.error('Lỗi restore: ' + err.message) }
       finally { setBackupLoading(false) }
     }
