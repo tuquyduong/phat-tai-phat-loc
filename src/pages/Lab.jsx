@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney, getLocalDateString } from '../lib/helpers'
+import { formatMoney, getLocalDateString, stripVN } from '../lib/helpers'
 import {
   getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock, getIngredient,
   getImports, createImport, markImportArrived, deleteImport,
@@ -445,7 +445,128 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
 // ============================================
 // FORMULA FORM - Steps + Unit dropdown
 // ============================================
+// ============================================
+// CHỌN NGUYÊN LIỆU — gõ để tìm, gợi ý ngay
+// ============================================
+function IngredientPicker({ value, ingredients, onPick, isOpen, onOpen, onCloseMe }) {
+  const open = isOpen
+  const setOpen = v => v ? onOpen() : onCloseMe()
+  const [query, setQuery] = useState('')
+  const [hi,    setHi]    = useState(0)      // dòng đang trỏ tới
+  const boxRef = useRef(null)
+
+  const picked = ingredients.find(i => i.id === value)
+
+
+  const matches = useMemo(() => {
+    const q = stripVN(query.trim())
+    if (!q) return ingredients.slice(0, 50)
+    const scored = []
+    ingredients.forEach(i => {
+      const name = stripVN(i.name)
+      const pos  = name.indexOf(q)
+      if (pos === 0)      scored.push([0, i])        // khớp đầu tên — ưu tiên nhất
+      else if (pos > 0)   scored.push([1, i])        // khớp giữa tên
+      else if (stripVN(i.supplier).includes(q)) scored.push([2, i])  // khớp nhà cung cấp
+    })
+    return scored.sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name, 'vi'))
+                 .slice(0, 50).map(x => x[1])
+  }, [ingredients, query])
+
+  // Danh sách lọc đổi → đưa con trỏ về đầu, tránh trỏ ra ngoài mảng
+  useEffect(() => { setHi(0) }, [query])
+
+  // Cuộn dòng đang trỏ vào tầm nhìn khi bấm mũi tên
+  const listRef = useRef(null)
+  useEffect(() => {
+    listRef.current?.children[hi]?.scrollIntoView?.({ block: 'nearest' })
+  }, [hi])
+
+  // Bấm ra ngoài thì đóng
+  useEffect(() => {
+    if (!open) return
+    const onDown = e => { if (boxRef.current && !boxRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('touchstart', onDown)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('touchstart', onDown)
+    }
+  }, [open])
+
+  const choose = (ing) => { onPick(ing.id); setOpen(false); setQuery('') }
+
+  // Gần đáy màn thì xổ lên trên để không bị cắt
+  const [up, setUp] = useState(false)
+  useEffect(() => {
+    if (!open || !boxRef.current) return
+    const r = boxRef.current.getBoundingClientRect()
+    setUp(window.innerHeight - r.bottom < 240)
+  }, [open])
+
+  const onKey = (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); setHi(h => Math.min(h + 1, matches.length - 1)) }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setHi(h => Math.max(h - 1, 0)) }
+    else if (e.key === 'Enter' && matches[hi]) { e.preventDefault(); choose(matches[hi]) }
+    else if (e.key === 'Escape') setOpen(false)
+  }
+
+  const stockOf = (i) => {
+    const q = Number(i.stock_qty) || 0
+    if (q < 0)   return { txt: 'tồn âm', cls: 'text-red-600 font-semibold' }
+    if (q === 0) return { txt: 'hết',    cls: 'text-red-500' }
+    const t = getAlertThreshold(i)
+    if (t > 0 && q < t) return { txt: `còn ${q} ${i.unit}`, cls: 'text-amber-600' }
+    return { txt: `còn ${q} ${i.unit}`, cls: 'text-gray-400' }
+  }
+
+  return (
+    <div ref={boxRef} className="relative flex-1 min-w-0">
+      {!open ? (
+        <button onClick={() => { setOpen(true); setQuery(''); setHi(0) }}
+          className="w-full px-2 py-2 border border-gray-200 rounded-lg text-xs bg-white text-left truncate">
+          {picked ? picked.name : <span className="text-gray-400">Chọn nguyên liệu...</span>}
+        </button>
+      ) : (
+        <input autoFocus value={query} onChange={e => { setQuery(e.target.value); setHi(0) }}
+          onKeyDown={onKey} placeholder="Gõ tên nguyên liệu..."
+          className="w-full px-2 py-2 border-2 border-purple-400 rounded-lg text-xs bg-white
+            focus:outline-none"/>
+      )}
+
+      {open && (
+        <div ref={listRef}
+          className={`absolute z-50 left-0 right-0 bg-white border border-gray-200 rounded-xl
+            shadow-lg max-h-56 overflow-y-auto ${up ? 'bottom-full mb-1' : 'mt-1'}`}>
+          {matches.length === 0 ? (
+            <p className="px-3 py-3 text-xs text-gray-400 text-center">
+              Không tìm thấy "{query}"
+            </p>
+          ) : matches.map((i, n) => {
+            const s = stockOf(i)
+            return (
+              <button key={i.id} onClick={() => choose(i)}
+                onMouseEnter={() => setHi(n)}
+                className={`w-full px-3 py-2 text-left flex items-center gap-2 border-b border-gray-50
+                  last:border-0 ${n === hi ? 'bg-purple-50' : ''} ${i.id === value ? 'font-semibold' : ''}`}>
+                <span className="text-xs text-gray-800 flex-1 truncate">{i.name}</span>
+                <span className={`text-[10px] flex-shrink-0 ${s.cls}`}>{s.txt}</span>
+              </button>
+            )
+          })}
+          {matches.length >= 50 && (
+            <p className="px-3 py-1.5 text-[10px] text-gray-400 text-center border-t border-gray-100">
+              Còn nữa — gõ thêm để thu hẹp
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toast, onSaved }) {
+  const [openPicker, setOpenPicker] = useState(null)   // chỉ 1 ô gợi ý mở cùng lúc
   const [name, setName] = useState(''); const [description, setDescription] = useState('')
   const [baseServing, setBaseServing] = useState(1); const [category, setCategory] = useState('')
   const [note, setNote] = useState(''); const [items, setItems] = useState([])
@@ -535,10 +656,11 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
               const allUnits = [...new Set([...convUnits, item.unit, ...(ing?[ing.unit]:[]) ])]
               return (
                 <div key={idx} className="flex items-center gap-1.5 bg-gray-50 rounded-lg p-2">
-                  <select value={item.ingredient_id} onChange={e => updateItem(idx,'ingredient_id',e.target.value)}
-                    className="flex-1 min-w-0 px-2 py-2 border border-gray-200 rounded-lg text-xs bg-white">
-                    {ingredients.map(i => <option key={i.id} value={i.id}>{i.name}</option>)}
-                  </select>
+                  <IngredientPicker value={item.ingredient_id} ingredients={ingredients}
+                    isOpen={openPicker === idx}
+                    onOpen={() => setOpenPicker(idx)}
+                    onCloseMe={() => setOpenPicker(p => p === idx ? null : p)}
+                    onPick={id => updateItem(idx, 'ingredient_id', id)}/>
                   <input type="number" inputMode="decimal" value={item.quantity||''} onChange={e => updateItem(idx,'quantity',Number(e.target.value))}
                     placeholder="0" className="w-16 px-2 py-2 border border-gray-200 rounded-lg text-xs text-center"/>
                   <select value={item.unit} onChange={e => updateItem(idx,'unit',e.target.value)}

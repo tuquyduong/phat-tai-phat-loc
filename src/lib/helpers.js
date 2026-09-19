@@ -428,3 +428,13 @@ export function getZaloLink(phone) {
   const digits = phone.replace(/\D/g, '')
   return `https://zalo.me/${digits}`
 }
+
+// Bỏ dấu tiếng Việt để tìm kiếm — gõ "bach truat" ra "Bạch Truật".
+// Phải hạ chữ thường TRƯỚC khi đổi đ→d, không thì chữ Đ hoa lọt lưới.
+export function stripVN(s) {
+  return String(s || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/đ/g, 'd')
+}

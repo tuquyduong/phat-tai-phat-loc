@@ -5,11 +5,12 @@
 import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   RefreshCw, ChevronLeft, ChevronRight, Trash2,
-  ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2, ArrowLeftRight, CreditCard
+  ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2, ArrowLeftRight, CreditCard,
+  Search
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney, getLocalDateString } from '../lib/helpers'
+import { formatMoney, getLocalDateString, stripVN } from '../lib/helpers'
 import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
   getTransactions, createTransaction, updateTransaction, deleteTransaction,
@@ -35,7 +36,19 @@ function formatDateLabel(ds) {
 }
 const mBadge = (m) => m==='credit'?'bg-purple-50 text-purple-600 border-purple-200':m==='transfer'?'bg-blue-50 text-blue-600 border-blue-200':'bg-amber-50 text-amber-600 border-amber-200'
 const mShort = (m) => m==='credit'?'TD':m==='transfer'?'CK':'TM'
-const ICONS = ['🏠','🍜','🚗','💼','🧪','💊','📦','🛒','👕','📱','🎓','🎮','✂️','🧴','💡','🏥','🎁','☕','🍺','💄','👶','🐾','✈️','🎬','📚']
+const ICON_GROUPS = [
+  { label: 'Ăn uống',    icons: ['🍜','🍚','🍲','🥘','🍖','🍗','🐟','🦐','🥗','🥬','🍅','🍎','🍌','🥭','☕','🍵','🧋','🍺','🍷','🥤','🍰','🍪','🍫','🧊'] },
+  { label: 'Nhà cửa',    icons: ['🏠','🏡','🛏️','🛋️','🚿','🚽','🧹','🧽','🧴','🧺','💡','🔌','🔧','🔨','🪑','🪟','🌡️','🧯','🗑️','📦'] },
+  { label: 'Đi lại',     icons: ['🚗','🏍️','🚲','🚕','🚌','🚂','✈️','⛽','🛣️','🅿️','🛵','🚢','🎫','🗺️'] },
+  { label: 'Sức khoẻ',   icons: ['💊','💉','🏥','🩺','🦷','👓','🧘','🏃','🏋️','⚕️','🩹','🌿','🧪','🔬'] },
+  { label: 'Mua sắm',    icons: ['🛒','🛍️','👕','👗','👖','👟','👜','💄','💍','⌚','🕶️','🧢','🧦','🎒'] },
+  { label: 'Công việc',  icons: ['💼','📱','💻','🖨️','📞','📧','📊','📈','📝','🗂️','🖇️','📌','🏢','🏭','🔖'] },
+  { label: 'Tiền bạc',   icons: ['💰','💵','💳','🏦','🧾','💸','🪙','📉','🤝','📃','🔐','🎰'] },
+  { label: 'Gia đình',   icons: ['👶','🧒','👦','👧','🧑','👩','👨','👵','👴','🐾','🐶','🐱','🎂','🎁','💐','🧸'] },
+  { label: 'Học & chơi', icons: ['🎓','📚','📖','✏️','🎮','🎬','🎵','🎨','⚽','🏸','🎣','🎯','🎪','🎤'] },
+  { label: 'Tâm linh',   icons: ['🕯️','🙏','🧧','🏮','⛩️','🪷','📿','🎎','🍀','☯️'] },
+  { label: 'Khác',       icons: ['📦','⭐','❗','❓','🔔','🔑','✂️','🧰','♻️','🆕','🔴','🟡','🟢','🔵','🟣','⚫'] },
+]
 const COLORS = ['#3B82F6','#EF4444','#F59E0B','#10B981','#8B5CF6','#EC4899','#14B8A6','#6366F1','#F97316','#06B6D4','#84CC16','#A855F7']
 
 // ============================================
@@ -56,6 +69,7 @@ export default function Expenses() {
   const [activeView, setActiveView] = useState('list')
   const [filterCategory, setFilterCategory] = useState(null)
   const [filterMethod, setFilterMethod] = useState(null)
+  const [search, setSearch] = useState('')
   const [showCatMgr, setShowCatMgr] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [showPayCredit, setShowPayCredit] = useState(false)
@@ -116,10 +130,31 @@ export default function Expenses() {
     let f = transactions
     if (filterCategory) f = f.filter(t => t.category_id===filterCategory)
     if (filterMethod) f = f.filter(t => (t.payment_method||'cash')===filterMethod)
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      // Gõ số thì tìm cả theo số tiền: "1650000", "1.650.000" hay "1650" đều ra
+      const num = q.replace(/[^\d]/g, '')
+      f = f.filter(t =>
+        (t.note || '').toLowerCase().includes(q) ||
+        (t.category?.name || '').toLowerCase().includes(q) ||
+        (num && String(Math.round(Number(t.amount) || 0)).includes(num))
+      )
+    }
     const g = {}
     f.forEach(tx => { if(!g[tx.date]) g[tx.date]=[]; g[tx.date].push(tx) })
     return Object.entries(g).sort(([a],[b]) => b.localeCompare(a))
-  }, [transactions, filterCategory, filterMethod])
+  }, [transactions, filterCategory, filterMethod, search])
+
+  // Tổng của phần đang xem — để biết nhóm giao dịch vừa lọc cộng lại bao nhiêu
+  const searchTotal = useMemo(() => {
+    if (!search.trim() && !filterCategory && !filterMethod) return null
+    let thu = 0, chi = 0
+    groupedTx.forEach(([, list]) => list.forEach(t => {
+      const a = Number(t.amount) || 0
+      if (t.type === 'income') thu += a; else chi += a
+    }))
+    return { thu, chi, count: groupedTx.reduce((s, [, l]) => s + l.length, 0) }
+  }, [groupedTx, search, filterCategory, filterMethod])
 
   // Handlers
   const handleAddTx = (type) => { setAddType(type); setEditingTx(null); setShowAdd(true) }
@@ -232,6 +267,36 @@ export default function Expenses() {
         {/* Filters */}
         {activeView==='list' && (
           <div className="space-y-2 mb-3">
+            {/* Tìm kiếm */}
+            <div className="relative">
+              <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
+              <input value={search} onChange={e => setSearch(e.target.value)}
+                placeholder="Tìm ghi chú, danh mục, số tiền..."
+                className="w-full pl-9 pr-9 py-2.5 text-sm border border-gray-200 rounded-xl bg-white
+                  focus:outline-none focus:border-green-400"/>
+              {search && (
+                <button onClick={() => setSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 p-0.5 active:scale-90">
+                  <X size={15}/>
+                </button>
+              )}
+            </div>
+
+            {/* Tổng của phần đang xem */}
+            {searchTotal && (
+              <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-xl text-xs">
+                <span className="text-gray-500">{searchTotal.count} giao dịch</span>
+                {searchTotal.thu > 0 && (
+                  <span className="text-green-600 font-semibold">+{formatMoney(searchTotal.thu)}</span>
+                )}
+                {searchTotal.chi > 0 && (
+                  <span className="text-red-500 font-semibold">−{formatMoney(searchTotal.chi)}</span>
+                )}
+                <button onClick={() => { setSearch(''); setFilterCategory(null); setFilterMethod(null) }}
+                  className="ml-auto text-gray-400 active:scale-95">Bỏ lọc</button>
+              </div>
+            )}
+
             <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
               {[{v:null,l:'Tất cả'},{v:'cash',l:'💵 TM'},{v:'transfer',l:'🏦 CK'},{v:'credit',l:'💳 TD'}].map(f => (
                 <button key={f.v||'all'} onClick={() => setFilterMethod(f.v)}
@@ -245,7 +310,8 @@ export default function Expenses() {
                 {categories.map(c => (
                   <button key={c.id} onClick={() => setFilterCategory(filterCategory===c.id?null:c.id)}
                     className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium ${filterCategory===c.id?'text-white':'bg-gray-100 text-gray-600'}`}
-                    style={filterCategory===c.id?{backgroundColor:c.color}:{}}>{c.icon} {c.name}</button>
+                    style={filterCategory===c.id?{backgroundColor:c.color}:{}}>
+{c.icon} {c.name}</button>
                 ))}
               </div>
             )}
@@ -596,10 +662,30 @@ function InitialBalanceForm({ isOpen, onClose, initialBal, toast, onSaved }) {
 // ============================================
 // CATEGORY MANAGER
 // ============================================
+// Icon danh mục
+function CatIcon({ icon, color, size = 36, text = 'text-lg' }) {
+  return (
+    <div style={{ width: size, height: size, backgroundColor: (color || '#6B7280') + '20' }}
+      className={`rounded-full flex items-center justify-center flex-shrink-0 ${text}`}>
+      {icon || '📦'}
+    </div>
+  )
+}
+
 function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   const toast = useToast()
   const [showForm, setShowForm] = useState(false); const [editingCat, setEditingCat] = useState(null)
-  const [fd, setFd] = useState({ name:'', icon:'📦', color:'#3B82F6', is_income:false }); const [saving, setSaving] = useState(false)
+  const [fd, setFd] = useState({ name:'', icon:'📦', color:'#3B82F6', is_income:false })
+  const [saving, setSaving] = useState(false)
+  const [iconSearch, setIconSearch] = useState('')
+
+  // Lọc nhóm icon theo từ khoá — bỏ dấu để gõ "an uong" cũng ra "Ăn uống"
+  const shownGroups = useMemo(() => {
+    const q = iconSearch.trim().toLowerCase()
+    if (!q) return ICON_GROUPS
+    const qs = stripVN(q)
+    return ICON_GROUPS.filter(g => stripVN(g.label).includes(qs))
+  }, [iconSearch])
   const expCats = categories.filter(c => !c.metadata?.is_income), incCats = categories.filter(c => c.metadata?.is_income===true)
 
   const openAdd = (isInc) => { setEditingCat(null); setFd({name:'',icon:'📦',color:'#3B82F6',is_income:isInc}); setShowForm(true) }
@@ -608,15 +694,20 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   const handleSave = async () => {
     if(!fd.name.trim()) return; setSaving(true)
     try {
-      if(editingCat) { await updateExpenseCategory(editingCat.id,{name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income}}); toast.success('Đã cập nhật') }
-      else { await createExpenseCategory({name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income},sort_order:categories.length+1}); toast.success('Đã thêm') }
+      if(editingCat) {
+        await updateExpenseCategory(editingCat.id,{name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income}}); toast.success('✓ Đã cập nhật')
+      }
+      else { await createExpenseCategory({name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income},sort_order:categories.length+1}); toast.success('✓ Đã thêm') }
       setShowForm(false); onChanged()
     } catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false) }
   }
 
   const handleDel = async (cat) => {
     if(!confirm(`Xóa "${cat.name}"?`)) return
-    try { await deleteExpenseCategory(cat.id); toast.success('Đã xóa'); onChanged() } catch { toast.error('Lỗi') }
+    try {
+      await deleteExpenseCategory(cat.id)
+      toast.success('✓ Đã xoá'); onChanged()
+    } catch (err) { toast.error('✕ Không xoá được: ' + (err.message || 'lỗi không rõ')) }
   }
 
   const renderList = (list, label, isInc) => (
@@ -628,7 +719,7 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
       {list.length===0 ? <p className="text-xs text-gray-400 py-3 text-center">Chưa có</p> : (
         <div className="space-y-1">{list.map(cat => (
           <div key={cat.id} className="flex items-center gap-3 bg-white rounded-xl px-4 py-3 shadow-sm">
-            <div className="w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0" style={{backgroundColor:cat.color+'20'}}>{cat.icon}</div>
+            <CatIcon icon={cat.icon} color={cat.color} size={36}/>
             <span className="text-sm font-medium text-gray-800 flex-1">{cat.name}</span>
             <button onClick={() => openEdit(cat)} className="p-2 text-gray-400 hover:text-blue-500 active:scale-90"><Edit2 size={16}/></button>
             <button onClick={() => handleDel(cat)} className="p-2 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={16}/></button>
@@ -647,10 +738,48 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
           <button onClick={() => setShowForm(false)} className="flex items-center gap-1 text-sm text-gray-500"><ChevronLeft size={16}/> Quay lại</button>
           <h4 className="font-bold text-gray-700">{editingCat?`Sửa "${editingCat.name}"`:`Thêm danh mục ${fd.is_income?'thu':'chi'}`}</h4>
           <div><label className="text-xs text-gray-500 mb-1 block">Tên</label><input type="text" value={fd.name} onChange={e => setFd({...fd,name:e.target.value})} placeholder="Ví dụ: Ăn uống" autoFocus className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
-          <div><label className="text-xs text-gray-500 mb-1.5 block">Icon</label><div className="flex flex-wrap gap-2">{ICONS.map(ic => <button key={ic} onClick={() => setFd({...fd,icon:ic})} className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg active:scale-90 ${fd.icon===ic?'bg-green-100 ring-2 ring-green-500':'bg-gray-50'}`}>{ic}</button>)}</div></div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1.5 block">Icon</label>
+
+            {/* Tìm nhanh trong 169 icon */}
+            <div className="relative mb-2">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"/>
+              <input value={iconSearch} onChange={e => setIconSearch(e.target.value)}
+                placeholder="Tìm nhóm: ăn uống, nhà cửa, đi lại..."
+                className="w-full pl-8 pr-8 py-2 text-xs border border-gray-200 rounded-xl bg-gray-50
+                  focus:outline-none focus:border-green-400"/>
+              {iconSearch && (
+                <button onClick={() => setIconSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 p-0.5">
+                  <X size={13}/>
+                </button>
+              )}
+            </div>
+
+            <div className="max-h-52 overflow-y-auto pr-1 space-y-2.5">
+              {shownGroups.length === 0 ? (
+                <p className="text-xs text-gray-400 text-center py-4">Không có nhóm nào khớp</p>
+              ) : shownGroups.map(g => (
+                <div key={g.label}>
+                  <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1">
+                    {g.label}
+                  </p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {g.icons.map(ic => (
+                      <button key={ic} onClick={() => setFd({...fd, icon: ic})}
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg active:scale-90
+                          ${fd.icon===ic ? 'bg-green-100 ring-2 ring-green-500' : 'bg-gray-50'}`}>
+                        {ic}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
           <div><label className="text-xs text-gray-500 mb-1.5 block">Màu</label><div className="flex flex-wrap gap-2">{COLORS.map(cl => <button key={cl} onClick={() => setFd({...fd,color:cl})} className={`w-9 h-9 rounded-full active:scale-90 ${fd.color===cl?'ring-2 ring-offset-2 ring-gray-400 scale-110':''}`} style={{backgroundColor:cl}}/>)}</div></div>
           <div className="bg-gray-50 rounded-xl p-3 flex items-center gap-3">
-            <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg" style={{backgroundColor:fd.color+'20'}}>{fd.icon}</div>
+            <CatIcon icon={fd.icon} color={fd.color} size={40} text="text-xl"/>
             <span className="text-sm font-medium">{fd.name||'Tên danh mục'}</span>
             <span className={`text-xs ml-auto px-2 py-0.5 rounded-full ${fd.is_income?'bg-green-100 text-green-700':'bg-red-100 text-red-700'}`}>{fd.is_income?'Thu':'Chi'}</span>
           </div>
