@@ -16,8 +16,9 @@ import {
   receiveOrder,
   getJewelryTrips, createJewelryTrip, updateJewelryTrip, deleteJewelryTrip,
   getJewelryCategories, saveJewelryCategories, DEFAULT_CATEGORIES,
-  findJewelryByCode, addStockToExisting,
+  findJewelryByCode, addStockToExisting, removeImageUrl,
   getIntakes, getAllIntakes, groupIntakesByDay, fmtIntakeTime, intakeDate,
+  updateIntake, deleteIntake, getSoleIntake,
   CSV_COLUMNS, downloadCsvTemplate, parseCsv, bulkCreateJewelry,
   getCustomerNotes, saveCustomerNote,
   getSuppliers,
@@ -469,16 +470,16 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
         <div className="grid grid-cols-2 gap-2.5 p-3">
           {filtered.map(item => {
             const st  = item.stock_state
-            const sold = item.reserved                    // đã bán, chưa giao
-            const total = Number(item.stock_qty) || 0     // tổng còn trong tủ
-            // Có đơn chưa giao → nhãn chính là tỉ lệ đã bán (đỏ)
+            const sold = item.reserved                    // số chờ giao
+            // Có đơn chờ giao → nhãn chính là TỔNG đã bán / TỔNG từng có (đỏ),
+            // nhãn phụ ghi rõ bao nhiêu cái đang chờ giao
             const badgeCls = sold > 0
               ? 'bg-red-100 text-red-700'
               : st === 'out'        ? 'bg-red-100 text-red-600'
               : item.available <= 1 ? 'bg-amber-100 text-amber-700'
               :                       'bg-green-100 text-green-700'
             const badgeText = sold > 0
-              ? `Đã bán ${sold}/${total}`
+              ? `Đã bán ${item.sold_total}/${item.ever_total}`
               : st === 'out' ? 'Hết' : `Còn ${item.available}`
             return (
               <div key={item.id}
@@ -496,7 +497,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                   </span>
                   {sold > 0 && (
                     <span className="absolute top-7 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                      Chờ giao
+                      {sold} chờ giao
                     </span>
                   )}
                   {item.incoming > 0 && (
@@ -1452,7 +1453,12 @@ function BcTab({ stats }) {
 // ============================================
 function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
   const toast = useToast()
-  const [intakes, setIntakes] = useState([])
+  const [intakes,    setIntakes]    = useState([])
+  const [editIntake, setEditIntake] = useState(null)
+
+  const loadIntakes = useCallback(() => {
+    getIntakes(item.id).then(setIntakes).catch(() => {})
+  }, [item.id])
 
   useEffect(() => {
     let alive = true
@@ -1495,7 +1501,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
             : null],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-gray-800' : 'text-red-500'],
           ['Đang về', item.incoming_qty > 0 ? `${item.incoming_qty} cái` : null, 'text-purple-600'],
-          ['Đã bán, chờ giao', reserved > 0 ? `${reserved}/${item.stock_qty} cái` : null, 'text-red-600'],
+          ['Chờ giao', reserved > 0 ? `${reserved} cái (đã bán, hàng còn trong tủ)` : null, 'text-blue-600'],
           ['Còn bán được', `${available} cái`,
             available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
           ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
@@ -1543,7 +1549,8 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
           {intakes.map(r => {
             const d = intakeDate(r.intake_at).split('-')
             return (
-              <div key={r.id} className="bg-white border-b border-gray-100 px-4 py-2">
+              <div key={r.id} onClick={() => setEditIntake(r)}
+                className="bg-white border-b border-gray-100 px-4 py-2 cursor-pointer active:bg-gray-50">
                 <div className="flex items-center gap-2.5">
                   <div className="w-6 h-6 rounded-full bg-purple-50 flex items-center justify-center flex-shrink-0">
                     <span className="text-purple-600 text-[11px] font-bold">+</span>
@@ -1568,6 +1575,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
                       <div className="text-[9px] text-green-600">✈ {r.trip_name}</div>
                     )}
                   </div>
+                  <Edit2 size={12} className="text-gray-300 flex-shrink-0"/>
                 </div>
                 {r.note && <div className="text-[10px] text-gray-400 italic mt-0.5 pl-8">💬 {r.note}</div>}
               </div>
@@ -1575,6 +1583,11 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
           })}
         </>
       )}
+
+      <IntakeEditModal intake={editIntake}
+        onClose={() => setEditIntake(null)}
+        onSaved={() => { setEditIntake(null); loadIntakes() }}
+        toast={toast}/>
 
       {/* Lịch sử bán */}
       <div className="px-3 pb-1 pt-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
@@ -1623,6 +1636,8 @@ function IntakeTab({ trips, toast }) {
   const [loading, setLoading] = useState(true)
   const [tripId,  setTripId]  = useState('')
   const [search,  setSearch]  = useState('')
+  const [editRow, setEditRow] = useState(null)
+  const [reload,  setReload]  = useState(0)
 
   useEffect(() => {
     let alive = true
@@ -1632,7 +1647,7 @@ function IntakeTab({ trips, toast }) {
       .catch(() => toast.error('Lỗi tải sổ nhập'))
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [tripId, toast])
+  }, [tripId, toast, reload])
 
   const filtered = useMemo(() => {
     if (!search.trim()) return rows
@@ -1707,7 +1722,9 @@ function IntakeTab({ trips, toast }) {
             </span>
           </div>
           {day.rows.map(r => (
-            <div key={r.id} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
+            <div key={r.id} onClick={() => setEditRow(r)}
+              className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3
+                cursor-pointer active:bg-gray-50">
               <div className="w-9 h-9 rounded-lg overflow-hidden flex-shrink-0 bg-purple-50
                 flex items-center justify-center">
                 {r.image_url
@@ -1738,8 +1755,124 @@ function IntakeTab({ trips, toast }) {
           ))}
         </div>
       ))}
+      <IntakeEditModal intake={editRow}
+        onClose={() => setEditRow(null)}
+        onSaved={() => { setEditRow(null); setReload(n => n + 1) }}
+        toast={toast}/>
       <div className="h-4"/>
     </>
+  )
+}
+
+// ============================================
+// SỬA DÒNG SỔ NHẬP
+// ============================================
+function IntakeEditModal({ intake, onClose, onSaved, toast }) {
+  const [qty,    setQty]    = useState('')
+  const [cost,   setCost]   = useState('')
+  const [supp,   setSupp]   = useState('')
+  const [note,   setNote]   = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!intake) return
+    setQty(String(intake.qty ?? ''))
+    setCost(String(intake.cost_price ?? ''))
+    setSupp(intake.supplier_name || '')
+    setNote(intake.note || '')
+  }, [intake])
+
+  if (!intake) return null
+
+  const d = intakeDate(intake.intake_at).split('-')
+  const when = d[2] ? `${d[2]}/${d[1]}/${d[0]} lúc ${fmtIntakeTime(intake.intake_at)}` : ''
+
+  const handleSave = async () => {
+    const n = Number(qty)
+    if (!(n >= 1)) { toast.error('Số lượng phải từ 1 trở lên'); return }
+    setSaving(true)
+    try {
+      await updateIntake(intake.id, { qty: n, cost_price: cost, supplier_name: supp, note })
+      toast.success('✓ Đã sửa dòng sổ nhập')
+      onSaved()
+    } catch (err) { toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ')) }
+    finally { setSaving(false) }
+  }
+
+  const handleDelete = async () => {
+    if (!confirm(`Xoá dòng sổ này?\n\n+${intake.qty} cái · ${when}\n\nTồn kho KHÔNG thay đổi — chỉ xoá bản ghi lịch sử.`)) return
+    setSaving(true)
+    try {
+      await deleteIntake(intake.id)
+      toast.success('✓ Đã xoá dòng sổ')
+      onSaved()
+    } catch (err) { toast.error('✕ Không xoá được: ' + (err.message || 'lỗi không rõ')) }
+    finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={!!intake} onClose={onClose} title="Sửa dòng sổ nhập">
+      <div className="px-5 pb-6 space-y-3">
+        <div className="px-3 py-2 bg-gray-50 rounded-xl text-[11px] text-gray-500 leading-relaxed">
+          Ghi nhận lúc <b>{when}</b>.<br/>
+          Sửa ở đây chỉ đổi <b>bản ghi lịch sử</b> — tồn kho của sản phẩm giữ nguyên.
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Số lượng nhập</label>
+            <input type="number" min="1" value={qty} onChange={e=>setQty(e.target.value)}
+              className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">
+              Giá vốn <span className="text-gray-300">— tuỳ chọn</span>
+            </label>
+            <input inputMode="numeric" value={fmtInput(cost)}
+              onChange={e=>setCost(parseInput(e.target.value))}
+              placeholder="0" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Nhà cung cấp</label>
+          <input value={supp} onChange={e=>setSupp(e.target.value)}
+            placeholder="Tên NCC" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Ghi chú</label>
+          <input value={note} onChange={e=>setNote(e.target.value)}
+            placeholder="Ghi chú cho lần nhập này"
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        {Number(qty) > 0 && Number(cost) > 0 && (
+          <div className="px-3 py-2 bg-purple-50 rounded-xl flex justify-between text-xs">
+            <span className="text-purple-700">Tiền hàng lần này</span>
+            <span className="font-bold text-purple-800">{fmtMoney(Number(qty) * Number(cost))}</span>
+          </div>
+        )}
+
+        <button onClick={handleDelete} disabled={saving}
+          className="w-full py-2.5 bg-red-50 text-red-600 border border-red-200 rounded-xl
+            text-xs font-semibold flex items-center justify-center gap-1.5 active:scale-98">
+          <Trash2 size={13}/> Xoá dòng sổ này
+        </button>
+
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">
+            Huỷ
+          </button>
+          <button onClick={handleSave} disabled={saving || !qty}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl text-sm font-bold disabled:opacity-50">
+            {saving ? 'Đang lưu...' : 'Lưu'}
+          </button>
+        </div>
+      </div>
+    </Modal>
   )
 }
 
@@ -2020,7 +2153,9 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
         code: item.code||'', category: item.category||'Nhẫn', name: item.name||'',
         size: item.size||'',
         // Món đang về: ô số lượng lấy từ cột hàng đang về
-        stock_qty: (item.status === 'ordered' ? item.incoming_qty : item.stock_qty) || 1,
+        // Giữ nguyên số thật, kể cả 0. Không được dùng "|| 1" — tồn 0 sẽ bị
+        // đổi thành 1 mỗi khi bấm Sửa rồi Lưu, sinh ra hàng ma trong kho.
+        stock_qty: Number(item.status === 'ordered' ? item.incoming_qty : item.stock_qty) || 0,
         cost_price: item.cost_price||'',
         sell_price: item.sell_price||'', supplier_name: item.supplier_name||'',
         supplier_contact: item.supplier_contact||'', trip_id: item.trip_id||'', note: item.note||'',
@@ -2049,12 +2184,13 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
   const handleSubmit = async () => {
     if (!form.code.trim()) { toast.error('Nhập mã sản phẩm'); return }
     setSaving(true)
+    let newImage = null     // ảnh vừa tải lên — lưu hỏng thì phải dọn
     try {
       let image_url  = item?.image_url || null
       let imgWarning = null
       if (imgFile) {
         try {
-          image_url = await uploadImage(imgFile, form.code.trim())
+          image_url = newImage = await uploadImage(imgFile, form.code.trim())
         } catch (e) {
           imgWarning = /bucket|not found|policy|permission|row-level/i.test(e.message || '')
             ? 'Ảnh chưa lưu được — kiểm tra quyền Storage trên Supabase'
@@ -2080,6 +2216,27 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
       }
       if (item) {
         await updateJewelry(item.id, payload)
+
+        // Nếu đổi số lượng và món này chỉ có ĐÚNG MỘT lần nhập,
+        // hỏi luôn có sửa dòng sổ theo không — khỏi phải vào sửa lần nữa.
+        const oldQty = item.status === 'ordered' ? item.incoming_qty : item.stock_qty
+        const newQty = Number(payload.stock_qty) || 0
+        if (newQty !== (Number(oldQty) || 0)) {
+          try {
+            const sole = await getSoleIntake(item.id)
+            if (sole && Number(sole.qty) !== newQty) {
+              if (confirm(
+                `Đã đổi số lượng ${oldQty} → ${newQty}.\n\n` +
+                `Lịch sử nhập đang ghi +${sole.qty} cái. Sửa dòng đó thành +${newQty} luôn?`
+              )) {
+                await updateIntake(sole.id, { qty: newQty, cost_price: payload.cost_price })
+              }
+            }
+          } catch {
+            // Sản phẩm đã lưu xong rồi — chỉ phần sổ nhập không cập nhật được
+            toast.error('Đã lưu sản phẩm, nhưng chưa sửa được lịch sử nhập — sửa tay ở mục Lịch sử nhập')
+          }
+        }
       } else {
         // Thêm mới → kiểm tra mã đã tồn tại chưa.
         // Nếu bước này lỗi (mất mạng) thì vẫn thử lưu,
@@ -2099,6 +2256,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
       else            toast.success(item ? '✓ Đã cập nhật' : '✓ Đã thêm sản phẩm')
       onSaved()
     } catch (err) {
+      if (newImage) removeImageUrl(newImage)   // không để ảnh mồ côi
       const m = err.message || ''
       if (/duplicate key|unique constraint/i.test(m))
         toast.error(`✕ Mã "${form.code.trim()}" đã có trong kho — mở lại form để cộng dồn`)

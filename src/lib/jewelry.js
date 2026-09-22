@@ -227,45 +227,56 @@ export async function addStockToExisting(id, addQty, newItem = {}) {
   }
 }
 
+// Xoá một ảnh trong Storage theo đường dẫn — dùng để dọn ảnh mồ côi
+export function removeImageUrl(url) {
+  if (!url) return Promise.resolve()
+  const path = String(url).split('/').pop().split('?')[0]
+  return supabase.storage.from(BUCKET).remove([path]).catch(() => {})
+}
+
 export async function updateJewelry(id, updates) {
-  // Món đang về: ô "Số lượng đặt" phải ghi vào cột hàng đang về,
-  // không phải tồn kho — nếu không hàng chưa về sẽ thành bán được.
+  // Đọc bản hiện tại MỘT lần — dùng cho cả trạng thái, ảnh và kiểm tra tồn
+  const { data: cur, error: ge } = await supabase
+    .from('jewelry').select('status, image_url').eq('id', id).maybeSingle()
+  if (ge) throw ge
+
   if ('stock_qty' in updates) {
-    const { data: cur } = await supabase
-      .from('jewelry').select('status').eq('id', id).maybeSingle()
     const goingToOrdered = updates.status
       ? updates.status === 'ordered'
       : cur?.status === 'ordered'
     if (goingToOrdered) {
+      // Món đang về: ô "Số lượng đặt" ghi vào cột hàng đang về, không phải tồn kho
       updates = { ...updates, incoming_qty: nonNeg(updates.stock_qty), stock_qty: 0 }
+    } else {
+      // Không cho hạ tồn thấp hơn số đã bán mà chưa giao —
+      // nếu không các đơn đó sẽ không bao giờ tick "Đã giao" được
+      const reserved = await getReserved(id)
+      const next = nonNeg(updates.stock_qty)
+      if (next < reserved) {
+        throw new Error(`Đang có ${reserved} cái đã bán chờ giao — tồn kho không được ít hơn ${reserved}`)
+      }
     }
   }
 
-  // Đổi ảnh → xoá ảnh cũ khỏi Storage để không tích tụ file mồ côi
-  if ('image_url' in updates) {
-    const { data: prev } = await supabase
-      .from('jewelry').select('image_url').eq('id', id).maybeSingle()
-    if (prev?.image_url && prev.image_url !== updates.image_url) {
-      const path = prev.image_url.split('/').pop().split('?')[0]
-      await supabase.storage.from(BUCKET).remove([path]).catch(() => {})
-    }
-  }
   const { error } = await supabase
     .from('jewelry')
     .update({ ...cleanJewelry(updates), updated_at: new Date().toISOString() })
     .eq('id', id)
   if (error) throw error
+
+  // Lưu xong mới xoá ảnh cũ — lưu hỏng thì ảnh cũ vẫn còn nguyên
+  if ('image_url' in updates && cur?.image_url && cur.image_url !== updates.image_url) {
+    await removeImageUrl(cur.image_url)
+  }
 }
 
 export async function deleteJewelry(id) {
   const { data: item } = await supabase
-    .from('jewelry').select('image_url').eq('id', id).single()
-  if (item?.image_url) {
-    const path = item.image_url.split('/').pop().split('?')[0]
-    await supabase.storage.from(BUCKET).remove([path]).catch(() => {})
-  }
+    .from('jewelry').select('image_url').eq('id', id).maybeSingle()
   const { error } = await supabase.from('jewelry').delete().eq('id', id)
   if (error) throw error
+  // Xoá xong mới dọn ảnh — xoá hỏng thì sản phẩm vẫn còn nguyên ảnh
+  if (item?.image_url) await removeImageUrl(item.image_url)
 }
 
 // ============================================
@@ -631,9 +642,12 @@ export function calcStats(jewelry, sales) {
 
   // Days in stock
   // Số đã bán nhưng chưa giao, theo từng sản phẩm
-  const reservedMap = {}
-  sales.filter(s => !s.delivered && s.jewelry_id).forEach(s => {
-    reservedMap[s.jewelry_id] = (reservedMap[s.jewelry_id] || 0) + (Number(s.qty) || 0)
+  const reservedMap  = {}   // đã bán, CHƯA giao — hàng vẫn nằm trong tủ
+  const deliveredMap = {}   // đã bán, ĐÃ giao — kho đã trừ rồi
+  sales.filter(s => s.jewelry_id).forEach(s => {
+    const q = Number(s.qty) || 0
+    const m = s.delivered ? deliveredMap : reservedMap
+    m[s.jewelry_id] = (m[s.jewelry_id] || 0) + q
   })
 
   const withDays = inStockJw.map(j => {
@@ -646,6 +660,11 @@ export function calcStats(jewelry, sales) {
       days_in_stock:   days,
       stock_remaining: inStockQ,      // tồn vật lý, chưa trừ đơn chờ giao
       reserved,                       // đã bán, chờ giao
+      // Tổng đã bán (cả đã giao lẫn chờ giao) trên tổng số từng có:
+      // tổng từng có = đang trong tủ + đã giao đi. Ví dụ nhập 5, giao 1, chờ giao 1
+      // → trong tủ 4 → "Đã bán 2/5", không phải "1/4".
+      sold_total:  reserved + (deliveredMap[j.id] || 0),
+      ever_total:  inStockQ + (deliveredMap[j.id] || 0),
       available,                      // còn bán được
       // 'ok' còn hàng · 'reserved' hết hàng bán nhưng đang chờ giao · 'out' hết sạch
       stock_state: available > 0 ? 'ok' : (reserved > 0 ? 'reserved' : 'out'),
@@ -872,32 +891,26 @@ export async function createMount(m) {
 }
 
 export async function updateMount(id, m) {
-  if ('image_url' in m) {
-    const { data: prev } = await supabase
-      .from('jewelry_mounts').select('image_url').eq('id', id).maybeSingle()
-    if (prev?.image_url && prev.image_url !== m.image_url) {
-      const path = prev.image_url.split('/').pop().split('?')[0]
-      await supabase.storage.from(BUCKET).remove([path]).catch(() => {})
-    }
-  }
+  const prev = ('image_url' in m)
+    ? (await supabase.from('jewelry_mounts').select('image_url').eq('id', id).maybeSingle()).data
+    : null
   const { data, error } = await supabase
     .from('jewelry_mounts')
     .update({ ...cleanMount(m), updated_at: new Date().toISOString() })
     .eq('id', id)
     .select().single()
   if (error) throw error
+  // Lưu xong mới xoá ảnh cũ
+  if (prev?.image_url && prev.image_url !== m.image_url) await removeImageUrl(prev.image_url)
   return data
 }
 
 export async function deleteMount(id) {
   const { data: m } = await supabase
-    .from('jewelry_mounts').select('image_url').eq('id', id).single()
-  if (m?.image_url) {
-    const path = m.image_url.split('/').pop().split('?')[0]
-    await supabase.storage.from(BUCKET).remove([path]).catch(() => {})
-  }
+    .from('jewelry_mounts').select('image_url').eq('id', id).maybeSingle()
   const { error } = await supabase.from('jewelry_mounts').delete().eq('id', id)
   if (error) throw error
+  if (m?.image_url) await removeImageUrl(m.image_url)
 }
 
 function cleanMount(m) {
@@ -1200,6 +1213,37 @@ export async function getAllIntakes({ from, to, tripId, limit = 300 } = {}) {
 export async function deleteIntake(id) {
   const { error } = await supabase.from('jewelry_intakes').delete().eq('id', id)
   if (error) throw error
+}
+
+// Sửa một dòng sổ nhập
+export async function updateIntake(id, patch) {
+  const row = {}
+  if (patch.qty !== undefined)        row.qty        = Math.max(1, nonNeg(patch.qty, 1))
+  if (patch.cost_price !== undefined) row.cost_price =
+    (patch.cost_price === '' || patch.cost_price === null) ? null : nonNeg(patch.cost_price)
+  if (patch.supplier_name !== undefined) row.supplier_name = patch.supplier_name?.trim() || null
+  if (patch.note !== undefined)          row.note          = patch.note?.trim() || null
+  if (patch.intake_at !== undefined && patch.intake_at)  row.intake_at = patch.intake_at
+
+  const { data, error } = await supabase
+    .from('jewelry_intakes').update(row).eq('id', id).select().single()
+  if (error) throw error
+  return data
+}
+
+// Đếm số lần nhập của 1 sản phẩm — dùng để biết có nên hỏi
+// "cập nhật dòng sổ theo?" khi người dùng sửa số lượng sản phẩm
+export async function countIntakes(jewelryId) {
+  const { data } = await supabase
+    .from('jewelry_intakes').select('id').eq('jewelry_id', jewelryId)
+  return (data || []).length
+}
+
+// Lấy dòng sổ duy nhất của sản phẩm (khi chỉ có 1 lần nhập)
+export async function getSoleIntake(jewelryId) {
+  const { data } = await supabase
+    .from('jewelry_intakes').select('*').eq('jewelry_id', jewelryId)
+  return (data || []).length === 1 ? data[0] : null
 }
 
 // Gộp theo ngày để hiển thị
