@@ -30,6 +30,41 @@ export function convertUnit(qty, fromUnit, toUnit) {
   return baseQty / toG.units[toUnit]
 }
 
+// Tổng khối lượng một công thức, tách theo nhóm đơn vị.
+// g/kg cộng về g, ml/lít cộng về ml; đơn vị đếm (viên, thìa...) không cộng
+// được vào khối lượng nên đếm riêng để hiện "không tính".
+export function calcFormulaWeight(items, qtyKey = 'quantity') {
+  let g = 0, ml = 0
+  const other = {}
+  for (const it of items || []) {
+    const q = Number(it[qtyKey]) || 0
+    if (q <= 0) continue
+    const grp = getUnitGroup(it.unit)
+    if (grp?.group === 'mass')        g  += q * grp.units[it.unit]
+    else if (grp?.group === 'volume') ml += q * grp.units[it.unit]
+    else other[it.unit] = (other[it.unit] || 0) + q
+  }
+  // Làm tròn 2 chữ số để khử sai số cộng thập phân (999.9999 → 1000)
+  const r2 = x => Math.round(x * 100) / 100
+  for (const u in other) other[u] = r2(other[u])
+  return { g: r2(g), ml: r2(ml), other }
+}
+
+// "361 g" · "1,2 kg" · "361 g + 200 ml" — chọn đơn vị gọn nhất
+export function fmtWeight({ g, ml }) {
+  const one = (v, small, big) => {
+    if (v >= 1000) {
+      const x = v / 1000
+      return `${Number.isInteger(x) ? x : x.toFixed(2).replace(/\.?0+$/, '')} ${big}`
+    }
+    return `${Number.isInteger(v) ? v : v.toFixed(1).replace(/\.0$/, '')} ${small}`
+  }
+  const parts = []
+  if (g  > 0) parts.push(one(g,  'g',  'kg'))
+  if (ml > 0) parts.push(one(ml, 'ml', 'lít'))
+  return parts.join(' + ')
+}
+
 // All units available
 export const ALL_UNITS = ['g','kg','ml','lít','thìa cà phê','thìa canh','giọt','viên','gói','cái']
 

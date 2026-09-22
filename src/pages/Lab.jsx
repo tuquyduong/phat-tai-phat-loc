@@ -22,7 +22,7 @@ import {
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
   getBatches, createBatch, deleteBatch, deductStock, undoDeductStock,
   calcFormulaCost, scaleIngredients, formatStock, convertUnit, getConvertibleUnits, ALL_UNITS,
-  getLabCategories, createLabCategory, deleteLabCategory
+  getLabCategories, createLabCategory, deleteLabCategory, calcFormulaWeight, fmtWeight
 } from '../lib/lab'
 
 // ============================================
@@ -197,6 +197,8 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
     const sell = Math.round((f.selling_price||0)*ratio)
     let text = `📋 ${f.name} (${serving} serving)\n\n` +
       items.map(i => `• ${i.ingredient?.name}: ${i.scaledQty} ${i.unit}`).join('\n')
+    const wTxt = fmtWeight(calcFormulaWeight(items, 'scaledQty'))
+    if (wTxt) text += `\n\n⚖️ Tổng khối lượng: ${wTxt}`
     if (f.extra_costs?.length) text += '\n\n💰 Chi phí khác:\n' + f.extra_costs.map(ec => `• ${ec.name}: ${formatMoney(Math.round(Number(ec.amount)*ratio))}`).join('\n')
     if (total>0) text += `\n\n💰 Tổng giá vốn: ${formatMoney(total)}`
     if (sell>0) text += `\n🏷️ Giá bán: ${formatMoney(sell)}\n📊 Lợi nhuận: ${formatMoney(sell-total)} (${total>0?Math.round((sell-total)/total*100):0}%)`
@@ -230,6 +232,9 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
     const serving = servingOverrides[f.id]||f.base_serving
     const items = scaleIngredients(f.items||[], f.base_serving, serving)
     const ingCost = calcFormulaCost(items.map(i => ({...i, quantity:i.scaledQty})))
+    const weight  = calcFormulaWeight(items, 'scaledQty')
+    const weightTxt = fmtWeight(weight)
+    const otherTxt  = Object.entries(weight.other).map(([u, q]) => `${q} ${u}`).join(', ')
     const ratio = serving / (f.base_serving||1)
     const scaledExtra = (f.extra_costs||[]).map(ec => ({...ec, scaled: Math.round((Number(ec.amount)||0)*ratio)}))
     const extraTotal = scaledExtra.reduce((s,ec) => s+ec.scaled, 0)
@@ -256,7 +261,9 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
             <p className="text-sm font-bold text-gray-800 truncate">{f.name}</p>
             <p className="text-xs text-gray-400">
               {sortBy!=='grouped' && f.category && <span className="bg-purple-50 text-purple-600 px-1.5 py-0.5 rounded mr-1">{f.category}</span>}
-              {f.items?.length||0} NL {totalCost>0 && <span>• ~{formatMoney(totalCost)}</span>}
+              {f.items?.length||0} NL
+              {weightTxt && <span className="text-gray-600 font-medium"> • {weightTxt}</span>}
+              {totalCost>0 && <span> • ~{formatMoney(totalCost)}</span>}
               {f.steps?.length>0 && <span> • {f.steps.length} bước</span>}
               {sellPrice>0 && totalCost>0 && <span className={profit>=0?'text-green-600':'text-red-500'}> • LN {Math.round(profit/totalCost*100)}%</span>}
             </p>
@@ -301,7 +308,22 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
                     </div>
                   )
                 })}
-                {ingCost>0 && <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100 font-bold"><span className="text-gray-700">NL</span><span className="text-purple-600">{formatMoney(ingCost)}</span></div>}
+                {(weightTxt || otherTxt) && (
+                  <div className="flex items-center justify-between text-sm pt-2 border-t border-gray-100">
+                    <span className="text-gray-700 font-bold">Tổng khối lượng</span>
+                    <span className="text-right">
+                      {weightTxt && <span className="font-bold text-gray-800">{weightTxt}</span>}
+                      {otherTxt && (
+                        <span className="block text-[10px] text-gray-400">
+                          {weightTxt ? '+ ' : ''}{otherTxt}{weightTxt ? ' (không quy đổi được)' : ''}
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                )}
+                {ingCost>0 && <div className={`flex items-center justify-between text-sm font-bold
+                  ${(weightTxt || otherTxt) ? 'pt-1' : 'pt-2 border-t border-gray-100'}`}>
+                  <span className="text-gray-700">NL</span><span className="text-purple-600">{formatMoney(ingCost)}</span></div>}
               </div>
             ) : <p className="text-xs text-gray-400 italic">Chưa có nguyên liệu</p>}
 
