@@ -768,10 +768,9 @@ function FormulaForm({ isOpen, onClose, formula, ingredients, labCategories, toa
 }
 
 // ============================================
-// BATCH FORM (Làm thử / Làm thật)
+// BATCH FORM — làm lô từ công thức (luôn trừ kho)
 // ============================================
 function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
-  const [type, setType] = useState('test')
   const [serving, setServing] = useState(formula?._initServing || formula?.base_serving || 1)
   const [batchItems, setBatchItems] = useState([])
   const [note, setNote] = useState(''); const [result, setResult] = useState('')
@@ -779,7 +778,7 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
 
   useEffect(() => {
     if (isOpen && formula) {
-      setServing(formula._initServing || formula.base_serving || 1); setNote(''); setResult(''); setType('test')
+      setServing(formula._initServing || formula.base_serving || 1); setNote(''); setResult('')
       const scaled = scaleIngredients(formula.items||[], formula.base_serving, formula.base_serving)
       setBatchItems(scaled.map(i => ({ ingredient_id:i.ingredient?.id||i.ingredient_id, name:i.ingredient?.name||'?', quantity:i.scaledQty, unit:i.unit, stockUnit:i.ingredient?.unit, stockQty:i.ingredient?.stock_qty||0 })))
     }
@@ -815,30 +814,30 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
       if (!confirm(`⚠️ Tồn kho sẽ âm cho: ${negatives.join(', ')}\n\nVẫn tiếp tục trừ kho?`)) return
     }
     setSaving(true)
+    let saved = null
     try {
-      const batch = await createBatch({
-        formula_id:formula.id, type, serving,
+      const batch = saved = await createBatch({
+        formula_id:formula.id, type:'production', serving,
         items:batchItems.map(bi => ({ingredient_id:bi.ingredient_id, quantity:bi.quantity, unit:bi.unit})),
         cost, note, result
       })
       const errs = await deductStock(batch.id, batchItems, ingredients)
       if (errs.length>0) toast.error('Lỗi convert: '+errs.join(', '))
-      else toast.success(type==='production' ? 'Đã tạo lô + trừ kho' : 'Đã tạo lô thử — đã trừ kho')
+      else toast.success('✓ Đã làm lô — đã trừ kho')
       onClose(); onSaved()
-    } catch(err) { toast.error('Lỗi: '+err.message) }
+    } catch(err) {
+      if (saved) {
+        toast.error('⚠ Đã lưu lô nhưng trừ kho chưa xong — kiểm tra tồn kho rồi xoá lô làm lại nếu cần')
+        onClose(); onSaved()
+      } else toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ'))
+    }
     finally { setSaving(false) }
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`🧪 Làm lô: ${formula?.name||''}`}>
       <div className="space-y-4 p-5">
-        {/* Type */}
-        <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-          <button onClick={() => setType('test')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${type==='test'?'bg-blue-500 text-white shadow':'text-gray-500'}`}>🔬 Thử nghiệm</button>
-          <button onClick={() => setType('production')} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${type==='production'?'bg-green-500 text-white shadow':'text-gray-500'}`}>🏭 Làm thật</button>
-        </div>
-
-        <p className="text-xs text-amber-600 bg-amber-50 p-2.5 rounded-lg">⚠️ Cả Thử và Thật đều tự động trừ tồn kho nguyên liệu</p>
+        <p className="text-xs text-amber-700 bg-amber-50 p-2.5 rounded-lg">⚠️ Bấm Làm sẽ trừ tồn kho nguyên liệu. Làm nhầm thì vào tab Lô SX bấm ↶ để hoàn lại.</p>
 
         {/* Serving */}
         <div className="flex items-center gap-2 bg-purple-50 rounded-lg px-3 py-2">
@@ -862,11 +861,9 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
                 <span className="text-gray-700 font-medium">{bi.name}</span>
                 <div className="text-right">
                   <span className="font-bold">{bi.quantity} {bi.unit}</span>
-                  {type==='production' && (
-                    canConvert
-                      ? <p className={`text-[10px] ${stockAfter<0?'text-red-500':'text-green-600'}`}>Tồn: {formatStock(bi.stockQty, bi.stockUnit)} → {formatStock(stockAfter, bi.stockUnit)} {bi.stockUnit}</p>
-                      : <p className="text-[10px] text-red-500">⚠ Không convert {bi.unit}→{bi.stockUnit}</p>
-                  )}
+                  {canConvert
+                    ? <p className={`text-[10px] ${stockAfter<0?'text-red-500':'text-green-600'}`}>Tồn: {formatStock(bi.stockQty, bi.stockUnit)} → {formatStock(stockAfter, bi.stockUnit)} {bi.stockUnit}</p>
+                    : <p className="text-[10px] text-red-500">⚠ Không convert {bi.unit}→{bi.stockUnit}</p>}
                 </div>
               </div>
             )
@@ -880,11 +877,191 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
           <textarea value={result} onChange={e => setResult(e.target.value)} rows={2} placeholder="Ví dụ: Hơi đặc, cần thêm nước..."
             className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm resize-none"/></div>
 
-        <div className="flex gap-2 pt-2">
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
           <button onClick={handleSave} disabled={saving}
-            className={`flex-1 py-3 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98 ${type==='production'?'bg-green-500':'bg-blue-500'}`}>
-            {saving?'...':(type==='production'?'Làm thật + Trừ kho':'Lưu thử nghiệm')}
+            className="flex-1 py-3 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98 bg-green-500">
+            {saving?'Đang làm...':'🧪 Làm + trừ kho'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// LÀM NHANH — không cần công thức, chọn nguyên liệu rồi làm luôn
+// ============================================
+function QuickBatchForm({ isOpen, onClose, ingredients, toast, onSaved }) {
+  const blank = () => ({ ingredient_id: '', quantity: '', unit: 'g' })
+  const [name,   setName]   = useState('')
+  const [items,  setItems]  = useState([blank()])
+  const [note,   setNote]   = useState('')
+  const [result, setResult] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [openPicker, setOpenPicker] = useState(null)
+
+  useEffect(() => {
+    if (!isOpen) return
+    setName(''); setItems([blank()]); setNote(''); setResult(''); setOpenPicker(0)
+  }, [isOpen])
+
+  const update = (idx, field, value) => setItems(prev => {
+    const n = [...prev]; n[idx] = { ...n[idx], [field]: value }
+    if (field === 'ingredient_id') {
+      const ing = ingredients.find(i => i.id === value)
+      if (ing) n[idx].unit = ing.unit
+    }
+    return n
+  })
+  const addRow = () => { setItems(prev => [...prev, blank()]); setOpenPicker(items.length) }
+  const removeRow = idx => { setOpenPicker(null); setItems(prev => prev.length > 1 ? prev.filter((_, i) => i !== idx) : [blank()]) }
+
+  // Dòng hợp lệ: đã chọn nguyên liệu và có số lượng > 0
+  const valid = useMemo(() => items.filter(it => it.ingredient_id && Number(it.quantity) > 0), [items])
+
+  // Tổng cần dùng theo từng nguyên liệu (gộp dòng trùng) để xem trước tồn kho sau khi làm
+  const preview = useMemo(() => {
+    const map = {}
+    valid.forEach(it => {
+      const ing = ingredients.find(i => i.id === it.ingredient_id)
+      if (!ing) return
+      const conv = convertUnit(Number(it.quantity), it.unit, ing.unit)
+      if (!map[ing.id]) map[ing.id] = { ing, need: 0, bad: false }
+      if (conv === null) map[ing.id].bad = true
+      else map[ing.id].need += conv
+    })
+    return Object.values(map)
+  }, [valid, ingredients])
+
+  const cost = useMemo(() => preview.reduce((s, p) =>
+    s + (p.bad ? 0 : p.need * (Number(p.ing.price_per_unit) || 0)), 0), [preview])
+
+  const weightTxt = useMemo(() => fmtWeight(calcFormulaWeight(valid.map(v => ({ ...v, quantity: Number(v.quantity) })))), [valid])
+
+  const handleSave = async () => {
+    if (valid.length === 0) { toast.error('Chọn ít nhất một nguyên liệu và nhập số lượng'); return }
+    const bad = preview.filter(p => p.bad).map(p => p.ing.name)
+    if (bad.length) { toast.error('Đơn vị không đổi được sang đơn vị tồn kho: ' + bad.join(', ')); return }
+    const neg = preview.filter(p => (Number(p.ing.stock_qty) || 0) - p.need < 0).map(p => p.ing.name)
+    if (neg.length && !confirm(`⚠️ Tồn kho sẽ âm cho: ${neg.join(', ')}\n\nVẫn làm và trừ kho?`)) return
+
+    setSaving(true)
+    let saved = null
+    try {
+      const d = new Date()
+      const autoName = `Làm nhanh ${String(d.getDate()).padStart(2,'0')}/${String(d.getMonth()+1).padStart(2,'0')}`
+      const batchItems = valid.map(v => ({ ingredient_id: v.ingredient_id, quantity: Number(v.quantity), unit: v.unit }))
+      const batch = saved = await createBatch({
+        formula_id: null, name: name.trim() || autoName, type: 'production', serving: 1,
+        items: batchItems, cost: Math.round(cost), note, result,
+      })
+      const errs = await deductStock(batch.id, batchItems, ingredients)
+      if (errs.length) toast.error('Đã lưu lô nhưng có lỗi: ' + errs.join(', '))
+      else toast.success('✓ Đã làm — đã trừ kho')
+      onClose(); onSaved()
+    } catch (err) {
+      const m = err.message || ''
+      if (saved) {
+        // Lô đã lưu nhưng trừ kho giữa chừng bị lỗi (thường do mất mạng)
+        toast.error('⚠ Đã lưu lô nhưng trừ kho chưa xong — kiểm tra tồn kho rồi xoá lô làm lại nếu cần')
+        onClose(); onSaved()
+      } else {
+        toast.error(/formula_id|column .*name/i.test(m)
+          ? '✕ Cần chạy migration_quick_batch.sql trong Supabase trước'
+          : '✕ Không lưu được: ' + m)
+      }
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="⚡ Làm nhanh">
+      <div className="space-y-4 p-5">
+        <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-lg leading-relaxed">
+          Không cần công thức — chọn nguyên liệu, nhập lượng rồi bấm Làm. Tồn kho được trừ ngay,
+          lô lưu ở tab <b>Lô SX</b>.
+        </p>
+
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Tên lần làm <span className="text-gray-300">— tuỳ chọn</span></label>
+          <input value={name} onChange={e => setName(e.target.value)} placeholder="Ví dụ: Thử trà gừng sả"
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        <div>
+          <div className="flex items-center justify-between mb-1.5">
+            <label className="text-xs text-gray-500">Nguyên liệu</label>
+            {weightTxt && <span className="text-[11px] text-gray-500">Tổng: <b>{weightTxt}</b></span>}
+          </div>
+          <div className="space-y-2">
+            {items.map((it, idx) => {
+              const ing = ingredients.find(i => i.id === it.ingredient_id)
+              const units = ing ? [...new Set([...getConvertibleUnits(ing.unit), ing.unit])] : ALL_UNITS
+              return (
+                <div key={idx} className="flex items-center gap-1.5">
+                  <IngredientPicker value={it.ingredient_id} ingredients={ingredients}
+                    isOpen={openPicker === idx}
+                    onOpen={() => setOpenPicker(idx)}
+                    onCloseMe={() => setOpenPicker(p => p === idx ? null : p)}
+                    onPick={id => update(idx, 'ingredient_id', id)}/>
+                  <input type="number" inputMode="decimal" value={it.quantity}
+                    onChange={e => update(idx, 'quantity', e.target.value)} placeholder="SL"
+                    className="w-16 px-2 py-2 border border-gray-200 rounded-lg text-xs text-center"/>
+                  <select value={it.unit} onChange={e => update(idx, 'unit', e.target.value)}
+                    className="w-16 px-1 py-2 border border-gray-200 rounded-lg text-xs bg-white">
+                    {units.map(u => <option key={u} value={u}>{u}</option>)}
+                  </select>
+                  <button onClick={() => removeRow(idx)} className="p-1.5 text-gray-300 hover:text-red-500 active:scale-90">
+                    <X size={15}/>
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+          <button onClick={addRow}
+            className="mt-2 w-full py-2 border-2 border-dashed border-gray-200 rounded-xl text-xs text-purple-600 font-medium active:scale-98">
+            + Thêm nguyên liệu
+          </button>
+        </div>
+
+        {preview.length > 0 && (
+          <div className="space-y-1">
+            <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">Tồn kho sau khi làm</p>
+            {preview.map(({ ing, need, bad }) => {
+              const after = (Number(ing.stock_qty) || 0) - need
+              return (
+                <div key={ing.id} className="flex justify-between text-xs bg-gray-50 rounded-lg px-3 py-1.5">
+                  <span className="text-gray-700">{ing.name}</span>
+                  {bad
+                    ? <span className="text-red-500">⚠ không đổi được đơn vị</span>
+                    : <span className={after < 0 ? 'text-red-500 font-semibold' : 'text-green-600'}>
+                        {formatStock(ing.stock_qty, ing.unit)} → {formatStock(after, ing.unit)} {ing.unit}
+                      </span>}
+                </div>
+              )
+            })}
+            {cost > 0 && (
+              <div className="flex justify-between text-xs font-bold pt-1.5 border-t border-gray-200">
+                <span>Chi phí</span><span className="text-purple-600">{formatMoney(cost)}</span>
+              </div>
+            )}
+          </div>
+        )}
+
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
+          <input value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: thử tăng gừng..."
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Kết quả / Đánh giá</label>
+          <textarea value={result} onChange={e => setResult(e.target.value)} rows={2} placeholder="Ví dụ: vị cay nhẹ, ổn..."
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm resize-none"/></div>
+
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSave} disabled={saving || valid.length === 0}
+            className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-40 active:scale-98">
+            {saving ? 'Đang làm...' : `⚡ Làm (${valid.length} NL)`}
           </button>
         </div>
       </div>
@@ -896,12 +1073,13 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
 // BATCHES TAB
 // ============================================
 function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefresh, toast }) {
+  const [showQuick, setShowQuick] = useState(false)
   const filtered = useMemo(() => {
     if (!search) return batches
     const s = search.toLowerCase()
     return batches.filter(b => {
       const f = formulas.find(fm => fm.id===b.formula_id)
-      return f?.name.toLowerCase().includes(s) || b.note?.toLowerCase().includes(s)
+      return (f?.name || b.name || '').toLowerCase().includes(s) || b.note?.toLowerCase().includes(s)
     })
   }, [batches, search, formulas])
 
@@ -920,34 +1098,41 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
 
   return (
     <>
+      <button onClick={() => setShowQuick(true)}
+        className="w-full mb-3 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white rounded-xl
+          font-bold text-sm shadow-md flex items-center justify-center gap-2 active:scale-98">
+        ⚡ Làm nhanh — không cần công thức
+      </button>
+      <QuickBatchForm isOpen={showQuick} onClose={() => setShowQuick(false)}
+        ingredients={ingredients} toast={toast} onSaved={onRefresh}/>
       <SearchBar value={search} onChange={setSearch} placeholder="Tìm lô sản xuất..."/>
       {filtered.length===0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">🧪</div>
           <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có lô nào'}</p>
-          <p className="text-xs text-gray-400 mt-1">Vào Công thức → Mở rộng → bấm "Làm lô"</p>
+          <p className="text-xs text-gray-400 mt-1">Bấm ⚡ Làm nhanh, hoặc vào Công thức → Mở rộng → "Làm lô"</p>
         </div>
       ) : (
         <div className="space-y-2">
           {filtered.map(b => {
             const f = formulas.find(fm => fm.id===b.formula_id)
-            const isTest = b.type==='test'
+            const isQuick = !b.formula_id
             return (
               <div key={b.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
                 <div className="flex items-start gap-3">
-                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0 ${isTest?'bg-blue-50':'bg-green-50'}`}>
-                    {isTest?'🔬':'🏭'}
+                  <div className={`w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0 ${isQuick?'bg-amber-50':'bg-green-50'}`}>
+                    {isQuick?'⚡':'🧪'}
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-1.5">
-                      <p className="text-sm font-medium text-gray-800 truncate">{f?.name||'?'}</p>
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${isTest?'bg-blue-100 text-blue-600':'bg-green-100 text-green-600'}`}>
-                        {isTest?'Thử':'Thật'}
-                      </span>
+                      <p className="text-sm font-medium text-gray-800 truncate">{f?.name || b.name || (isQuick ? 'Làm nhanh' : '(công thức đã xoá)')}</p>
+                      {isQuick && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">Nhanh</span>
+                      )}
                       {b.stock_deducted && <CheckCircle size={12} className="text-green-500"/>}
                     </div>
                     <p className="text-xs text-gray-400">
-                      Serving: {b.serving} • {b.cost>0?formatMoney(b.cost)+' • ':''}{new Date(b.created_at).toLocaleDateString('vi-VN')}
+                      {!isQuick && <>Serving: {b.serving} • </>}{b.cost>0?formatMoney(b.cost)+' • ':''}{new Date(b.created_at).toLocaleDateString('vi-VN')}
                     </p>
                     {b.note && <p className="text-xs text-gray-500 mt-0.5">📝 {b.note}</p>}
                     {b.result && <p className="text-xs text-amber-600 mt-0.5">💡 {b.result}</p>}

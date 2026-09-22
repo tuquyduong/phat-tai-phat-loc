@@ -254,7 +254,8 @@ export async function getBatches(formulaId) {
 
 export async function createBatch(batch) {
   const { data, error } = await supabase.from('lab_batches')
-    .insert([{ formula_id:batch.formula_id, type:batch.type||'test', serving:batch.serving||1,
+    .insert([{ formula_id:batch.formula_id || null, name:batch.name || null,
+      type:batch.type||'production', serving:batch.serving||1,
       items:batch.items||[], cost:batch.cost||0, note:batch.note||'', result:batch.result||'',
       stock_deducted:false }]).select().single()
   if (error) throw error; return data
@@ -273,34 +274,50 @@ export async function deleteBatch(id) {
 // Trừ kho cho batch production
 // items: [{ingredient_id, quantity, unit}]
 // ingredients: full list with stock_qty and unit
-export async function deductStock(batchId, items, ingredients) {
-  const errors = []
-  for (const item of items) {
+// Gộp số lượng theo từng nguyên liệu (đã quy về đơn vị tồn kho).
+// Cùng một nguyên liệu xuất hiện 2 lần phải cộng lại — nếu trừ riêng từng dòng
+// từ cùng một số tồn cũ thì lần sau ghi đè lần trước, tồn kho sai.
+function sumByIngredient(items, ingredients) {
+  const sum = {}, errors = []
+  for (const item of items || []) {
     const ing = ingredients.find(i => i.id === item.ingredient_id)
     if (!ing) { errors.push(`Không tìm thấy nguyên liệu ${item.ingredient_id}`); continue }
-    const converted = convertUnit(item.quantity, item.unit, ing.unit)
-    if (converted === null) {
-      errors.push(`${ing.name}: không thể convert ${item.unit} → ${ing.unit}`)
-      continue
-    }
-    const newStock = (Number(ing.stock_qty)||0) - converted
-    await updateStock(ing.id, newStock)
+    const conv = convertUnit(Number(item.quantity) || 0, item.unit, ing.unit)
+    if (conv === null) { errors.push(`${ing.name}: không thể convert ${item.unit} → ${ing.unit}`); continue }
+    sum[ing.id] = (sum[ing.id] || 0) + conv
   }
-  // Mark batch as deducted
+  return { sum, errors }
+}
+
+// Cộng/trừ tồn. Ưu tiên hàm apply_ingredient_delta trong database —
+// trừ tất cả nguyên liệu trong một giao dịch, hỏng thì không dòng nào bị đổi.
+// Chưa cài hàm thì dùng cách cũ: đọc tồn mới nhất rồi ghi từng dòng.
+async function applyStockDelta(sum, sign) {
+  const ids = Object.keys(sum)
+  if (!ids.length) return
+  const delta = {}
+  ids.forEach(id => { delta[id] = Math.round(sign * sum[id] * 10000) / 10000 })
+  const rpc = await supabase.rpc('apply_ingredient_delta', { p_delta: delta })
+  if (!rpc.error) return
+  if (!/apply_ingredient_delta|PGRST202|does not exist/i.test(rpc.error.message || '')) throw rpc.error
+
+  const { data, error } = await supabase.from('ingredients').select('id, stock_qty').in('id', ids)
+  if (error) throw error
+  for (const row of data || []) {
+    const next = Math.round(((Number(row.stock_qty) || 0) + sign * sum[row.id]) * 10000) / 10000
+    await updateStock(row.id, next)
+  }
+}
+
+export async function deductStock(batchId, items, ingredients) {
+  const { sum, errors } = sumByIngredient(items, ingredients)
+  await applyStockDelta(sum, -1)
   await updateBatch(batchId, { stock_deducted: true })
   return errors
 }
-
-// Hoàn tồn (undo deduction)
 export async function undoDeductStock(batchId, items, ingredients) {
-  for (const item of items) {
-    const ing = ingredients.find(i => i.id === item.ingredient_id)
-    if (!ing) continue
-    const converted = convertUnit(item.quantity, item.unit, ing.unit)
-    if (converted === null) continue
-    const newStock = (Number(ing.stock_qty)||0) + converted
-    await updateStock(ing.id, newStock)
-  }
+  const { sum } = sumByIngredient(items, ingredients)
+  await applyStockDelta(sum, +1)
   await updateBatch(batchId, { stock_deducted: false })
 }
 
