@@ -546,8 +546,15 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                       {sold} chờ giao
                     </span>
                   )}
+                  {/* Không còn đơn chờ giao nhưng đã từng bán → vẫn cho biết đã bán bao nhiêu */}
+                  {sold === 0 && item.sold_total > 0 && (
+                    <span className="absolute top-7 right-1.5 text-[9px] font-medium px-1.5 py-0.5
+                      rounded-full bg-gray-100 text-gray-500">
+                      đã bán {item.sold_total}/{item.ever_total}
+                    </span>
+                  )}
                   {item.incoming > 0 && (
-                    <span className={`absolute ${sold > 0 ? 'top-[52px]' : 'top-7'} right-1.5
+                    <span className={`absolute ${(sold > 0 || item.sold_total > 0) ? 'top-[52px]' : 'top-7'} right-1.5
                       text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700`}>
                       {item.incoming} đang về
                     </span>
