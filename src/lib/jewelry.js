@@ -246,7 +246,13 @@ export async function updateJewelry(id, updates) {
       : cur?.status === 'ordered'
     if (goingToOrdered) {
       // Món đang về: ô "Số lượng đặt" ghi vào cột hàng đang về, không phải tồn kho
-      updates = { ...updates, incoming_qty: nonNeg(updates.stock_qty), stock_qty: 0 }
+      const next = nonNeg(updates.stock_qty)
+      // Cũng không cho đặt ít hơn số đã bán trước — nhận hàng sẽ kẹt
+      const reserved = await getReserved(id)
+      if (next < reserved) {
+        throw new Error(`Đã bán trước ${reserved} cái — số lượng đặt không được ít hơn ${reserved}`)
+      }
+      updates = { ...updates, incoming_qty: next, stock_qty: 0 }
     } else {
       // Không cho hạ tồn thấp hơn số đã bán mà chưa giao —
       // nếu không các đơn đó sẽ không bao giờ tick "Đã giao" được
@@ -485,10 +491,14 @@ export async function updateSale(saleId, updates) {
   // Hàng có sẵn trong kho → phải kiểm tra tồn và điều chỉnh kho
   if (old.jewelry_id) {
     const { data: item, error: ie } = await supabase
-      .from('jewelry').select('stock_qty, status, code').eq('id', old.jewelry_id).single()
+      .from('jewelry').select('stock_qty, incoming_qty, status, code').eq('id', old.jewelry_id).single()
     if (ie) throw ie
 
-    const stock = Number(item.stock_qty) || 0
+    // Hàng đang về: số lượng nằm ở cột "đang về", tồn kho bằng 0.
+    // Lấy nhầm cột thì sửa đơn đặt trước nào cũng bị chặn "chỉ còn 0".
+    const stock = item.status === 'ordered'
+      ? nonNeg(item.incoming_qty)
+      : nonNeg(item.stock_qty)
 
     if (old.delivered) {
       // Đơn ĐÃ giao: kho đã trừ oldQty rồi. Đổi số lượng → trừ/hoàn phần chênh lệch

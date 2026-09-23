@@ -2600,8 +2600,12 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
     : null
 
   // Còn bán được = tồn − đã bán chưa giao (không tính đơn đang sửa)
+  // Hàng đang về đếm theo cột "đang về", hàng trong kho đếm theo tồn
+  const pickedCapacity = picked
+    ? (picked.status === 'ordered' ? Number(picked.incoming_qty) || 0 : Number(picked.stock_qty) || 0)
+    : 0
   const pickedAvail = picked
-    ? Math.max(0, (Number(picked.stock_qty) || 0) - allSales
+    ? Math.max(0, pickedCapacity - allSales
         .filter(s => s.jewelry_id === picked.id && !s.delivered && s.id !== editSale?.id)
         .reduce((sum, s) => sum + (Number(s.qty) || 0), 0))
     : 0
@@ -2670,7 +2674,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
     if (form.mode === 'stock' && picked) {
       const want = Number(form.qty) || 1
       const cap  = editSale?.delivered
-        ? (Number(picked.stock_qty) || 0) + (Number(editSale.qty) || 0)  // đã giao: cộng lại phần đã trừ
+        ? pickedCapacity + (Number(editSale.qty) || 0)   // đã giao: cộng lại phần đã trừ
         : pickedAvail
       if (want > cap) {
         toast.error(`Chỉ còn ${cap} cái — không bán quá số này`)
@@ -2823,7 +2827,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
               {form.mode === 'stock' && picked && (
                 <span className="text-gray-400"> · tối đa {
                   editSale?.delivered
-                    ? (Number(picked.stock_qty)||0) + (Number(editSale.qty)||0)
+                    ? pickedCapacity + (Number(editSale.qty)||0)
                     : pickedAvail
                 }</span>
               )}
