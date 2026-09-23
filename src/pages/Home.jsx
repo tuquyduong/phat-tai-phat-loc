@@ -4,7 +4,10 @@
 // ============================================
 import { useState } from 'react'
 import { Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
-import { setPassword, checkPassword, supabase } from '../lib/supabase'
+import {
+  setPassword, checkPassword, supabase,
+  getDbUsage, getStorageUsage, fmtBytes, USAGE_LIMITS,
+} from '../lib/supabase'
 import { useToast } from '../components/Toast'
 
 // Backup tables list
@@ -16,11 +19,55 @@ const BACKUP_TABLES = [
   'stocks', 'stock_transactions', 'dividends'
 ]
 
+// Thanh dung lượng: xanh dưới 70%, vàng 70-90%, đỏ trên 90%
+function UsageBar({ label, used, limit, extra, err }) {
+  const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
+  const color = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-green-500'
+  const text  = pct >= 90 ? 'text-red-600' : pct >= 70 ? 'text-amber-600' : 'text-green-600'
+  return (
+    <div>
+      <div className="flex justify-between items-baseline mb-1">
+        <span className="text-xs text-gray-600">{label}</span>
+        <span className={`text-xs font-semibold ${text}`}>
+          {fmtBytes(used)} / {fmtBytes(limit)}
+        </span>
+      </div>
+      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+        <div className={`h-full rounded-full ${color}`} style={{ width: `${Math.max(pct, 1)}%` }} />
+      </div>
+      <div className="flex justify-between mt-0.5">
+        <span className="text-[10px] text-gray-400">{extra || ''}</span>
+        <span className="text-[10px] text-gray-400">{pct < 0.1 ? 'dưới 0,1%' : pct.toFixed(1) + '%'}</span>
+      </div>
+      {err && <p className="text-[10px] text-amber-600 mt-1">{err}</p>}
+    </div>
+  )
+}
+
 export default function Home({ onNavigate, activeModules }) {
   const toast = useToast()
 
   // Password states
   const [showSecurity, setShowSecurity] = useState(false)
+  const [showUsage,  setShowUsage]  = useState(false)
+  const [usage,      setUsage]      = useState(null)
+  const [usageLoad,  setUsageLoad]  = useState(false)
+
+  const loadUsage = async () => {
+    setUsageLoad(true)
+    try {
+      const [db, st] = await Promise.all([getDbUsage(), getStorageUsage()])
+      setUsage({ db, storage: st })
+    } catch (e) {
+      setUsage({ db: { ok:false, message: e.message, tables: [], total: 0 },
+                 storage: { ok:false, bytes:0, files:0 } })
+    } finally { setUsageLoad(false) }
+  }
+  const toggleUsage = () => {
+    const next = !showUsage
+    setShowUsage(next)
+    if (next && !usage) loadUsage()
+  }
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
@@ -288,6 +335,63 @@ export default function Home({ onNavigate, activeModules }) {
       {/* ============================================ */}
       <div className="max-w-2xl mx-auto px-4 mt-4 space-y-3">
         <p className="text-xs font-bold text-gray-400 uppercase tracking-wide">Hệ thống</p>
+
+        {/* Dung lượng đã dùng */}
+        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+          <button onClick={toggleUsage} className="w-full flex items-center gap-3 px-4 py-3.5 active:bg-gray-50">
+            <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0">
+              <Database size={16} className="text-sky-600" />
+            </div>
+            <div className="flex-1 text-left">
+              <p className="text-sm font-medium text-gray-800">Dung lượng đã dùng</p>
+              <p className="text-xs text-gray-500">
+                {usage
+                  ? `Dữ liệu ${fmtBytes(usage.db.total)} · Ảnh ${fmtBytes(usage.storage.bytes)}`
+                  : 'Xem dữ liệu và ảnh đang chiếm bao nhiêu'}
+              </p>
+            </div>
+            <ChevronIcon open={showUsage} />
+          </button>
+
+          {showUsage && (
+            <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
+              {usageLoad && <p className="text-xs text-gray-400 text-center py-3">Đang tính...</p>}
+
+              {usage && (
+                <>
+                  <UsageBar label="Dữ liệu (database)" used={usage.db.total} limit={USAGE_LIMITS.db}
+                    err={!usage.db.ok ? 'Cần chạy migration_usage.sql để xem số thật' : null}/>
+                  <UsageBar label="Ảnh (storage)" used={usage.storage.bytes} limit={USAGE_LIMITS.storage}
+                    extra={usage.storage.ok ? `${usage.storage.files} ảnh` : null}
+                    err={!usage.storage.ok ? usage.storage.message : null}/>
+
+                  {usage.db.ok && usage.db.tables.length > 0 && (
+                    <details className="bg-gray-50 rounded-xl px-3 py-2">
+                      <summary className="text-[11px] font-semibold text-gray-600 cursor-pointer">
+                        Chi tiết từng bảng
+                      </summary>
+                      <div className="mt-2 space-y-0.5 max-h-52 overflow-y-auto">
+                        {usage.db.tables.filter(t => t.bytes > 0).map(t => (
+                          <div key={t.name} className="flex justify-between text-[10px] py-0.5 border-b border-gray-200 last:border-0">
+                            <span className="font-mono text-gray-700 truncate">{t.name}</span>
+                            <span className="text-gray-400 flex-shrink-0 ml-2">
+                              {t.rows > 0 ? `~${t.rows} dòng · ` : ''}{fmtBytes(t.bytes)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+
+                  <button onClick={loadUsage} disabled={usageLoad}
+                    className="w-full py-2 text-xs text-sky-600 font-medium active:scale-98">
+                    Tính lại
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Đổi mật khẩu - Collapsible */}
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">

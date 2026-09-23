@@ -38,6 +38,33 @@ export default function Jewelry() {
   const [loading,  setLoading]  = useState(true)
   const [modTab,   setModTab]   = useState('kho')
   const [khoView,  setKhoView]  = useState('stock')   // stock | incoming
+  // Giữ ở cấp này để mở chi tiết rồi quay lại vẫn còn nguyên bộ lọc đang xem
+  const [khoCat,    setKhoCat]    = useState('Tất cả')
+  const [khoSort,   setKhoSort]   = useState('new')
+  const [khoSearch, setKhoSearch] = useState('')
+  const [nhapSearch,setNhapSearch]= useState('')
+  const scrollY = useRef(0)
+
+  // Mở chi tiết: nhớ chỗ đang cuộn rồi xem từ đầu trang
+  const openDetail = (item) => {
+    scrollY.current = window.scrollY
+    setDetail(item)
+    requestAnimationFrame(() => window.scrollTo(0, 0))
+  }
+
+  // Quay lại: trả về đúng chỗ cũ. Danh sách dài nhiều ảnh dựng xong sau vài nhịp,
+  // nên thử lại mấy lần cho tới khi trang đủ cao để cuộn tới đó.
+  const closeDetail = () => {
+    setDetail(null)
+    const y = scrollY.current
+    if (y <= 0) return
+    let n = 0
+    const tryScroll = () => {
+      window.scrollTo(0, y)
+      if (++n < 6 && Math.abs(window.scrollY - y) > 2) requestAnimationFrame(tryScroll)
+    }
+    requestAnimationFrame(tryScroll)
+  }
   const [banView,  setBanView]  = useState('orders')  // orders | customers
   const [soView,   setSoView]   = useState('report')  // report | trips
   const [detail,   setDetail]   = useState(null)
@@ -72,6 +99,13 @@ export default function Jewelry() {
   useEffect(() => { loadData() }, [loadData])
 
   const stats    = useMemo(() => calcStats(jewelry, sales), [jewelry, sales])
+
+  // Màn chi tiết đọc từ danh sách vừa tải, để sửa xong là số liệu cập nhật ngay
+  const detailItem = detail
+    ? (stats.withDays.find(x => x.id === detail.id)
+       || jewelry.find(x => x.id === detail.id)
+       || detail)
+    : null
   const custNames = useMemo(() => getCustomerNames(sales), [sales])
 
   const handleSetTrip = (trip) => {
@@ -89,9 +123,9 @@ export default function Jewelry() {
     if (pending.length > 0) lines.push(`Đang có ${pending.length} đơn CHƯA GIAO — xoá sẽ mất luôn các đơn đó.`)
     if (inc === 0 && pending.length === 0) lines.push('Lịch sử bán sẽ xoá theo.')
     const msg = lines.join('\n\n')
-    if (!confirm(msg)) return
-    try { await deleteJewelry(item.id); toast.success('Đã xoá'); loadData() }
-    catch { toast.error('Lỗi') }
+    if (!confirm(msg)) return false
+    try { await deleteJewelry(item.id); toast.success('✓ Đã xoá'); loadData(); return true }
+    catch (err) { toast.error('✕ Không xoá được: ' + (err.message || 'lỗi không rõ')); return false }
   }
 
   return (
@@ -102,7 +136,7 @@ export default function Jewelry() {
       <div className="sticky top-0 z-30 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3 px-4 py-3">
           {detail ? (
-            <button onClick={() => setDetail(null)} className="p-1 -ml-1 text-purple-600">
+            <button onClick={closeDetail} className="p-1 -ml-1 text-purple-600">
               <ChevronLeft size={22}/>
             </button>
           ) : <Diamond size={20} className="text-purple-600"/>}
@@ -167,16 +201,28 @@ export default function Jewelry() {
           <RefreshCw size={24} className="animate-spin"/>
         </div>
       ) : detail ? (
-        <DetailPanel item={detail} sales={sales.filter(s => s.jewelry_id === detail.id)}
+        <DetailPanel item={detailItem} sales={sales.filter(s => s.jewelry_id === detail.id)}
           trips={trips}
-          onSell={() => { setDetail(null); setSellItem(detail) }}
-          onEdit={() => { setDetail(null); setEditing(detail); setShowAdd(true) }}
-          onDelete={() => { handleDelete(detail); setDetail(null) }}/>
+          onChanged={loadData}
+          onSell={() => { closeDetail(); setSellItem(detail) }}
+          onEdit={() => {
+            // Không đóng chi tiết — sửa xong số liệu cập nhật ngay tại chỗ
+            setEditing(detailItem)
+            setAddMode(detailItem.status === 'ordered' ? 'ordered' : 'in_stock')
+            setShowAdd(true)
+          }}
+          onDelete={async () => {
+            // Chỉ rời màn khi thực sự xoá; bấm Huỷ thì ở lại
+            if (await handleDelete(detailItem)) closeDetail()
+          }}/>
       ) : modTab === 'kho' ? (
         khoView === 'stock' ? (
             <KhoTab items={stats.withDays}
               categories={categories}
-              onSelect={setDetail}
+              cat={khoCat} setCat={setKhoCat}
+              sort={khoSort} setSort={setKhoSort}
+              search={khoSearch} setSearch={setKhoSearch}
+              onSelect={openDetail}
               onAdd={() => { setEditing(null); setAddMode('in_stock'); setShowAdd(true) }}
               onEdit={item => { setEditing(item); setAddMode(item.status || 'in_stock'); setShowAdd(true) }}
               onDelete={handleDelete}
@@ -185,6 +231,7 @@ export default function Jewelry() {
               onEndTrip={handleEndTrip}/>
           ) : (
             <NhapTab stats={stats} sales={sales}
+              search={nhapSearch} setSearch={setNhapSearch}
               onAdd={() => { setEditing(null); setAddMode('ordered'); setShowAdd(true) }}
               onEdit={item => { setEditing(item); setAddMode('ordered'); setShowAdd(true) }}
               onDelete={handleDelete}
@@ -215,7 +262,7 @@ export default function Jewelry() {
         soView === 'report'
           ? <BcTab stats={stats}/>
           : soView === 'intake'
-          ? <IntakeTab trips={trips} toast={toast}/>
+          ? <IntakeTab trips={trips} jewelry={jewelry} toast={toast} onRefresh={loadData}/>
           : <TripsTab trips={trips} jewelry={jewelry}
               activeTrip={activeTrip}
               onSelect={handleSetTrip}
@@ -309,10 +356,9 @@ function SubFilter({ value, onChange, options }) {
 // ============================================
 // KHO TAB
 // ============================================
-function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onAdd, onEdit, onDelete, activeTrip, onPickTrip, onEndTrip }) {
-  const [cat,    setCat]    = useState('Tất cả')
-  const [sort,   setSort]   = useState('new')
-  const [search, setSearch] = useState('')
+function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onAdd, onEdit, onDelete,
+                 activeTrip, onPickTrip, onEndTrip,
+                 cat, setCat, sort, setSort, search, setSearch }) {
 
   const filtered = useMemo(() => {
     let list = cat === 'Tất cả' ? jewelry : jewelry.filter(j => j.category === cat)
@@ -574,9 +620,8 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
 // ============================================
 // NHẬP HÀNG TAB — hàng đang về
 // ============================================
-function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast }) {
+function NhapTab({ stats, sales, onAdd, onEdit, onDelete, onRefresh, toast, search, setSearch }) {
   const [recvItem, setRecvItem] = useState(null)
-  const [search,   setSearch]   = useState('')
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const today10 = todayLocal()
 
@@ -1451,7 +1496,7 @@ function BcTab({ stats }) {
 // ============================================
 // DETAIL PANEL
 // ============================================
-function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
+function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }) {
   const toast = useToast()
   const [intakes,    setIntakes]    = useState([])
   const [editIntake, setEditIntake] = useState(null)
@@ -1584,9 +1629,9 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
         </>
       )}
 
-      <IntakeEditModal intake={editIntake}
+      <IntakeEditModal intake={editIntake} item={item}
         onClose={() => setEditIntake(null)}
-        onSaved={() => { setEditIntake(null); loadIntakes() }}
+        onSaved={() => { setEditIntake(null); loadIntakes(); onChanged?.() }}
         toast={toast}/>
 
       {/* Lịch sử bán */}
@@ -1631,7 +1676,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete }) {
 // ============================================
 // SỔ NHẬP — toàn bộ lần nhập, gộp theo ngày
 // ============================================
-function IntakeTab({ trips, toast }) {
+function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
   const [rows,    setRows]    = useState([])
   const [loading, setLoading] = useState(true)
   const [tripId,  setTripId]  = useState('')
@@ -1756,8 +1801,9 @@ function IntakeTab({ trips, toast }) {
         </div>
       ))}
       <IntakeEditModal intake={editRow}
+        item={editRow ? jewelry.find(j => j.id === editRow.jewelry_id) : null}
         onClose={() => setEditRow(null)}
-        onSaved={() => { setEditRow(null); setReload(n => n + 1) }}
+        onSaved={() => { setEditRow(null); setReload(n => n + 1); onRefresh?.() }}
         toast={toast}/>
       <div className="h-4"/>
     </>
@@ -1767,7 +1813,7 @@ function IntakeTab({ trips, toast }) {
 // ============================================
 // SỬA DÒNG SỔ NHẬP
 // ============================================
-function IntakeEditModal({ intake, onClose, onSaved, toast }) {
+function IntakeEditModal({ intake, item, onClose, onSaved, toast }) {
   const [qty,    setQty]    = useState('')
   const [cost,   setCost]   = useState('')
   const [supp,   setSupp]   = useState('')
@@ -1790,9 +1836,30 @@ function IntakeEditModal({ intake, onClose, onSaved, toast }) {
   const handleSave = async () => {
     const n = Number(qty)
     if (!(n >= 1)) { toast.error('Số lượng phải từ 1 trở lên'); return }
+    const diff = n - (Number(intake.qty) || 0)
     setSaving(true)
     try {
       await updateIntake(intake.id, { qty: n, cost_price: cost, supplier_name: supp, note })
+
+      // Sửa số nhập mà không chỉnh tồn thì hai con số lệch nhau —
+      // nhãn "Đã bán x/y" ngoài thẻ vẫn tính theo tồn cũ. Hỏi để chỉnh luôn.
+      if (diff !== 0 && item) {
+        const isOrdered = item.status === 'ordered'
+        const curQty = Number(isOrdered ? item.incoming_qty : item.stock_qty) || 0
+        const nextQty = Math.max(0, curQty + diff)
+        const what = isOrdered ? 'Số lượng đặt' : 'Tồn kho'
+        if (confirm(
+          `Đã sửa số nhập ${intake.qty} → ${n} (${diff > 0 ? '+' : ''}${diff}).\n\n` +
+          `${what} hiện ${curQty} — chỉnh thành ${nextQty} luôn?`
+        )) {
+          try {
+            await updateJewelry(item.id, { stock_qty: nextQty, status: item.status })
+          } catch (e2) {
+            toast.error('Đã sửa sổ, nhưng chưa chỉnh được ' + what.toLowerCase() + ': ' + (e2.message || ''))
+            onSaved(); return
+          }
+        }
+      }
       toast.success('✓ Đã sửa dòng sổ nhập')
       onSaved()
     } catch (err) { toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ')) }
@@ -1815,7 +1882,7 @@ function IntakeEditModal({ intake, onClose, onSaved, toast }) {
       <div className="px-5 pb-6 space-y-3">
         <div className="px-3 py-2 bg-gray-50 rounded-xl text-[11px] text-gray-500 leading-relaxed">
           Ghi nhận lúc <b>{when}</b>.<br/>
-          Sửa ở đây chỉ đổi <b>bản ghi lịch sử</b> — tồn kho của sản phẩm giữ nguyên.
+          Đổi số lượng sẽ hỏi bạn có chỉnh tồn kho theo không.
         </div>
 
         <div className="grid grid-cols-2 gap-2">

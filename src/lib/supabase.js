@@ -780,3 +780,45 @@ export function clearSession() {
     window.dispatchEvent(new Event('auth-changed'))
   } catch {}
 }
+
+// ============================================
+// DUNG LƯỢNG ĐÃ DÙNG
+// ============================================
+const FREE_DB_BYTES      = 500 * 1024 * 1024   // gói miễn phí: 500 MB database
+const FREE_STORAGE_BYTES = 1024 * 1024 * 1024  // 1 GB ảnh
+export const USAGE_LIMITS = { db: FREE_DB_BYTES, storage: FREE_STORAGE_BYTES }
+
+// Dung lượng thật của từng bảng — cần hàm db_usage trong database
+export async function getDbUsage() {
+  const { data, error } = await supabase.rpc('db_usage')
+  if (error) return { ok: false, message: error.message, tables: [], total: 0 }
+  const tables = (data || []).map(r => ({
+    name:  r.table_name,
+    rows:  Number(r.rows_est) || 0,
+    bytes: Number(r.bytes) || 0,
+  }))
+  return { ok: true, tables, total: tables.reduce((s, t) => s + t.bytes, 0) }
+}
+
+// Dung lượng ảnh: duyệt từng trang 100 file cho tới hết
+export async function getStorageUsage(bucket = 'jewelry-images') {
+  let bytes = 0, files = 0
+  for (let page = 0; page < 60; page++) {
+    const { data, error } = await supabase.storage.from(bucket)
+      .list('', { limit: 100, offset: page * 100 })
+    if (error) return { ok: false, message: error.message, bytes: 0, files: 0 }
+    if (!data || data.length === 0) break
+    data.forEach(f => { bytes += Number(f.metadata?.size) || 0 })
+    files += data.length
+    if (data.length < 100) break
+  }
+  return { ok: true, bytes, files }
+}
+
+export function fmtBytes(n) {
+  const b = Number(n) || 0
+  if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(2) + ' GB'
+  if (b >= 1024 ** 2) return (b / 1024 ** 2).toFixed(1) + ' MB'
+  if (b >= 1024)      return Math.round(b / 1024) + ' KB'
+  return b + ' B'
+}
