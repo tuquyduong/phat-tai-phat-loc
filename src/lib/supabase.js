@@ -815,6 +815,31 @@ export async function getStorageUsage(bucket = 'jewelry-images') {
   return { ok: true, bytes, files }
 }
 
+// Nhớ kết quả trong máy để không phải tính lại mỗi lần mở Home.
+// Đếm ảnh phải duyệt nhiều trang nên khá tốn băng thông.
+const USAGE_KEY = 'chimai_usage_cache'
+const USAGE_TTL = 12 * 60 * 60 * 1000   // 12 tiếng
+
+export function readUsageCache() {
+  try {
+    const raw = localStorage.getItem(USAGE_KEY)
+    if (!raw) return null
+    const c = JSON.parse(raw)
+    return (Date.now() - (c.at || 0) < USAGE_TTL) ? c : { ...c, stale: true }
+  } catch { return null }
+}
+
+export async function loadUsage({ force = false } = {}) {
+  if (!force) {
+    const c = readUsageCache()
+    if (c && !c.stale) return c
+  }
+  const [db, storage] = await Promise.all([getDbUsage(), getStorageUsage()])
+  const data = { at: Date.now(), db, storage }
+  try { localStorage.setItem(USAGE_KEY, JSON.stringify(data)) } catch {}
+  return data
+}
+
 export function fmtBytes(n) {
   const b = Number(n) || 0
   if (b >= 1024 ** 3) return (b / 1024 ** 3).toFixed(2) + ' GB'

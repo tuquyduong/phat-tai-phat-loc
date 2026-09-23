@@ -121,7 +121,9 @@ export default function Jewelry() {
     const lines = [`Xoá "${item.code}"?`]
     if (inc > 0) lines.push(`Còn ${inc} cái ĐANG VỀ — xoá sẽ mất theo dõi lô hàng này.`)
     if (pending.length > 0) lines.push(`Đang có ${pending.length} đơn CHƯA GIAO — xoá sẽ mất luôn các đơn đó.`)
-    if (inc === 0 && pending.length === 0) lines.push('Lịch sử bán sẽ xoá theo.')
+    const soldCount = sales.filter(s => s.jewelry_id === item.id).length
+    if (soldCount > 0) lines.push(`${soldCount} đơn đã bán vẫn được giữ trong báo cáo, chỉ mất liên kết tới sản phẩm.`)
+    if (inc === 0 && pending.length === 0 && soldCount === 0) lines.push('Sản phẩm này chưa có đơn bán nào.')
     const msg = lines.join('\n\n')
     if (!confirm(msg)) return false
     try { await deleteJewelry(item.id); toast.success('✓ Đã xoá'); loadData(); return true }
@@ -1785,7 +1787,12 @@ function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
               </div>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold text-gray-800 truncate">
-                  {r.code}{r.name ? ` · ${r.name}` : ''}
+                  {r.code || '(không rõ)'}{r.name ? ` · ${r.name}` : ''}
+                  {r.deleted && (
+                    <span className="ml-1 text-[9px] font-medium px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                      đã xoá SP
+                    </span>
+                  )}
                 </div>
                 <div className="text-[10px] text-gray-400 flex items-center gap-1.5 flex-wrap">
                   <span>{fmtIntakeTime(r.intake_at)}</span>

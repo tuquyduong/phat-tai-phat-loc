@@ -2,11 +2,11 @@
 // HOME PAGE - UPDATED
 // Thêm: Đổi mật khẩu + Backup/Restore
 // ============================================
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
 import {
   setPassword, checkPassword, supabase,
-  getDbUsage, getStorageUsage, fmtBytes, USAGE_LIMITS,
+  loadUsage, readUsageCache, fmtBytes, USAGE_LIMITS,
 } from '../lib/supabase'
 import { useToast } from '../components/Toast'
 
@@ -53,21 +53,22 @@ export default function Home({ onNavigate, activeModules }) {
   const [usage,      setUsage]      = useState(null)
   const [usageLoad,  setUsageLoad]  = useState(false)
 
-  const loadUsage = async () => {
+  const fetchUsage = async (force = false) => {
     setUsageLoad(true)
-    try {
-      const [db, st] = await Promise.all([getDbUsage(), getStorageUsage()])
-      setUsage({ db, storage: st })
-    } catch (e) {
+    try { setUsage(await loadUsage({ force })) }
+    catch (e) {
       setUsage({ db: { ok:false, message: e.message, tables: [], total: 0 },
                  storage: { ok:false, bytes:0, files:0 } })
     } finally { setUsageLoad(false) }
   }
-  const toggleUsage = () => {
-    const next = !showUsage
-    setShowUsage(next)
-    if (next && !usage) loadUsage()
-  }
+
+  // Hiện ngay khi vào Home: lấy bản đã nhớ trong máy trước cho nhanh,
+  // hết hạn 12 tiếng thì tự tính lại nền.
+  useEffect(() => {
+    const cached = readUsageCache()
+    if (cached) setUsage(cached)
+    if (!cached || cached.stale) fetchUsage()
+  }, [])
   const [currentPw, setCurrentPw] = useState('')
   const [newPw, setNewPw] = useState('')
   const [confirmPw, setConfirmPw] = useState('')
@@ -338,39 +339,66 @@ export default function Home({ onNavigate, activeModules }) {
 
         {/* Dung lượng đã dùng */}
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-          <button onClick={toggleUsage} className="w-full flex items-center gap-3 px-4 py-3.5 active:bg-gray-50">
-            <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0">
-              <Database size={16} className="text-sky-600" />
+          <div className="px-4 pt-3.5 pb-3 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="w-9 h-9 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0">
+                <Database size={16} className="text-sky-600" />
+              </div>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-gray-800">Dung lượng đã dùng</p>
+                <p className="text-xs text-gray-500">
+                  {usageLoad && !usage ? 'Đang tính...' : 'Gói miễn phí Supabase'}
+                </p>
+              </div>
+              {usage && (
+                <button onClick={() => fetchUsage(true)} disabled={usageLoad}
+                  className="text-[11px] text-sky-600 font-medium px-2 py-1 active:scale-95">
+                  {usageLoad ? '...' : 'Tính lại'}
+                </button>
+              )}
             </div>
-            <div className="flex-1 text-left">
-              <p className="text-sm font-medium text-gray-800">Dung lượng đã dùng</p>
-              <p className="text-xs text-gray-500">
-                {usage
-                  ? `Dữ liệu ${fmtBytes(usage.db.total)} · Ảnh ${fmtBytes(usage.storage.bytes)}`
-                  : 'Xem dữ liệu và ảnh đang chiếm bao nhiêu'}
-              </p>
-            </div>
+
+            {usage && (
+              <>
+                <UsageBar label="Dữ liệu (database)" used={usage.db.total} limit={USAGE_LIMITS.db}
+                  err={!usage.db.ok ? 'Cần chạy migration_usage.sql để xem số thật' : null}/>
+                <UsageBar label="Ảnh (storage)" used={usage.storage.bytes} limit={USAGE_LIMITS.storage}
+                  extra={usage.storage.ok ? `${usage.storage.files} ảnh` : null}
+                  err={!usage.storage.ok ? usage.storage.message : null}/>
+
+                {(() => {
+                  const dp = usage.db.total / USAGE_LIMITS.db * 100
+                  const sp = usage.storage.bytes / USAGE_LIMITS.storage * 100
+                  const p  = Math.max(dp, sp)
+                  if (p < 70) return null
+                  return (
+                    <div className={`px-3 py-2 rounded-xl text-[11px] leading-relaxed
+                      ${p >= 90 ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`}>
+                      {p >= 90 ? '🔴' : '🟡'} {sp >= dp ? 'Kho ảnh' : 'Dữ liệu'} đã dùng {p.toFixed(0)}%.
+                      {sp >= dp
+                        ? ' Xoá ảnh của sản phẩm đã bán hết, hoặc nâng gói Supabase.'
+                        : ' Cân nhắc xoá dữ liệu cũ hoặc nâng gói Supabase.'}
+                    </div>
+                  )
+                })()}
+              </>
+            )}
+          </div>
+
+          <button onClick={() => setShowUsage(!showUsage)}
+            className="w-full flex items-center justify-center gap-1 py-2 border-t border-gray-100
+              text-[11px] text-gray-500 active:bg-gray-50">
+            {showUsage ? 'Ẩn chi tiết' : 'Xem chi tiết từng bảng'}
             <ChevronIcon open={showUsage} />
           </button>
 
           {showUsage && (
             <div className="px-4 pb-4 space-y-3 border-t border-gray-100 pt-3">
-              {usageLoad && <p className="text-xs text-gray-400 text-center py-3">Đang tính...</p>}
-
               {usage && (
                 <>
-                  <UsageBar label="Dữ liệu (database)" used={usage.db.total} limit={USAGE_LIMITS.db}
-                    err={!usage.db.ok ? 'Cần chạy migration_usage.sql để xem số thật' : null}/>
-                  <UsageBar label="Ảnh (storage)" used={usage.storage.bytes} limit={USAGE_LIMITS.storage}
-                    extra={usage.storage.ok ? `${usage.storage.files} ảnh` : null}
-                    err={!usage.storage.ok ? usage.storage.message : null}/>
-
                   {usage.db.ok && usage.db.tables.length > 0 && (
-                    <details className="bg-gray-50 rounded-xl px-3 py-2">
-                      <summary className="text-[11px] font-semibold text-gray-600 cursor-pointer">
-                        Chi tiết từng bảng
-                      </summary>
-                      <div className="mt-2 space-y-0.5 max-h-52 overflow-y-auto">
+                    <div className="bg-gray-50 rounded-xl px-3 py-2">
+                      <div className="space-y-0.5 max-h-60 overflow-y-auto">
                         {usage.db.tables.filter(t => t.bytes > 0).map(t => (
                           <div key={t.name} className="flex justify-between text-[10px] py-0.5 border-b border-gray-200 last:border-0">
                             <span className="font-mono text-gray-700 truncate">{t.name}</span>
@@ -380,13 +408,8 @@ export default function Home({ onNavigate, activeModules }) {
                           </div>
                         ))}
                       </div>
-                    </details>
+                    </div>
                   )}
-
-                  <button onClick={loadUsage} disabled={usageLoad}
-                    className="w-full py-2 text-xs text-sky-600 font-medium active:scale-98">
-                    Tính lại
-                  </button>
                 </>
               )}
             </div>

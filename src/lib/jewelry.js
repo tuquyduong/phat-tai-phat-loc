@@ -278,11 +278,23 @@ export async function updateJewelry(id, updates) {
 
 export async function deleteJewelry(id) {
   const { data: item } = await supabase
-    .from('jewelry').select('image_url').eq('id', id).maybeSingle()
+    .from('jewelry').select('code, name, image_url').eq('id', id).maybeSingle()
+
+  // Chép tên sản phẩm vào đơn bán và sổ nhập TRƯỚC khi xoá.
+  // Sau khi xoá, các dòng đó mất liên kết nên không còn đọc được tên từ sản phẩm.
+  if (item) {
+    const label = [item.code, item.name].filter(Boolean).join(' · ')
+    await supabase.from('jewelry_sales')
+      .update({ item_name: label, item_image: item.image_url || null })
+      .eq('jewelry_id', id).is('item_name', null).catch(() => {})
+    await supabase.from('jewelry_intakes')
+      .update({ item_name: label })
+      .eq('jewelry_id', id).catch(() => {})
+  }
+
   const { error } = await supabase.from('jewelry').delete().eq('id', id)
   if (error) throw error
-  // Xoá xong mới dọn ảnh — xoá hỏng thì sản phẩm vẫn còn nguyên ảnh
-  if (item?.image_url) await removeImageUrl(item.image_url)
+  // Ảnh vẫn giữ nếu đơn bán còn dùng làm ảnh minh hoạ
 }
 
 // ============================================
@@ -1212,8 +1224,9 @@ export async function getAllIntakes({ from, to, tripId, limit = 300 } = {}) {
   if (error) throw error
   return (data || []).map(r => ({
     ...r,
-    code:      r.jewelry?.code || null,
+    code:      r.jewelry?.code || r.item_name || null,
     name:      r.jewelry?.name || null,
+    deleted:   !r.jewelry,
     image_url: r.jewelry?.image_url || null,
     trip_name: r.jewelry_trips?.name || null,
     jewelry: undefined, jewelry_trips: undefined,
