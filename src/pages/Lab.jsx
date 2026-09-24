@@ -22,7 +22,7 @@ import {
   getLabNotes, createLabNote, updateLabNote, deleteLabNote, togglePinNote,
   getBatches, createBatch, deleteBatch, deductStock, undoDeductStock,
   calcFormulaCost, scaleIngredients, formatStock, convertUnit, getConvertibleUnits, ALL_UNITS,
-  getLabCategories, createLabCategory, deleteLabCategory, calcFormulaWeight, fmtWeight
+  getLabCategories, createLabCategory, deleteLabCategory, calcFormulaWeight, fmtWeight, updateBatch
 } from '../lib/lab'
 
 // ============================================
@@ -90,7 +90,7 @@ export default function Lab() {
         {loading ? (
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse"><div className="h-4 bg-gray-200 rounded w-1/2 mb-2"/><div className="h-3 bg-gray-100 rounded w-3/4"/></div>)}</div>
         ) : activeTab==='formulas' ? (
-          <FormulasTab formulas={formulas} ingredients={ingredients} labCategories={labCategories} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
+          <FormulasTab formulas={formulas} notes={notes} ingredients={ingredients} labCategories={labCategories} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
         ) : activeTab==='ingredients' ? (
           <IngredientsTab ingredients={ingredients} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
         ) : activeTab==='batches' ? (
@@ -120,7 +120,10 @@ function SearchBar({ value, onChange, placeholder }) {
 // ============================================
 // FORMULAS TAB
 // ============================================
-function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, onRefresh, toast }) {
+const NOTE_LABEL = { note: 'Ghi chú', personal: 'Cá nhân', experiment: 'Thí nghiệm' }
+
+function FormulasTab({ formulas, notes = [], ingredients, labCategories, search, setSearch, onRefresh, toast }) {
+  const [showNotes, setShowNotes] = useState(null)   // id công thức đang xem ghi chú
   const [showForm, setShowForm] = useState(false)
   const [editingFormula, setEditingFormula] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
@@ -188,23 +191,7 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
   const handleToggleFav = async (f) => {
     try { await toggleFavorite(f.id, f.is_favorite); onRefresh() } catch { toast.error('Lỗi') }
   }
-  const handleCopyList = (f, serving) => {
-    const items = scaleIngredients(f.items||[], f.base_serving, serving)
-    const ingCost = calcFormulaCost(items.map(i => ({...i, quantity:i.scaledQty})))
-    const ratio = serving / (f.base_serving||1)
-    const extraTotal = (f.extra_costs||[]).reduce((s,ec) => s + Math.round((Number(ec.amount)||0)*ratio), 0)
-    const total = ingCost + extraTotal
-    const sell = Math.round((f.selling_price||0)*ratio)
-    let text = `📋 ${f.name} (${serving} serving)\n\n` +
-      items.map(i => `• ${i.ingredient?.name}: ${i.scaledQty} ${i.unit}`).join('\n')
-    const wTxt = fmtWeight(calcFormulaWeight(items, 'scaledQty'))
-    if (wTxt) text += `\n\n⚖️ Tổng khối lượng: ${wTxt}`
-    if (f.extra_costs?.length) text += '\n\n💰 Chi phí khác:\n' + f.extra_costs.map(ec => `• ${ec.name}: ${formatMoney(Math.round(Number(ec.amount)*ratio))}`).join('\n')
-    if (total>0) text += `\n\n💰 Tổng giá vốn: ${formatMoney(total)}`
-    if (sell>0) text += `\n🏷️ Giá bán: ${formatMoney(sell)}\n📊 Lợi nhuận: ${formatMoney(sell-total)} (${total>0?Math.round((sell-total)/total*100):0}%)`
-    if (f.steps?.length) text += '\n\n📝 Các bước:\n' + f.steps.map((s,i) => `${i+1}. ${s.title}${s.desc?' - '+s.desc:''}${s.note?' ['+s.note+']':''}`).join('\n')
-    navigator.clipboard.writeText(text).then(() => toast.success('Đã copy!')).catch(() => toast.error('Lỗi copy'))
-  }
+
 
   const toggleGroup = (cat) => setCollapsedGroups(prev => ({...prev,[cat]:!prev[cat]}))
 
@@ -379,10 +366,49 @@ function FormulasTab({ formulas, ingredients, labCategories, search, setSearch, 
 
             {f.note && <p className="text-xs text-gray-500 bg-gray-50 p-2 rounded-lg">📝 {f.note}</p>}
 
+            {/* Ghi chú liên kết tới công thức này */}
+            {(() => {
+              const linked = notes.filter(n => n.formula_id === f.id)
+              if (linked.length === 0) return null
+              const open = showNotes === f.id
+              return (
+                <div className="bg-amber-50 rounded-lg overflow-hidden">
+                  <button onClick={() => setShowNotes(open ? null : f.id)}
+                    className="w-full flex items-center gap-2 px-3 py-2 active:bg-amber-100">
+                    <StickyNote size={13} className="text-amber-600 flex-shrink-0"/>
+                    <span className="text-xs font-medium text-amber-800 flex-1 text-left">
+                      {linked.length} ghi chú liên kết
+                    </span>
+                    <ChevronDown size={13} className={`text-amber-600 transition-transform ${open ? 'rotate-180' : ''}`}/>
+                  </button>
+                  {open && (
+                    <div className="px-3 pb-2 space-y-1.5">
+                      {linked.map(n => (
+                        <div key={n.id} className="bg-white rounded-lg px-2.5 py-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-500">
+                              {NOTE_LABEL[n.type] || 'Ghi chú'}
+                            </span>
+                            <span className="text-xs font-medium text-gray-800 flex-1 truncate">{n.title}</span>
+                            <span className="text-[10px] text-gray-400 flex-shrink-0">
+                              {new Date(n.created_at).toLocaleDateString('vi-VN')}
+                            </span>
+                          </div>
+                          {n.content && <p className="text-[11px] text-gray-500 mt-1 whitespace-pre-wrap">{n.content}</p>}
+                          {(n.discoveries || []).map((d, k) => (
+                            <p key={k} className="text-[11px] text-amber-700 mt-1">💡 {d.text}</p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })()}
+
             {/* Actions */}
             <div className="flex flex-wrap gap-2 pt-1">
               <button onClick={() => setShowBatchForm({ ...f, _initServing: serving })} className="flex items-center gap-1 px-3 py-2 bg-green-50 rounded-lg text-xs font-medium text-green-600 active:scale-95"><Play size={14}/> Làm lô</button>
-              <button onClick={() => handleCopyList(f, serving)} className="flex items-center gap-1 px-3 py-2 bg-gray-100 rounded-lg text-xs font-medium text-gray-600 active:scale-95"><Copy size={14}/> Copy</button>
               <button onClick={() => handleDuplicate(f)} className="flex items-center gap-1 px-3 py-2 bg-blue-50 rounded-lg text-xs font-medium text-blue-600 active:scale-95"><Copy size={14}/> Sao chép CT</button>
               <button onClick={() => { setEditingFormula(f); setShowForm(true) }} className="flex items-center gap-1 px-3 py-2 bg-purple-50 rounded-lg text-xs font-medium text-purple-600 active:scale-95"><Edit2 size={14}/> Sửa</button>
               <button onClick={() => handleDelete(f)} className="flex items-center gap-1 px-3 py-2 text-xs font-medium text-red-500 ml-auto active:scale-95"><Trash2 size={14}/></button>
@@ -868,7 +894,11 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
               </div>
             )
           })}
-          {cost>0 && <div className="flex items-center justify-between text-xs pt-1.5 border-t border-gray-200 font-bold"><span>Chi phí</span><span className="text-purple-600">{formatMoney(cost)}</span></div>}
+          {(() => { const w = fmtWeight(calcFormulaWeight(batchItems)); return w ? (
+            <div className="flex items-center justify-between text-xs pt-1.5 border-t border-gray-200 font-bold">
+              <span>Tổng khối lượng</span><span className="text-gray-800">{w}</span>
+            </div>) : null })()}
+          {cost>0 && <div className="flex items-center justify-between text-xs font-bold"><span>Chi phí</span><span className="text-purple-600">{formatMoney(cost)}</span></div>}
         </div>
 
         <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
@@ -1074,6 +1104,7 @@ function QuickBatchForm({ isOpen, onClose, ingredients, toast, onSaved }) {
 // ============================================
 function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefresh, toast }) {
   const [showQuick, setShowQuick] = useState(false)
+  const [editNote,  setEditNote]  = useState(null)
   const filtered = useMemo(() => {
     if (!search) return batches
     const s = search.toLowerCase()
@@ -1082,6 +1113,17 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
       return (f?.name || b.name || '').toLowerCase().includes(s) || b.note?.toLowerCase().includes(s)
     })
   }, [batches, search, formulas])
+
+  // Tổng khối lượng + chi phí của các lô đang hiện; chỉ tính lại khi danh sách đổi
+  const tong = useMemo(() => {
+    const t = filtered.reduce((acc, b) => {
+      const w = calcFormulaWeight(b.items || [])
+      acc.g += w.g; acc.ml += w.ml
+      acc.cost += Number(b.cost) || 0
+      return acc
+    }, { g: 0, ml: 0, cost: 0 })
+    return { ...t, weightTxt: fmtWeight(t) }
+  }, [filtered])
 
   const handleUndo = async (b) => {
     if(!b.stock_deducted) { toast.error('Lô này chưa trừ kho'); return }
@@ -1105,7 +1147,17 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
       </button>
       <QuickBatchForm isOpen={showQuick} onClose={() => setShowQuick(false)}
         ingredients={ingredients} toast={toast} onSaved={onRefresh}/>
+      <BatchNoteModal batch={editNote} onClose={() => setEditNote(null)}
+        onSaved={() => { setEditNote(null); onRefresh() }} toast={toast}/>
       <SearchBar value={search} onChange={setSearch} placeholder="Tìm lô sản xuất..."/>
+
+      {filtered.length > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-gray-50 rounded-xl text-xs">
+          <span className="text-gray-500">{filtered.length} lô</span>
+          {tong.weightTxt && <span className="font-semibold text-gray-700">{tong.weightTxt}</span>}
+          {tong.cost > 0 && <span className="font-semibold text-purple-600 ml-auto">{formatMoney(tong.cost)}</span>}
+        </div>
+      )}
       {filtered.length===0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">🧪</div>
@@ -1132,10 +1184,16 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
                       {b.stock_deducted && <CheckCircle size={12} className="text-green-500"/>}
                     </div>
                     <p className="text-xs text-gray-400">
-                      {!isQuick && <>Serving: {b.serving} • </>}{b.cost>0?formatMoney(b.cost)+' • ':''}{new Date(b.created_at).toLocaleDateString('vi-VN')}
+                      {!isQuick && <>Serving: {b.serving} • </>}
+                      {(() => { const w = fmtWeight(calcFormulaWeight(b.items || [])); return w ? <><b className="text-gray-600">{w}</b> • </> : null })()}
+                      {b.cost>0?formatMoney(b.cost)+' • ':''}{new Date(b.created_at).toLocaleDateString('vi-VN')}
                     </p>
                     {b.note && <p className="text-xs text-gray-500 mt-0.5">📝 {b.note}</p>}
                     {b.result && <p className="text-xs text-amber-600 mt-0.5">💡 {b.result}</p>}
+                    {!b.note && !b.result && (
+                      <button onClick={() => setEditNote(b)}
+                        className="text-[11px] text-purple-500 mt-0.5 active:scale-95">+ Thêm ghi chú</button>
+                    )}
 
                     {/* Items detail */}
                     <div className="mt-1.5 space-y-0.5">
@@ -1146,6 +1204,7 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
                     </div>
                   </div>
                   <div className="flex gap-1 flex-shrink-0">
+                    <button onClick={() => setEditNote(b)} className="p-1.5 text-gray-400 hover:text-purple-600 active:scale-90" title="Ghi chú / kết quả"><StickyNote size={14}/></button>
                     {b.stock_deducted && <button onClick={() => handleUndo(b)} className="p-1.5 text-amber-500 hover:bg-amber-50 rounded-lg active:scale-90" title="Hoàn tồn"><Undo2 size={14}/></button>}
                     <button onClick={() => handleDelete(b)} className="p-1.5 text-gray-400 hover:text-red-500 active:scale-90"><Trash2 size={14}/></button>
                   </div>
@@ -2002,6 +2061,64 @@ function ThresholdManager({ isOpen, onClose, ingredients, onSaved, toast }) {
 
 // NOTES TAB - v2: Note + Experiment + Discovery
 // ============================================
+// ============================================
+// GHI CHÚ CHO LÔ SẢN XUẤT
+// ============================================
+function BatchNoteModal({ batch, onClose, onSaved, toast }) {
+  const [note,   setNote]   = useState('')
+  const [result, setResult] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!batch) return
+    setNote(batch.note || '')
+    setResult(batch.result || '')
+  }, [batch])
+
+  if (!batch) return null
+
+  const handleSave = async () => {
+    setSaving(true)
+    try {
+      await updateBatch(batch.id, { note: note.trim(), result: result.trim() })
+      toast.success('✓ Đã lưu ghi chú')
+      onSaved()
+    } catch (err) { toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ')) }
+    finally { setSaving(false) }
+  }
+
+  const when = new Date(batch.created_at).toLocaleDateString('vi-VN')
+  return (
+    <Modal isOpen={!!batch} onClose={onClose} title="Ghi chú cho lô">
+      <div className="space-y-3 p-5">
+        <p className="text-xs text-gray-500 bg-gray-50 p-2.5 rounded-lg">
+          Lô ngày <b>{when}</b>{batch.cost > 0 ? ` · ${formatMoney(batch.cost)}` : ''}
+        </p>
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
+          <textarea value={note} onChange={e => setNote(e.target.value)} rows={2}
+            placeholder="Ví dụ: giảm glycerin 10%, thêm 205g mật..."
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm resize-none"/>
+        </div>
+        <div>
+          <label className="text-xs text-gray-500 mb-1 block">Kết quả / Đánh giá</label>
+          <textarea value={result} onChange={e => setResult(e.target.value)} rows={3}
+            placeholder="Ví dụ: hơi nhoét vì nhiều mật, lần sau bớt 30g..."
+            className="w-full px-4 py-2.5 border border-gray-200 rounded-xl text-sm resize-none"/>
+        </div>
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={handleSave} disabled={saving}
+            className="flex-1 py-3 bg-purple-600 text-white rounded-xl font-bold text-sm disabled:opacity-50">
+            {saving ? 'Đang lưu...' : 'Lưu'}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
 function NotesTab({ notes, formulas, search, setSearch, onRefresh, toast }) {
   const [showForm, setShowForm] = useState(null) // 'note'|'experiment'
   const [editing, setEditing] = useState(null)
