@@ -10,8 +10,7 @@ import {
   getMounts, createMount, updateMount, deleteMount,
   getGoldPrice, saveGoldPrice, estimateMount,
   uploadImage, thumbUrl, resizeImage, fmtMoney, fmtInput, parseInput,
-  MOUNT_TYPES, GOLD_TYPES,
-} from '../lib/jewelry'
+  MOUNT_TYPES, GOLD_TYPES, moneyFull } from '../lib/jewelry'
 
 // Gradient nền theo loại ổ — để lướt nhanh nhận ra
 const BG = {
@@ -99,7 +98,7 @@ export default function MountsTab({ toast }) {
             ['Kích thước', detail.size],
             ['Vàng', detail.gold_chi ? `${detail.gold_chi} chỉ · ${detail.gold_type}` : null],
             ['Khối lượng', detail.gold_gram ? `${detail.gold_gram} g` : null],
-            ['Tiền công', detail.labor_cost ? fmtMoney(detail.labor_cost) : null],
+            ['Tiền công', detail.labor_cost ? moneyFull(detail.labor_cost) : null],
             ['Đá', detail.stone_count
               ? `${detail.stone_count} viên${detail.stone_size ? ` · ${detail.stone_size}` : ''}`
               : (detail.stone_size || null)],
@@ -119,18 +118,18 @@ export default function MountsTab({ toast }) {
           </div>
           {gold > 0 && detail.gold_chi > 0 && (
             <div className="flex justify-between text-xs text-purple-700 py-0.5">
-              <span>Vàng {detail.gold_chi} chỉ × {fmtMoney(gold)}</span>
-              <span>{fmtMoney(est.gold)}</span>
+              <span>Vàng {detail.gold_chi} chỉ × {moneyFull(gold)}</span>
+              <span>{moneyFull(est.gold)}</span>
             </div>
           )}
           {detail.labor_cost > 0 && (
             <div className="flex justify-between text-xs text-purple-700 py-0.5">
-              <span>Tiền công</span><span>{fmtMoney(est.labor)}</span>
+              <span>Tiền công</span><span>{moneyFull(est.labor)}</span>
             </div>
           )}
           <div className="flex justify-between text-sm font-bold text-purple-800 pt-2 mt-1 border-t border-purple-200">
             <span>Tạm tính {detail.stone_count ? '(chưa đá)' : ''}</span>
-            <span>{fmtMoney(est.total)}</span>
+            <span>{moneyFull(est.total)}</span>
           </div>
           {gold === 0 && (
             <button onClick={() => setShowGold(true)}

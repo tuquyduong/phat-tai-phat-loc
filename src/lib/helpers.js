@@ -6,38 +6,44 @@ import { vi } from 'date-fns/locale'
 // ============================================
 
 // Format tiền VND - Rút gọn (cho hiển thị compact)
-export function formatMoney(amount) {
-  if (!amount && amount !== 0) return '0đ'
-
-  const num = Number(amount)
-  if (num >= 1000000) {
-    const formatted = (num / 1000000)
-    if (formatted === Math.floor(formatted)) {
-      return formatted + 'tr'
-    }
-    // SỬA: Dùng toFixed(2) và bỏ số 0 thừa cuối
-    return formatted.toFixed(2).replace(/\.?0+$/, '') + 'tr'
-  }
-  if (num >= 1000) {
-    const formatted = (num / 1000)
-    if (formatted === Math.floor(formatted)) {
-      return formatted + 'k'
-    }
-    // SỬA: Dùng toFixed(2) và bỏ số 0 thừa cuối
-    return formatted.toFixed(2).replace(/\.?0+$/, '') + 'k'
-  }
-  return num.toLocaleString('vi-VN') + 'đ'
+// ============================================
+// ĐỊNH DẠNG TIỀN — chỉ ảnh hưởng cách HIỂN THỊ, không đụng dữ liệu
+// ============================================
+// Nhóm ba chữ số bằng dấu chấm: 8750000 → "8.750.000"
+function groupVN(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
-// Format tiền đầy đủ - Chính xác (cho form, báo cáo)
-export function formatMoneyFull(amount) {
-  if (!amount && amount !== 0) return '0 đ'
-  const num = Number(amount)
-  return num.toLocaleString('vi-VN', { 
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2 
-  }) + ' đ'
+// Đầy đủ, dùng ở chỗ cần đối chiếu: 8.750.000đ
+export function moneyFull(amount) {
+  const x = Number(amount)
+  if (!amount && amount !== 0 || !isFinite(x)) return '0đ'
+  const n = Math.round(Math.abs(x))
+  return (x < 0 && n > 0 ? '-' : '') + groupVN(n) + 'đ'
 }
+
+// Gọn nhưng KHÔNG mất số: 8tr750 · 17tr500 · 690k · 45k.
+// Chỗ nào không gọn được mà vẫn đúng (lẻ đồng, từ 1 tỷ) thì hiện đầy đủ.
+export function moneyShort(amount) {
+  const x = Number(amount)
+  if (!amount && amount !== 0 || !isFinite(x)) return '0đ'
+  const a = Math.round(Math.abs(x) * 100) / 100     // làm tròn tới 2 số lẻ trước khi xét
+  if (a === 0) return '0đ'                          // tránh "-0đ"
+  const sign = x < 0 ? '-' : ''
+  if (a < 1000) {                                   // dưới nghìn: giữ tối đa 2 số lẻ
+    return sign + String(a).replace('.', ',') + 'đ'
+  }
+  const n = Math.round(a)
+  if (n >= 1e9 || n % 1000 !== 0) return moneyFull(x)
+  const tr = Math.floor(n / 1e6)
+  const k  = (n % 1e6) / 1000
+  if (tr === 0) return sign + k + 'k'
+  return sign + tr + 'tr' + (k ? String(k).padStart(3, '0') : '')
+}
+
+// Tên cũ — giữ lại để mọi chỗ đang gọi tự dùng cách mới
+export function formatMoney(amount)     { return moneyShort(amount) }
+export function formatMoneyFull(amount) { return moneyFull(amount) }
 
 // Tính đơn giá từ tổng tiền
 export function calcUnitPrice(totalAmount, quantity) {

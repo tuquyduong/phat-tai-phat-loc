@@ -24,7 +24,7 @@ import {
   getSuppliers,
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
-  calcStats, getCustomerNames, fmtMoney, fmtInput, parseInput, todayLocal,
+  calcStats, getCustomerNames, fmtMoney, moneyFull, fmtInput, parseInput, todayLocal,
 } from '../lib/jewelry'
 
 // ============================================
@@ -42,6 +42,7 @@ export default function Jewelry() {
   const [khoCat,    setKhoCat]    = useState('Tất cả')
   const [khoSort,   setKhoSort]   = useState('new')
   const [khoSearch, setKhoSearch] = useState('')
+  const [restockItem, setRestockItem] = useState(null)
   const [nhapSearch,setNhapSearch]= useState('')
   const scrollY = useRef(0)
 
@@ -206,6 +207,7 @@ export default function Jewelry() {
         <DetailPanel item={detailItem} sales={sales.filter(s => s.jewelry_id === detail.id)}
           trips={trips}
           onChanged={loadData}
+          onRestock={() => setRestockItem(detailItem)}
           onSell={() => { closeDetail(); setSellItem(detail) }}
           onEdit={() => {
             // Không đóng chi tiết — sửa xong số liệu cập nhật ngay tại chỗ
@@ -302,6 +304,10 @@ export default function Jewelry() {
         suppliers={suppliers}
         activeTrip={activeTrip}
         onSaved={() => { setShowAdd(false); setEditing(null); loadData(); getSuppliers().then(setSuppliers).catch(()=>{}) }}
+        toast={toast}/>
+      <RestockModal item={restockItem} activeTrip={activeTrip}
+        onClose={() => setRestockItem(null)}
+        onSaved={() => { setRestockItem(null); loadData() }}
         toast={toast}/>
       <ImportModal isOpen={showImport}
         existingCodes={jewelry.map(j => j.code)}
@@ -1324,17 +1330,17 @@ function BcTab({ stats }) {
         <>
           <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 overflow-hidden">
             {[
-              ['Thực thu tháng này', fmtMoney(stats.monthActual), 'text-green-600'],
-              ['Ghi nhận tháng này', fmtMoney(stats.monthRevenue), 'text-gray-600'],
-              ['Tổng doanh thu', fmtMoney(stats.totalRevenue), 'text-green-600'],
-              ['Khách còn nợ', fmtMoney(stats.totalDebt), stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'],
-              ['Tiền cọc đang giữ', fmtMoney(stats.heldDeposit), 'text-amber-600'],
+              ['Thực thu tháng này', moneyFull(stats.monthActual), 'text-green-600'],
+              ['Ghi nhận tháng này', moneyFull(stats.monthRevenue), 'text-gray-600'],
+              ['Tổng doanh thu', moneyFull(stats.totalRevenue), 'text-green-600'],
+              ['Khách còn nợ', moneyFull(stats.totalDebt), stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'],
+              ['Tiền cọc đang giữ', moneyFull(stats.heldDeposit), 'text-amber-600'],
               ['Đơn đang xử lý', `${stats.pendingCount} đơn`, stats.pendingCount > 0 ? 'text-blue-600' : 'text-gray-300'],
               ['Đơn quá hẹn giao', `${stats.overdueCount} đơn`, stats.overdueCount > 0 ? 'text-red-500' : 'text-gray-300'],
               ['Số món đã bán', `${stats.totalSold} món`, 'text-purple-600'],
               ['Còn tồn kho', `${stats.inStock} món`, 'text-amber-600'],
               ['Tồn lâu >30 ngày', `${stats.slowMovingCount} món`, 'text-red-500'],
-              ['Giá trị tồn ước tính', fmtMoney(stats.stockValue), 'text-amber-600'],
+              ['Giá trị tồn ước tính', moneyFull(stats.stockValue), 'text-amber-600'],
             ].map(([l,v,c]) => (
               <div key={l} className="flex justify-between items-center px-4 py-2.5 border-b border-gray-100 last:border-0">
                 <span className="text-xs text-gray-500">{l}</span>
@@ -1353,7 +1359,7 @@ function BcTab({ stats }) {
                 <div key={cat} className="bg-white border-b border-gray-100 px-4 py-2">
                   <div className="flex items-center justify-between mb-1">
                     <span className="text-xs font-medium text-gray-700">{cat}</span>
-                    <span className="text-xs font-semibold text-green-600">{fmtMoney(rev)}</span>
+                    <span className="text-xs font-semibold text-green-600">{moneyFull(rev)}</span>
                   </div>
                   <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
                     <div className="h-full bg-purple-500 rounded-full" style={{width:`${pct}%`}}/>
@@ -1381,7 +1387,7 @@ function BcTab({ stats }) {
                   <div className="text-[10px] text-gray-400">{j.qty} bán · {j.category}</div>
                 </div>
                 <div className="text-right flex-shrink-0">
-                  <div className="text-xs font-semibold text-green-600">{fmtMoney(j.revenue)}</div>
+                  <div className="text-xs font-semibold text-green-600">{moneyFull(j.revenue)}</div>
                   <div className="text-[10px] text-gray-400">{j.qty} món</div>
                 </div>
               </div>
@@ -1400,7 +1406,7 @@ function BcTab({ stats }) {
             <div className="flex justify-between px-4 py-2.5">
               <span className="text-xs text-gray-500">Giá trị tồn lâu</span>
               <span className="text-xs font-semibold text-amber-600">
-                {fmtMoney(stats.slowMoving.reduce((s,j)=>s+(j.available*(j.sell_price||0)),0))}
+                {moneyFull(stats.slowMoving.reduce((s,j)=>s+(j.available*(j.sell_price||0)),0))}
               </span>
             </div>
           </div>
@@ -1437,7 +1443,7 @@ function BcTab({ stats }) {
             <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
               <span className="text-xs text-gray-500">Tổng công nợ</span>
               <span className={`text-xs font-semibold ${stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'}`}>
-                {fmtMoney(stats.totalDebt)}
+                {moneyFull(stats.totalDebt)}
               </span>
             </div>
             <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
@@ -1446,7 +1452,7 @@ function BcTab({ stats }) {
             </div>
             <div className="flex justify-between px-4 py-2.5">
               <span className="text-xs text-gray-500">Tiền cọc đang giữ</span>
-              <span className="text-xs font-semibold text-amber-600">{fmtMoney(stats.heldDeposit)}</span>
+              <span className="text-xs font-semibold text-amber-600">{moneyFull(stats.heldDeposit)}</span>
             </div>
           </div>
 
@@ -1467,7 +1473,7 @@ function BcTab({ stats }) {
                     {d.count} đơn{d.phone ? ` · ${d.phone}` : ''}
                   </div>
                 </div>
-                <div className="text-sm font-bold text-red-500 flex-shrink-0">{fmtMoney(d.amount)}</div>
+                <div className="text-sm font-bold text-red-500 flex-shrink-0">{moneyFull(d.amount)}</div>
               </div>
             ))
           }
@@ -1489,7 +1495,7 @@ function BcTab({ stats }) {
                     </div>
                   </div>
                   <span className="text-xs font-semibold text-amber-600 flex-shrink-0">
-                    {fmtMoney(Number(s.qty)*Number(s.sell_price))}
+                    {moneyFull(Number(s.qty)*Number(s.sell_price))}
                   </span>
                 </div>
               ))}
@@ -1505,7 +1511,7 @@ function BcTab({ stats }) {
 // ============================================
 // DETAIL PANEL
 // ============================================
-function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }) {
+function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged, onRestock }) {
   const toast = useToast()
   const [intakes,    setIntakes]    = useState([])
   const [editIntake, setEditIntake] = useState(null)
@@ -1514,11 +1520,14 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
     getIntakes(item.id).then(setIntakes).catch(() => {})
   }, [item.id])
 
+  // Tải lại lịch sử nhập khi đổi sản phẩm HOẶC khi số lượng của chính nó đổi
+  // (nhập thêm, sửa tồn...) — nếu chỉ theo id thì đợt vừa nhập không hiện ra
+  const stockSig = `${item.id}|${item.stock_qty}|${item.incoming_qty}|${item.updated_at}`
   useEffect(() => {
     let alive = true
     getIntakes(item.id).then(r => { if (alive) setIntakes(r) }).catch(() => {})
     return () => { alive = false }
-  }, [item.id])
+  }, [stockSig])
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const sold      = sales.reduce((s,x) => s + Number(x.qty), 0)
   const reserved  = sales.filter(s => !s.delivered).reduce((s,x) => s + Number(x.qty), 0)
@@ -1558,9 +1567,9 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
           ['Chờ giao', reserved > 0 ? `${reserved} cái (đã bán, hàng còn trong tủ)` : null, 'text-blue-600'],
           ['Còn bán được', `${available} cái`,
             available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
-          ['Giá vốn', item.cost_price ? fmtMoney(item.cost_price) + '/cái' : null],
-          ['Giá bán', item.sell_price ? fmtMoney(item.sell_price) : null],
-          ['Đã bán', sold > 0 ? `${sold} cái · ${fmtMoney(revenue)}` : null],
+          ['Giá vốn', item.cost_price ? moneyFull(item.cost_price) + '/cái' : null],
+          ['Giá bán', item.sell_price ? moneyFull(item.sell_price) : null],
+          ['Đã bán', sold > 0 ? `${sold} cái · ${moneyFull(revenue)}` : null],
           ['Chuyến nhập', tripName],
           ['NCC', item.supplier_name],
           ['SĐT NCC', item.supplier_contact],
@@ -1584,6 +1593,10 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
             Đã bán hết · chờ giao {reserved}
           </div>
         ) : null}
+        <button onClick={onRestock}
+          className="flex-1 py-2.5 bg-amber-50 border border-amber-200 text-amber-700 rounded-xl text-xs font-semibold active:scale-95">
+          + Nhập thêm
+        </button>
         <button onClick={onEdit}
           className="flex-1 py-2.5 bg-purple-50 border border-purple-200 text-purple-600 rounded-xl text-xs font-semibold active:scale-95">
           Sửa
@@ -1612,7 +1625,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
                   <div className="flex-1 min-w-0">
                     <div className="text-xs text-gray-700">
                       <b className="text-purple-700">+{r.qty} cái</b>
-                      {r.cost_price ? ` · ${fmtMoney(r.cost_price)}/cái` : ''}
+                      {r.cost_price ? ` · ${moneyFull(r.cost_price)}/cái` : ''}
                     </div>
                     <div className="text-[10px] text-gray-400">
                       {d[2]}/{d[1]}/{d[0]?.slice(2)} lúc {fmtIntakeTime(r.intake_at)}
@@ -1622,7 +1635,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
                   <div className="text-right flex-shrink-0">
                     {r.cost_price > 0 && (
                       <div className="text-xs font-semibold text-purple-600">
-                        {fmtMoney(r.qty * r.cost_price)}
+                        {moneyFull(r.qty * r.cost_price)}
                       </div>
                     )}
                     {r.trip_name && (
@@ -1660,7 +1673,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged }
               <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)}</div>
             </div>
             <div className="text-right flex-shrink-0">
-              <div className="text-xs font-semibold text-green-600">{fmtMoney(Number(s.qty)*Number(s.sell_price))}</div>
+              <div className="text-xs font-semibold text-green-600">{moneyFull(Number(s.qty)*Number(s.sell_price))}</div>
               {(!s.delivered || !s.paid) && (
                 <div className="text-[9px] text-amber-600">
                   {!s.delivered && 'Chưa giao'}{!s.delivered && !s.paid && ' · '}{!s.paid && 'Chưa thu'}
@@ -1931,7 +1944,7 @@ function IntakeEditModal({ intake, item, onClose, onSaved, toast }) {
         {Number(qty) > 0 && Number(cost) > 0 && (
           <div className="px-3 py-2 bg-purple-50 rounded-xl flex justify-between text-xs">
             <span className="text-purple-700">Tiền hàng lần này</span>
-            <span className="font-bold text-purple-800">{fmtMoney(Number(qty) * Number(cost))}</span>
+            <span className="font-bold text-purple-800">{moneyFull(Number(qty) * Number(cost))}</span>
           </div>
         )}
 
@@ -2541,6 +2554,143 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
 }
 
 // ============================================
+// NHẬP THÊM HÀNG — cho sản phẩm đang có, hàng đã cầm trong tay
+// ============================================
+function RestockModal({ item, activeTrip, onClose, onSaved, toast }) {
+  const [qty,     setQty]     = useState('')
+  const [cost,    setCost]    = useState('')
+  const [supp,    setSupp]    = useState('')
+  const [note,    setNote]    = useState('')
+  const [useTrip, setUseTrip] = useState(true)
+  const [saving,  setSaving]  = useState(false)
+
+  useEffect(() => {
+    if (!item) return
+    setQty('')
+    setCost(item.cost_price != null ? String(item.cost_price) : '')
+    setSupp(item.supplier_name || '')
+    setNote('')
+    setUseTrip(true)
+  }, [item])
+
+  if (!item) return null
+
+  const add      = Number(qty) || 0
+  const oldStock = Number(item.stock_qty) || 0
+  const oldInc   = Number(item.incoming_qty) || 0
+  const oldCost  = Number(item.cost_price) || 0
+  const newCost  = cost === '' ? null : Number(cost) || 0
+  // Giá vốn bình quân tính trên tổng số cái sẽ có (trong tủ + đang về)
+  const oldTotal = oldStock + oldInc
+  const avgCost  = (newCost != null && oldTotal + add > 0)
+    ? Math.round((oldCost * oldTotal + newCost * add) / (oldTotal + add))
+    : oldCost
+
+  const handleSave = async () => {
+    if (!(add >= 1)) { toast.error('Nhập số lượng từ 1 trở lên'); return }
+    if (!Number.isInteger(add)) { toast.error('Số lượng phải là số nguyên (đếm theo cái)'); return }
+    setSaving(true)
+    try {
+      const r = await addStockToExisting(item.id, add, {
+        status:        'in_stock',
+        cost_price:    cost === '' ? null : Number(cost),
+        supplier_name: supp.trim() || null,
+        trip_id:       useTrip && activeTrip ? activeTrip.id : null,
+        intake_note:   note.trim() || null,
+        source:        'merge',
+      })
+      toast.success(`✓ Đã nhập thêm — ${item.code}: ${r.oldStock} + ${r.added} = ${r.newStock} cái`)
+      onSaved()
+    } catch (err) {
+      toast.error('✕ Không lưu được: ' + (err.message || 'lỗi không rõ'))
+    } finally { setSaving(false) }
+  }
+
+  return (
+    <Modal isOpen={!!item} onClose={onClose} title={`Nhập thêm · ${item.code}`}>
+      <div className="px-5 pb-6 space-y-3">
+        {item.name && <p className="text-xs text-gray-500 -mt-1">{item.name}</p>}
+
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Số lượng nhập thêm *</label>
+          <input type="number" inputMode="numeric" min="1" step="1" autoFocus value={qty}
+            onChange={e => setQty(e.target.value)} placeholder="Ví dụ: 5"
+            className="w-full px-3 py-3 border-2 border-amber-300 rounded-xl text-base font-semibold text-center"/>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Giá vốn đợt này</label>
+            <input inputMode="numeric" value={fmtInput(cost)} onChange={e => setCost(parseInput(e.target.value))}
+              placeholder="đ/cái" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+          <div>
+            <label className="text-[11px] text-gray-500 block mb-1">Nhà cung cấp</label>
+            <input value={supp} onChange={e => setSupp(e.target.value)}
+              placeholder="Tên NCC" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-[11px] text-gray-500 block mb-1">Ghi chú đợt nhập</label>
+          <input value={note} onChange={e => setNote(e.target.value)}
+            placeholder="Ví dụ: lô màu đậm hơn, hàng mua lẻ..."
+            className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm"/>
+        </div>
+
+        {activeTrip && (
+          <button onClick={() => setUseTrip(v => !v)}
+            className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl border active:scale-98
+              ${useTrip ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
+            <span className={`w-4 h-4 rounded flex items-center justify-center flex-shrink-0 text-[10px] text-white
+              ${useTrip ? 'bg-green-500' : 'border border-gray-300'}`}>{useTrip ? '✓' : ''}</span>
+            <span className={`text-[11px] flex-1 text-left ${useTrip ? 'text-green-800' : 'text-gray-500'}`}>
+              Gắn đợt nhập này vào chuyến <b>{activeTrip.name}</b>
+            </span>
+          </button>
+        )}
+
+        {/* Xem trước */}
+        <div className="bg-gray-50 rounded-xl p-3 space-y-1.5">
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Tồn hiện tại</span>
+            <span className="font-semibold text-gray-800">{oldStock} cái</span>
+          </div>
+          <div className="flex justify-between text-xs">
+            <span className="text-gray-500">Nhập thêm</span>
+            <span className="font-semibold text-amber-700">+{add} cái</span>
+          </div>
+          <div className="flex justify-between text-sm pt-1.5 border-t border-gray-200">
+            <span className="font-medium text-gray-700">Tồn sau khi nhập</span>
+            <span className="font-bold text-green-600">{oldStock + add} cái</span>
+          </div>
+          {newCost != null && newCost !== oldCost && add > 0 && (
+            <div className="flex justify-between text-[11px] pt-1 text-amber-800">
+              <span>Giá vốn bình quân</span>
+              <span>{moneyFull(oldCost)} → <b>{moneyFull(avgCost)}</b></span>
+            </div>
+          )}
+        </div>
+
+        <p className="text-[10px] text-gray-400 text-center">
+          Đợt này được ghi vào Lịch sử nhập kèm ngày giờ
+        </p>
+
+        <div className="sticky bottom-0 -mx-5 px-5 pt-3 pb-3 bg-white border-t border-gray-100 flex gap-2"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
+          <button onClick={onClose} disabled={saving}
+            className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium">Huỷ</button>
+          <button onClick={handleSave} disabled={saving || add < 1}
+            className="flex-1 py-3 bg-amber-500 text-white rounded-xl text-sm font-bold disabled:opacity-40">
+            {saving ? 'Đang lưu...' : `Nhập thêm ${add || ''}`}
+          </button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
 // HỘP THOẠI MÃ ĐÃ TỒN TẠI
 // ============================================
 function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
@@ -2629,10 +2779,10 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
           <div className="bg-amber-50 rounded-xl p-3 space-y-1">
             <div className="text-[11px] font-semibold text-amber-800">Giá vốn tính lại bình quân</div>
             <div className="text-[11px] text-amber-700">
-              Cũ {fmtMoney(oldCost)} × {oldTotal} · mới {fmtMoney(newCost)} × {addQty}
+              Cũ {moneyFull(oldCost)} × {oldTotal} · mới {moneyFull(newCost)} × {addQty}
             </div>
             <div className="flex justify-between text-xs font-semibold text-amber-900">
-              <span>Giá vốn mới</span><span>{fmtMoney(avgCost)}/cái</span>
+              <span>Giá vốn mới</span><span>{moneyFull(avgCost)}/cái</span>
             </div>
           </div>
         )}

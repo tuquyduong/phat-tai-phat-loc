@@ -44,6 +44,33 @@
             });
         });
       }
+
+      // Tự cập nhật: mở app lúc mạng chưa sẵn sàng, máy có thể chạy bản cũ lưu sẵn.
+      // So tên file chương trình đang chạy với bản trên máy chủ — khác thì tải lại một lần.
+      (function () {
+        function checkVersion() {
+          var cur = document.querySelector('script[type="module"][src*="/assets/index-"]');
+          if (!cur || !navigator.onLine) return;
+          fetch('/index.html?__v=' + Date.now(), { cache: 'no-store' })
+            .then(function (r) { return r.ok ? r.text() : ''; })
+            .then(function (html) {
+              var m = html.match(/\/assets\/index-[^"']+\.js/);
+              if (!m || cur.getAttribute('src').indexOf(m[0]) !== -1) return;
+              // Chỉ tải lại một lần cho mỗi bản mới, tránh vòng lặp
+              if (sessionStorage.getItem('reloadedFor') === m[0]) return;
+              // Đang gõ dở thì hoãn, để lần mở lại sau — không làm mất chữ đang nhập
+              var a = document.activeElement;
+              if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
+              sessionStorage.setItem('reloadedFor', m[0]);
+              location.reload();
+            })
+            .catch(function () {});
+        }
+        window.addEventListener('load', function () { setTimeout(checkVersion, 2000); });
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') checkVersion();
+        });
+      })();
     </script>
   </body>
 </html>

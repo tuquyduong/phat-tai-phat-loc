@@ -19,6 +19,39 @@ const BACKUP_TABLES = [
   'stocks', 'stock_transactions', 'dividends'
 ]
 
+// Lấy MỌI bảng đang có trong database (qua hàm db_usage), gộp với danh sách cố định.
+// Nhờ vậy bảng mới thêm sau này hay bảng cũ còn sót đều được backup, không phụ thuộc
+// việc nhớ cập nhật danh sách. Chưa cài db_usage thì dùng danh sách cố định.
+async function getAllTables() {
+  try {
+    const { data, error } = await supabase.rpc('db_usage')
+    if (error || !data) return BACKUP_TABLES
+    const found = data.map(r => r.table_name).filter(Boolean)
+    // Dò được thì dùng đúng danh sách bảng đang có — bảng cũ đã xoá
+    // không còn bị báo "thiếu" mỗi lần backup
+    return found.length ? found : BACKUP_TABLES
+  } catch { return BACKUP_TABLES }
+}
+
+// Đọc hết mọi dòng của một bảng, mỗi lần 1000 dòng, sắp theo id để các trang
+// không trùng hay sót dòng. Bảng không có cột id thì đọc không sắp xếp.
+async function fetchAllRows(table) {
+  const PAGE = 1000
+  const rows = []
+  let ordered = true
+  for (let from = 0; ; from += PAGE) {
+    let q = supabase.from(table).select('*').range(from, from + PAGE - 1)
+    if (ordered) q = q.order('id', { ascending: true })
+    const { data, error } = await q
+    if (error && ordered && from === 0) { ordered = false; from -= PAGE; continue }
+    if (error) throw error
+    if (!data || data.length === 0) break
+    rows.push(...data)
+    if (data.length < PAGE) break
+  }
+  return rows
+}
+
 // Thanh dung lượng: xanh dưới 70%, vàng 70-90%, đỏ trên 90%
 function UsageBar({ label, used, limit, extra, err }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
@@ -118,19 +151,10 @@ export default function Home({ onNavigate, activeModules }) {
 
       // Supabase trả tối đa 1000 dòng mỗi lần gọi — phải lấy theo từng trang,
       // nếu không bảng nhiều dòng sẽ bị cắt mà không báo gì.
-      const PAGE = 1000
-      for (const table of BACKUP_TABLES) {
+      const allTables = await getAllTables()
+      for (const table of allTables) {
         try {
-          const rows = []
-          for (let from = 0; ; from += PAGE) {
-            const { data, error } = await supabase
-              .from(table).select('*').range(from, from + PAGE - 1)
-            if (error) throw error
-            if (!data || data.length === 0) break
-            rows.push(...data)
-            if (data.length < PAGE) break     // đã hết
-          }
-          backup.tables[table] = rows
+          backup.tables[table] = await fetchAllRows(table)
         } catch (e) {
           failedTables.push(table)
         }
@@ -193,6 +217,8 @@ export default function Home({ onNavigate, activeModules }) {
           'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
           'stocks', 'stock_transactions', 'dividends', 'transactions'
         ]
+        // Bảng có trong file backup nhưng không nằm trong thứ tự trên → khôi phục cuối
+        Object.keys(backup.tables || {}).forEach(t => { if (!restoreOrder.includes(t)) restoreOrder.push(t) })
 
         // Cảnh báo nếu file backup vốn đã thiếu bảng
         if (backup.failed_tables?.length > 0) {
@@ -209,16 +235,11 @@ export default function Home({ onNavigate, activeModules }) {
         try {
           const safety = { version: '2.5', created_at: new Date().toISOString(),
                            note: 'Tự sao lưu trước khi khôi phục', tables: {} }
-          for (const tbl of BACKUP_TABLES) {
-            const rows = []
-            for (let from = 0; ; from += 1000) {
-              const { data, error } = await supabase.from(tbl).select('*').range(from, from + 999)
-              if (error) break
-              if (!data || data.length === 0) break
-              rows.push(...data)
-              if (data.length < 1000) break
-            }
-            if (rows.length) safety.tables[tbl] = rows
+          for (const tbl of await getAllTables()) {
+            try {
+              const rows = await fetchAllRows(tbl)
+              if (rows.length) safety.tables[tbl] = rows
+            } catch {}
           }
           const d0 = new Date()
           const st = `${d0.getFullYear()}${String(d0.getMonth()+1).padStart(2,'0')}${String(d0.getDate()).padStart(2,'0')}_${String(d0.getHours()).padStart(2,'0')}${String(d0.getMinutes()).padStart(2,'0')}`
@@ -254,14 +275,18 @@ export default function Home({ onNavigate, activeModules }) {
             // Chưa cài hàm trong database → chuyển sang cách cũ cho mọi bảng
             if (/function .*restore_table.* does not exist|PGRST202/i.test(error.message || '')) {
               useRpc = false
+            } else if (/không được phép/i.test(error.message || '')) {
+              // Bảng ngoài danh sách của hàm giao dịch → dùng đường dự phòng cho riêng bảng này
             } else {
               failed.push(`${table} (${(error.message || '').slice(0, 60)})`)
               continue
             }
           }
 
-          // ── Đường lui: chèn thử 1 dòng trước khi xoá ──
-          const { error: probeErr } = await supabase.from(table).insert(rows.slice(0, 1))
+          // ── Đường lui: ghi thử 1 dòng trước khi xoá ──
+          // Dùng upsert: dòng đó thường vẫn còn trong database với cùng mã,
+          // chèn mới sẽ báo trùng khoá và bảng bị bỏ qua oan.
+          const { error: probeErr } = await supabase.from(table).upsert(rows.slice(0, 1))
           if (probeErr) { failed.push(`${table} (${probeErr.message.slice(0, 60)})`); continue }
           try {
             if (table === 'settings') await supabase.from(table).delete().neq('key', '')

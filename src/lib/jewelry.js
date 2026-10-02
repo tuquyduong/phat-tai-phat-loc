@@ -2,6 +2,7 @@
 // JEWELRY LIB - Trang sức
 // ============================================
 import { supabase } from './supabase'
+import { moneyShort, moneyFull } from './helpers'
 
 const BUCKET = 'jewelry-images'
 
@@ -211,7 +212,8 @@ export async function addStockToExisting(id, addQty, newItem = {}) {
     await logIntake({
       jewelry_id: id, qty: add, cost_price: newCost ?? cur.cost_price,
       supplier_name: newItem.supplier_name || cur.supplier_name,
-      trip_id: newItem.trip_id || cur.trip_id,
+      // Có nói rõ chuyến (kể cả "không gắn chuyến") thì theo đó; không nói thì lấy chuyến của sản phẩm
+      trip_id: ('trip_id' in newItem) ? (newItem.trip_id || null) : cur.trip_id,
       source: newItem.source || 'merge',
       note: newItem.intake_note,
     }).catch(() => {})
@@ -825,18 +827,10 @@ export function getCustomerNames(sales) {
   return [...new Set(sales.map(s => s.customer_name).filter(Boolean))]
 }
 
+export { moneyFull }
+// Dùng chung định dạng tiền với cả app (xem helpers.js)
 export function fmtMoney(n) {
-  if (!n && n !== 0) return '0'
-  const x = Number(n)
-  if (x >= 1e6) {
-    const v = x / 1e6
-    return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, '')) + 'tr'
-  }
-  if (x >= 1e3) {
-    const v = x / 1e3
-    return (v % 1 === 0 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, '')) + 'k'
-  }
-  return x.toLocaleString()
+  return moneyShort(n)
 }
 
 export const DEFAULT_CATEGORIES = ['Nhẫn', 'Dây chuyền', 'Bông tai', 'Lắc', 'Vòng', 'Khác']

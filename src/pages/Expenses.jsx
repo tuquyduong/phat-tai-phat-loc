@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney, getLocalDateString, stripVN } from '../lib/helpers'
+import { formatMoney, moneyFull, getLocalDateString, stripVN } from '../lib/helpers'
 import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
   getTransactions, createTransaction, updateTransaction, deleteTransaction,
@@ -220,9 +220,9 @@ export default function Expenses() {
         {/* Balance bar */}
         <div className="bg-gradient-to-r from-gray-700 to-gray-800 rounded-xl p-3 mb-3 text-white">
           <div className="flex items-center justify-between text-xs mb-2">
-            <div><p className="text-gray-400">Đầu kỳ</p><p className={`text-sm font-bold ${openBal.total>=0?'text-white':'text-red-300'}`}>{formatMoney(openBal.total)}</p></div>
+            <div><p className="text-gray-400">Đầu kỳ</p><p className={`text-sm font-bold ${openBal.total>=0?'text-white':'text-red-300'}`}>{moneyFull(openBal.total)}</p></div>
             <div className="text-gray-500">──→</div>
-            <div className="text-right"><p className="text-gray-400">Cuối kỳ</p><p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{formatMoney(closeBal.total)}</p></div>
+            <div className="text-right"><p className="text-gray-400">Cuối kỳ</p><p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{moneyFull(closeBal.total)}</p></div>
           </div>
           <div className="flex gap-1.5">
             <div className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center">
@@ -591,7 +591,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
       <div className="space-y-4 p-5">
         <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-center">
           <p className="text-xs text-purple-600">Nợ TD hiện tại</p>
-          <p className={`text-xl font-bold ${creditDebt>0?'text-red-600':'text-green-600'}`}>{creditDebt>0?'-':''}{formatMoney(Math.abs(creditDebt))}</p>
+          <p className={`text-xl font-bold ${creditDebt>0?'text-red-600':'text-green-600'}`}>{creditDebt>0?'-':''}{moneyFull(Math.abs(creditDebt))}</p>
         </div>
 
         {creditDebt<=0 ? (
@@ -606,7 +606,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 
           <div><label className="text-xs text-gray-500 mb-1 block">Số tiền trả</label>
             <div className="relative"><input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''} onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" autoFocus className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div>
-            <button onClick={() => setAmount(String(creditDebt))} className="mt-1.5 text-xs text-purple-600 font-medium hover:underline">Trả hết ({formatMoney(creditDebt)})</button>
+            <button onClick={() => setAmount(String(creditDebt))} className="mt-1.5 text-xs text-purple-600 font-medium hover:underline">Trả hết ({moneyFull(creditDebt)})</button>
           </div>
 
           <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
@@ -614,8 +614,8 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 
           {amount && Number(amount)>0 && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs space-y-0.5">
-              <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {formatMoney(closeBal?.[source]||0)} → {formatMoney((closeBal?.[source]||0)-Number(amount))}</p>
-              <p className="text-purple-700 font-medium">💳 Nợ TD: {formatMoney(creditDebt)} → {formatMoney(creditDebt-Number(amount))}</p>
+              <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {moneyFull(closeBal?.[source]||0)} → {moneyFull((closeBal?.[source]||0)-Number(amount))}</p>
+              <p className="text-purple-700 font-medium">💳 Nợ TD: {moneyFull(creditDebt)} → {moneyFull(creditDebt-Number(amount))}</p>
             </div>
           )}
 
@@ -649,7 +649,7 @@ function InitialBalanceForm({ isOpen, onClose, initialBal, toast, onSaved }) {
         <div><label className="text-xs text-gray-500 mb-1 block">💵 Tiền mặt</label><div className="relative"><input type="text" inputMode="numeric" value={cash?Number(cash).toLocaleString('vi-VN'):''} onChange={e => setCash(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" className="w-full text-lg font-bold text-center py-3 border-2 border-amber-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
         <div><label className="text-xs text-gray-500 mb-1 block">🏦 Chuyển khoản</label><div className="relative"><input type="text" inputMode="numeric" value={transfer?Number(transfer).toLocaleString('vi-VN'):''} onChange={e => setTransfer(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" className="w-full text-lg font-bold text-center py-3 border-2 border-blue-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
         <div><label className="text-xs text-gray-500 mb-1 block">💳 Nợ thẻ tín dụng hiện tại</label><div className="relative"><input type="text" inputMode="numeric" value={credit?Number(credit).toLocaleString('vi-VN'):''} onChange={e => setCredit(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" className="w-full text-lg font-bold text-center py-3 border-2 border-purple-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
-        <div className="bg-gray-50 rounded-xl p-3 text-center"><p className="text-xs text-gray-500">Tài sản ròng ban đầu</p><p className="text-lg font-bold text-gray-800">{formatMoney((Number(cash)||0)+(Number(transfer)||0)-(Number(credit)||0))}</p></div>
+        <div className="bg-gray-50 rounded-xl p-3 text-center"><p className="text-xs text-gray-500">Tài sản ròng ban đầu</p><p className="text-lg font-bold text-gray-800">{moneyFull((Number(cash)||0)+(Number(transfer)||0)-(Number(credit)||0))}</p></div>
         <div className="flex gap-2 pt-2">
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
           <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-green-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Lưu'}</button>

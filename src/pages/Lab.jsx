@@ -11,7 +11,7 @@ import {
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
-import { formatMoney, getLocalDateString, stripVN } from '../lib/helpers'
+import { formatMoney, moneyFull, getLocalDateString, stripVN } from '../lib/helpers'
 import {
   getIngredients, createIngredient, updateIngredient, deleteIngredient, updateStock, getIngredient,
   getImports, createImport, markImportArrived, deleteImport,
@@ -310,7 +310,7 @@ function FormulasTab({ formulas, notes = [], ingredients, labCategories, search,
                 )}
                 {ingCost>0 && <div className={`flex items-center justify-between text-sm font-bold
                   ${(weightTxt || otherTxt) ? 'pt-1' : 'pt-2 border-t border-gray-100'}`}>
-                  <span className="text-gray-700">NL</span><span className="text-purple-600">{formatMoney(ingCost)}</span></div>}
+                  <span className="text-gray-700">NL</span><span className="text-purple-600">{moneyFull(ingCost)}</span></div>}
               </div>
             ) : <p className="text-xs text-gray-400 italic">Chưa có nguyên liệu</p>}
 
@@ -320,24 +320,24 @@ function FormulasTab({ formulas, notes = [], ingredients, labCategories, search,
                 {scaledExtra.length>0 && scaledExtra.map((ec,i) => (
                   <div key={i} className="flex items-center justify-between text-xs">
                     <span className="text-gray-600">{ec.name}</span>
-                    <span className="font-medium text-gray-700">{formatMoney(ec.scaled)}</span>
+                    <span className="font-medium text-gray-700">{moneyFull(ec.scaled)}</span>
                   </div>
                 ))}
                 {totalCost>0 && (
                   <div className="flex items-center justify-between text-sm pt-1.5 border-t border-purple-200 font-bold">
                     <span className="text-gray-700">💰 Tổng giá vốn</span>
-                    <span className="text-purple-700">{formatMoney(totalCost)}</span>
+                    <span className="text-purple-700">{moneyFull(totalCost)}</span>
                   </div>
                 )}
                 {sellPrice>0 && (
                   <>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-600">🏷️ Giá bán</span>
-                      <span className="font-bold text-blue-600">{formatMoney(sellPrice)}</span>
+                      <span className="font-bold text-blue-600">{moneyFull(sellPrice)}</span>
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-600">📊 Lợi nhuận</span>
-                      <span className={`font-bold ${profit>=0?'text-green-600':'text-red-600'}`}>{profit>=0?'+':''}{formatMoney(profit)} ({totalCost>0?Math.round(profit/totalCost*100):0}%)</span>
+                      <span className={`font-bold ${profit>=0?'text-green-600':'text-red-600'}`}>{profit>=0?'+':''}{moneyFull(profit)} ({totalCost>0?Math.round(profit/totalCost*100):0}%)</span>
                     </div>
                   </>
                 )}
@@ -898,7 +898,7 @@ function BatchForm({ isOpen, onClose, formula, ingredients, toast, onSaved }) {
             <div className="flex items-center justify-between text-xs pt-1.5 border-t border-gray-200 font-bold">
               <span>Tổng khối lượng</span><span className="text-gray-800">{w}</span>
             </div>) : null })()}
-          {cost>0 && <div className="flex items-center justify-between text-xs font-bold"><span>Chi phí</span><span className="text-purple-600">{formatMoney(cost)}</span></div>}
+          {cost>0 && <div className="flex items-center justify-between text-xs font-bold"><span>Chi phí</span><span className="text-purple-600">{moneyFull(cost)}</span></div>}
         </div>
 
         <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label>
@@ -1073,7 +1073,7 @@ function QuickBatchForm({ isOpen, onClose, ingredients, toast, onSaved }) {
             })}
             {cost > 0 && (
               <div className="flex justify-between text-xs font-bold pt-1.5 border-t border-gray-200">
-                <span>Chi phí</span><span className="text-purple-600">{formatMoney(cost)}</span>
+                <span>Chi phí</span><span className="text-purple-600">{moneyFull(cost)}</span>
               </div>
             )}
           </div>
@@ -1105,14 +1105,72 @@ function QuickBatchForm({ isOpen, onClose, ingredients, toast, onSaved }) {
 function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefresh, toast }) {
   const [showQuick, setShowQuick] = useState(false)
   const [editNote,  setEditNote]  = useState(null)
+  const [view,      setView]      = useState('list')     // list | summary
+  const [period,    setPeriod]    = useState('all')      // month | 3m | year | all
+  const [sortBy,    setSortBy]    = useState('newest')
+  const [groupKey,  setGroupKey]  = useState(null)       // đang xem lô của 1 loại
+
+  // Tên hiển thị + khoá gom nhóm cho mỗi lô
+  const fName = useMemo(() => {
+    const m = {}; formulas.forEach(f => { m[f.id] = f.name }); return m
+  }, [formulas])
+  const labelOf = b => fName[b.formula_id] || b.name || (b.formula_id ? '(công thức đã xoá)' : 'Làm nhanh')
+  const keyOf   = b => b.formula_id ? 'f:' + b.formula_id : 'q:' + (b.name || 'Làm nhanh')
+
+  // Mốc bắt đầu của khoảng thời gian
+  const since = useMemo(() => {
+    const d = new Date()
+    if (period === 'month') return new Date(d.getFullYear(), d.getMonth(), 1)
+    if (period === '3m')    return new Date(d.getFullYear(), d.getMonth() - 2, 1)
+    if (period === 'year')  return new Date(d.getFullYear(), 0, 1)
+    return null
+  }, [period])
+
   const filtered = useMemo(() => {
-    if (!search) return batches
-    const s = search.toLowerCase()
-    return batches.filter(b => {
-      const f = formulas.find(fm => fm.id===b.formula_id)
-      return (f?.name || b.name || '').toLowerCase().includes(s) || b.note?.toLowerCase().includes(s)
+    let list = batches
+    if (since) list = list.filter(b => new Date(b.created_at) >= since)
+    if (groupKey) list = list.filter(b => keyOf(b) === groupKey)
+    if (search) {
+      const s = stripVN(search)
+      list = list.filter(b => stripVN(labelOf(b)).includes(s) || stripVN(b.note).includes(s) || stripVN(b.result).includes(s))
+    }
+    const wOf = b => calcFormulaWeight(b.items || []).g
+    const by = {
+      newest: (a, b) => new Date(b.created_at) - new Date(a.created_at),
+      oldest: (a, b) => new Date(a.created_at) - new Date(b.created_at),
+      weight: (a, b) => wOf(b) - wOf(a),
+      cost:   (a, b) => (Number(b.cost) || 0) - (Number(a.cost) || 0),
+    }[sortBy] || ((a, b) => new Date(b.created_at) - new Date(a.created_at))
+    return [...list].sort(by)
+  }, [batches, search, since, groupKey, sortBy, fName])
+
+  // Gom theo loại: mỗi công thức (hoặc mỗi tên làm nhanh) một dòng
+  const summary = useMemo(() => {
+    const g = {}
+    filtered.forEach(b => {
+      const k = keyOf(b)
+      if (!g[k]) g[k] = { key: k, label: labelOf(b), quick: !b.formula_id,
+                          lots: 0, serving: 0, g: 0, ml: 0, cost: 0, last: null }
+      const w = calcFormulaWeight(b.items || [])
+      const x = g[k]
+      x.lots += 1
+      x.serving += Number(b.serving) || 0
+      x.g += w.g; x.ml += w.ml
+      x.cost += Number(b.cost) || 0
+      const t = new Date(b.created_at)
+      if (!x.last || t > x.last) x.last = t
     })
-  }, [batches, search, formulas])
+    const rows = Object.values(g)
+    const by = {
+      newest: (a, b) => b.last - a.last,
+      oldest: (a, b) => a.last - b.last,
+      weight: (a, b) => (b.g + b.ml) - (a.g + a.ml),
+      cost:   (a, b) => b.cost - a.cost,
+      lots:   (a, b) => b.lots - a.lots,
+      name:   (a, b) => a.label.localeCompare(b.label, 'vi'),
+    }[sortBy] || ((a, b) => (b.g + b.ml) - (a.g + a.ml))
+    return rows.sort(by)
+  }, [filtered, sortBy, fName])
 
   // Tổng khối lượng + chi phí của các lô đang hiện; chỉ tính lại khi danh sách đổi
   const tong = useMemo(() => {
@@ -1151,17 +1209,95 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
         onSaved={() => { setEditNote(null); onRefresh() }} toast={toast}/>
       <SearchBar value={search} onChange={setSearch} placeholder="Tìm lô sản xuất..."/>
 
+      {/* Danh sách / Tổng hợp */}
+      <div className="flex gap-1.5 mb-2">
+        {[['list','Danh sách lô'],['summary','Tổng hợp theo loại']].map(([id, lbl]) => (
+          <button key={id} onClick={() => { setView(id); setGroupKey(null) }}
+            className={`flex-1 py-2 rounded-xl text-xs font-medium border active:scale-98
+              ${view === id ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {/* Thời gian + sắp xếp */}
+      <div className="flex gap-1.5 mb-2">
+        <select value={period} onChange={e => setPeriod(e.target.value)}
+          className="flex-1 px-2.5 py-2 text-xs border border-gray-200 rounded-xl bg-white text-gray-700">
+          <option value="month">Tháng này</option>
+          <option value="3m">3 tháng gần đây</option>
+          <option value="year">Năm nay</option>
+          <option value="all">Tất cả</option>
+        </select>
+        <select value={sortBy} onChange={e => setSortBy(e.target.value)}
+          className="flex-1 px-2.5 py-2 text-xs border border-gray-200 rounded-xl bg-white text-gray-700">
+          <option value="newest">Mới làm nhất</option>
+          <option value="oldest">Cũ nhất</option>
+          <option value="weight">Khối lượng nhiều nhất</option>
+          <option value="cost">Chi phí cao nhất</option>
+          {view === 'summary' && <option value="lots">Làm nhiều lô nhất</option>}
+          {view === 'summary' && <option value="name">Theo tên A → Z</option>}
+        </select>
+      </div>
+
+      {/* Đang xem lô của một loại → nút quay lại tổng hợp */}
+      {groupKey && (
+        <button onClick={() => { setGroupKey(null); setView('summary') }}
+          className="w-full mb-2 px-3 py-2 bg-purple-50 text-purple-700 rounded-xl text-xs font-medium text-left active:scale-98">
+          ← Về tổng hợp · đang xem: <b>{filtered[0] ? labelOf(filtered[0]) : ''}</b>
+        </button>
+      )}
+
       {filtered.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-2 mb-2 bg-gray-50 rounded-xl text-xs">
-          <span className="text-gray-500">{filtered.length} lô</span>
+          <span className="text-gray-500">
+            {filtered.length} lô{view === 'summary' ? ` · ${summary.length} loại` : ''}
+          </span>
           {tong.weightTxt && <span className="font-semibold text-gray-700">{tong.weightTxt}</span>}
           {tong.cost > 0 && <span className="font-semibold text-purple-600 ml-auto">{formatMoney(tong.cost)}</span>}
         </div>
       )}
-      {filtered.length===0 ? (
+
+      {/* Bảng tổng hợp theo loại */}
+      {view === 'summary' && (
+        summary.length === 0 ? (
+          <div className="bg-white rounded-xl p-8 text-center text-sm text-gray-400">
+            Không có lô nào trong khoảng thời gian này
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {summary.map(r => {
+              const wTxt = fmtWeight({ g: r.g, ml: r.ml })
+              const pct  = tong.g + tong.ml > 0 ? ((r.g + r.ml) / (tong.g + tong.ml)) * 100 : 0
+              return (
+                <button key={r.key} onClick={() => { setGroupKey(r.key); setView('list') }}
+                  className="w-full bg-white rounded-xl shadow-sm p-3 text-left active:scale-98">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base flex-shrink-0">{r.quick ? '⚡' : '🧪'}</span>
+                    <span className="text-sm font-medium text-gray-800 flex-1 truncate">{r.label}</span>
+                    <span className="text-sm font-bold text-gray-800 flex-shrink-0">{wTxt || '—'}</span>
+                  </div>
+                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-2">
+                    <div className="h-full bg-purple-400 rounded-full" style={{ width: `${Math.max(pct, 2)}%` }}/>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5 text-[11px] text-gray-500">
+                    <span>{r.lots} lô</span>
+                    {!r.quick && r.serving > 0 && <span>· {r.serving} serving</span>}
+                    {r.cost > 0 && <span>· {formatMoney(r.cost)}</span>}
+                    <span className="ml-auto text-gray-400">gần nhất {r.last.toLocaleDateString('vi-VN')}</span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )
+      )}
+      {view === 'list' && (filtered.length===0 ? (
         <div className="bg-white rounded-xl p-8 text-center">
           <div className="text-4xl mb-2">🧪</div>
-          <p className="text-gray-500 text-sm">{search?'Không tìm thấy':'Chưa có lô nào'}</p>
+          <p className="text-gray-500 text-sm">
+            {search ? 'Không tìm thấy' : batches.length > 0 ? 'Không có lô nào trong khoảng thời gian này' : 'Chưa có lô nào'}
+          </p>
           <p className="text-xs text-gray-400 mt-1">Bấm ⚡ Làm nhanh, hoặc vào Công thức → Mở rộng → "Làm lô"</p>
         </div>
       ) : (
@@ -1213,7 +1349,7 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
             )
           })}
         </div>
-      )}
+      ))}
     </>
   )
 }
@@ -1767,7 +1903,7 @@ function ImportRow({ imp, ingUnit, onMarkArrived, onDelete }) {
           {imp.price_per_unit && (
             <p className="text-xs text-gray-500">
               Giá lô: <b className="text-gray-700">{formatMoney(imp.price_per_unit)}/{imp.unit}</b>
-              {' · '}Tổng: <b className="text-gray-700">{formatMoney(imp.price_per_unit * imp.qty)}</b>
+              {' · '}Tổng: <b className="text-gray-700">{moneyFull(imp.price_per_unit * imp.qty)}</b>
             </p>
           )}
           <div className="flex gap-2 pt-1">

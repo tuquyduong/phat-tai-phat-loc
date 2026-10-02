@@ -51,6 +51,11 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Yêu cầu kiểm tra phiên bản: luôn đi thẳng ra mạng, không lưu đệm
+  if (url.searchParams.has('__v')) {
+    return;
+  }
+
   event.respondWith(
     // Thử network trước
     fetch(request)
