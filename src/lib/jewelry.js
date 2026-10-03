@@ -284,14 +284,18 @@ export async function deleteJewelry(id) {
 
   // Chép tên sản phẩm vào đơn bán và sổ nhập TRƯỚC khi xoá.
   // Sau khi xoá, các dòng đó mất liên kết nên không còn đọc được tên từ sản phẩm.
+  // Lưu ý: câu lệnh Supabase KHÔNG có .catch() — phải đọc { error } từ kết quả.
+  // Chép tên hỏng thì dừng, không xoá: xoá tiếp thì đơn bán sẽ mất tên.
   if (item) {
     const label = [item.code, item.name].filter(Boolean).join(' · ')
-    await supabase.from('jewelry_sales')
+    const r1 = await supabase.from('jewelry_sales')
       .update({ item_name: label, item_image: item.image_url || null })
-      .eq('jewelry_id', id).is('item_name', null).catch(() => {})
-    await supabase.from('jewelry_intakes')
+      .eq('jewelry_id', id).is('item_name', null)
+    if (r1.error) throw new Error('Chưa lưu được tên vào đơn bán, nên chưa xoá: ' + r1.error.message)
+    const r2 = await supabase.from('jewelry_intakes')
       .update({ item_name: label })
-      .eq('jewelry_id', id).catch(() => {})
+      .eq('jewelry_id', id)
+    if (r2.error) throw new Error('Chưa lưu được tên vào sổ nhập, nên chưa xoá: ' + r2.error.message)
   }
 
   const { error } = await supabase.from('jewelry').delete().eq('id', id)
