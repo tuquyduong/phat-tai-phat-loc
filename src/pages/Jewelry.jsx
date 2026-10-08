@@ -5,7 +5,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
   RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle, PackageCheck,
-  Camera, Clock, FileSpreadsheet, Upload, Download, AlertTriangle,
+  Camera, Clock, FileSpreadsheet, Upload, Download, AlertTriangle, ChevronRight
 } from 'lucide-react'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
@@ -25,6 +25,7 @@ import {
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, moneyFull, fmtInput, parseInput, todayLocal,
+  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf
 } from '../lib/jewelry'
 
 // ============================================
@@ -264,7 +265,7 @@ export default function Jewelry() {
         <MountsTab toast={toast}/>
       ) : (
         soView === 'report'
-          ? <BcTab stats={stats}/>
+          ? <BcTab stats={stats} sales={sales} jewelry={jewelry}/>
           : soView === 'intake'
           ? <IntakeTab trips={trips} jewelry={jewelry} toast={toast} onRefresh={loadData}/>
           : <TripsTab trips={trips} jewelry={jewelry}
@@ -1310,14 +1311,51 @@ function KhachTab({ customers, sales, customerNotes, onNoteSaved }) {
 // ============================================
 // BÁO CÁO TAB
 // ============================================
-function BcTab({ stats }) {
-  const [bcTab, setBcTab] = useState('tong')
+function BcTab({ stats, sales = [], jewelry = [] }) {
+  const [bcTab, setBcTab] = useState('dt')            // dt | tien | no | chay | ton
+  const [month, setMonth] = useState(monthLocal())    // 'YYYY-MM' — null là Tất cả
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
+  const dm   = d => { if(!d) return ''; const [,m,day]=d.split('-'); return `${+day}/${+m}` }
+  const mLab = m => m ? `Tháng ${+m.slice(5)}/${m.slice(0,4)}` : 'Tất cả các tháng'
+
+  const months = useMemo(() => reportMonths(sales), [sales])
+  const rev    = useMemo(() => revenueReport(sales, jewelry, month), [sales, jewelry, month])
+  const cash   = useMemo(() => cashflowReport(sales, jewelry, month), [sales, jewelry, month])
+  const debt   = useMemo(() => debtReport(sales, jewelry), [sales, jewelry])
+  const prevM  = month ? prevMonthOf(month) : null           // tháng liền trước theo lịch
+  const prev   = useMemo(() => prevM ? revenueReport(sales, jewelry, prevM).revenue : 0, [sales, jewelry, prevM])
+  const mi     = month ? months.indexOf(month) : -1
+
+  const monthBar = (
+    <div className="flex items-center gap-2 mx-3 mt-3">
+      <button onClick={() => mi > 0 && setMonth(months[mi - 1])} disabled={mi <= 0}
+        className="p-2 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Tháng trước">
+        <ChevronLeft size={16}/>
+      </button>
+      <div className="flex-1 text-center text-sm font-semibold text-gray-800">{mLab(month)}</div>
+      <button onClick={() => mi >= 0 && mi < months.length - 1 && setMonth(months[mi + 1])}
+        disabled={mi < 0 || mi >= months.length - 1}
+        className="p-2 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Tháng sau">
+        <ChevronRight size={16}/>
+      </button>
+      <button onClick={() => setMonth(month ? null : monthLocal())}
+        className={`px-3 py-2 rounded-lg text-xs font-medium border active:scale-95
+          ${!month ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+        Tất cả
+      </button>
+    </div>
+  )
+  const chip = (t, c) => (
+    <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${c}`}>{t}</span>
+  )
+  const section = t => (
+    <div className="px-3 mt-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">{t}</div>
+  )
 
   return (
     <>
       <div className="flex bg-gray-100 rounded-xl p-1 mx-3 mt-3 gap-1">
-        {[['tong','Tổng hợp'],['no','Công nợ'],['chay','Bán chạy'],['ton','Tồn lâu']].map(([id,label]) => (
+        {[['dt','Doanh thu'],['tien','Dòng tiền'],['no','Công nợ'],['chay','Bán chạy'],['ton','Tồn lâu']].map(([id,label]) => (
           <button key={id} onClick={() => setBcTab(id)}
             className={`flex-1 py-1.5 text-[10px] font-medium rounded-lg transition-colors
               ${bcTab===id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
@@ -1326,48 +1364,233 @@ function BcTab({ stats }) {
         ))}
       </div>
 
-      {bcTab === 'tong' && (
+      {/* ── DOANH THU: tính theo ngày bán ── */}
+      {bcTab === 'dt' && (
         <>
-          <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 overflow-hidden">
-            {[
-              ['Thực thu tháng này', moneyFull(stats.monthActual), 'text-green-600'],
-              ['Ghi nhận tháng này', moneyFull(stats.monthRevenue), 'text-gray-600'],
-              ['Tổng doanh thu', moneyFull(stats.totalRevenue), 'text-green-600'],
-              ['Khách còn nợ', moneyFull(stats.totalDebt), stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'],
-              ['Tiền cọc đang giữ', moneyFull(stats.heldDeposit), 'text-amber-600'],
-              ['Đơn đang xử lý', `${stats.pendingCount} đơn`, stats.pendingCount > 0 ? 'text-blue-600' : 'text-gray-300'],
-              ['Đơn quá hẹn giao', `${stats.overdueCount} đơn`, stats.overdueCount > 0 ? 'text-red-500' : 'text-gray-300'],
-              ['Số món đã bán', `${stats.totalSold} món`, 'text-purple-600'],
-              ['Còn tồn kho', `${stats.inStock} món`, 'text-amber-600'],
-              ['Tồn lâu >30 ngày', `${stats.slowMovingCount} món`, 'text-red-500'],
-              ['Giá trị tồn ước tính', moneyFull(stats.stockValue), 'text-amber-600'],
-            ].map(([l,v,c]) => (
-              <div key={l} className="flex justify-between items-center px-4 py-2.5 border-b border-gray-100 last:border-0">
-                <span className="text-xs text-gray-500">{l}</span>
-                <span className={`text-xs font-semibold ${c}`}>{v}</span>
-              </div>
-            ))}
+          {monthBar}
+          <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 px-4 py-3">
+            <div className="text-[11px] text-gray-500">Doanh thu ghi nhận (theo ngày bán)</div>
+            <div className="text-xl font-bold text-gray-900 mt-0.5">{moneyFull(rev.revenue)}</div>
+            <div className="text-[11px] text-gray-500 mt-1">
+              {rev.orders} đơn · {rev.qty} món
+              {rev.giftQty > 0 && ` · tặng ${rev.giftQty} món`}
+              {month && prev > 0 && (
+                <span className={rev.revenue >= prev ? 'text-green-600' : 'text-red-500'}>
+                  {' · '}{rev.revenue >= prev ? 'tăng' : 'giảm'} {Math.abs(Math.round((rev.revenue - prev) / prev * 100))}% so với tháng trước
+                </span>
+              )}
+            </div>
           </div>
-          {/* Revenue by category */}
-          <div className="px-3 mt-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">Doanh thu theo loại</div>
-          {Object.entries(stats.catRevenue)
-            .sort((a,b) => b[1]-a[1])
-            .map(([cat, rev]) => {
-              const maxRev = Math.max(...Object.values(stats.catRevenue))
-              const pct = maxRev > 0 ? rev/maxRev*100 : 0
-              return (
-                <div key={cat} className="bg-white border-b border-gray-100 px-4 py-2">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs font-medium text-gray-700">{cat}</span>
-                    <span className="text-xs font-semibold text-green-600">{moneyFull(rev)}</span>
+
+          {!month && rev.months.length > 0 && (
+            <>
+              {section('Từng tháng · bấm để xem chi tiết')}
+              {rev.months.map(m => (
+                <button key={m.month} onClick={() => setMonth(m.month)}
+                  className="w-full bg-white border-b border-gray-100 px-4 py-2.5 flex items-center justify-between active:bg-gray-50">
+                  <div className="text-left">
+                    <div className="text-xs font-semibold text-gray-800">{mLab(m.month)}</div>
+                    <div className="text-[10px] text-gray-400">{m.orders} đơn · {m.qty} món</div>
                   </div>
-                  <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                    <div className="h-full bg-purple-500 rounded-full" style={{width:`${pct}%`}}/>
+                  <div className="text-sm font-bold text-green-600">{moneyFull(m.revenue)}</div>
+                </button>
+              ))}
+            </>
+          )}
+
+          {rev.categories.length > 0 && (
+            <>
+              {section('Theo loại hàng')}
+              {rev.categories.map(([cat, v]) => {
+                const pct = rev.revenue > 0 ? v / rev.revenue * 100 : 0
+                return (
+                  <div key={cat} className="bg-white border-b border-gray-100 px-4 py-2">
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-medium text-gray-700">{cat}</span>
+                      <span className="text-xs font-semibold text-green-600">
+                        {moneyFull(v)} <span className="text-gray-400 font-normal">{Math.round(pct)}%</span>
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-purple-500 rounded-full" style={{width:`${pct}%`}}/>
+                    </div>
+                  </div>
+                )
+              })}
+            </>
+          )}
+
+          {month && (
+            <>
+              {section('Chi tiết từng món')}
+              {rev.rows.length === 0 && (
+                <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn nào trong tháng này</div>
+              )}
+              {rev.rows.map((r, i) => (
+                <div key={r.id}>
+                  {(i === 0 || rev.rows[i-1].day !== r.day) && (
+                    <div className="px-4 pt-2.5 pb-1 text-[10px] text-gray-400 bg-gray-50">Ngày {dm(r.day)}</div>
+                  )}
+                  <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-medium text-gray-800 truncate">
+                        {r.label}{r.qty > 1 ? ` ×${r.qty}` : ''}
+                      </div>
+                      <div className="text-[10px] text-gray-400 truncate">{r.customer}</div>
+                    </div>
+                    <div className="text-right flex-shrink-0">
+                      <div className="text-xs font-semibold text-gray-800">{fmtMoney(r.total)}</div>
+                      {r.gift ? chip('Tặng', 'bg-purple-100 text-purple-700')
+                        : !r.paid ? chip('Còn nợ', 'bg-red-100 text-red-700')
+                        : r.paidLate ? chip(`Thu ${dm(r.paidDay)}`, 'bg-green-100 text-green-700')
+                        : chip('Đã thu', 'bg-green-100 text-green-700')}
+                    </div>
                   </div>
                 </div>
-              )
-            })
+              ))}
+            </>
+          )}
+
+          {!month && (
+            <>
+              {section('Tổng quan hiện tại')}
+              <div className="bg-white rounded-xl border border-gray-100 mx-3 overflow-hidden">
+                {[
+                  ['Đơn đang xử lý', `${stats.pendingCount} đơn`, stats.pendingCount > 0 ? 'text-blue-600' : 'text-gray-300'],
+                  ['Đơn quá hẹn giao', `${stats.overdueCount} đơn`, stats.overdueCount > 0 ? 'text-red-500' : 'text-gray-300'],
+                  ['Còn tồn kho', `${stats.inStock} món`, 'text-amber-600'],
+                  ['Tồn lâu >30 ngày', `${stats.slowMovingCount} món`, 'text-red-500'],
+                  ['Giá trị tồn ước tính', moneyFull(stats.stockValue), 'text-amber-600'],
+                ].map(([l,v,c]) => (
+                  <div key={l} className="flex justify-between items-center px-4 py-2.5 border-b border-gray-100 last:border-0">
+                    <span className="text-xs text-gray-500">{l}</span>
+                    <span className={`text-xs font-semibold ${c}`}>{v}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ── DÒNG TIỀN: tính theo ngày tiền thực về ── */}
+      {bcTab === 'tien' && (
+        <>
+          {monthBar}
+          <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 px-4 py-3">
+            <div className="text-[11px] text-gray-500">Tiền thực về (theo ngày nhận)</div>
+            <div className="text-xl font-bold text-green-600 mt-0.5">{moneyFull(cash.total)}</div>
+            <div className="text-[11px] text-gray-500 mt-1">
+              {cash.events.length} khoản
+              {cash.fromOld > 0 && ` · trong đó thu nợ tháng trước ${fmtMoney(cash.fromOld)}`}
+            </div>
+          </div>
+          <div className="mx-3 mt-2 px-3 py-2 bg-gray-50 rounded-xl text-[10px] text-gray-500 leading-relaxed">
+            Tiền cọc tính vào ngày bán, phần còn lại tính vào ngày bấm "Đã thu".
+          </div>
+          {cash.events.length === 0 && (
+            <div className="text-center py-8 text-gray-400 text-sm">Chưa có tiền về trong kỳ này</div>
+          )}
+          {!month && cash.months.length > 0 && (
+            <>
+              {section('Từng tháng · bấm để xem chi tiết')}
+              {cash.months.map(m => (
+                <button key={m.month} onClick={() => setMonth(m.month)}
+                  className="w-full bg-white border-b border-gray-100 px-4 py-2.5 flex items-center justify-between active:bg-gray-50">
+                  <div className="text-left">
+                    <div className="text-xs font-semibold text-gray-800">{mLab(m.month)}</div>
+                    <div className="text-[10px] text-gray-400">{m.count} khoản</div>
+                  </div>
+                  <div className="text-sm font-bold text-green-600">{moneyFull(m.total)}</div>
+                </button>
+              ))}
+            </>
+          )}
+          {month && cash.events.map((e, i) => {
+            const first = i === 0 || cash.events[i-1].day !== e.day
+            const old = month && !(e.saleDay || '').startsWith(month)
+            return (
+              <div key={e.saleId + e.kind}>
+                {first && (
+                  <div className="px-4 pt-2.5 pb-1 text-[10px] text-gray-400 bg-gray-50 flex justify-between">
+                    <span>Ngày {dm(e.day)}</span><span className="font-semibold text-gray-500">{fmtMoney(cash.byDay[e.day])}</span>
+                  </div>
+                )}
+                <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-medium text-gray-800 truncate">{e.customer}</div>
+                    <div className="text-[10px] text-gray-400 truncate">
+                      {e.kind} · {e.label} · đơn ngày {dm(e.saleDay)}{old ? ' (tháng trước)' : ''}
+                    </div>
+                  </div>
+                  <div className="text-xs font-semibold text-green-600 flex-shrink-0">+{fmtMoney(e.amount)}</div>
+                </div>
+              </div>
+            )
+          })}
+        </>
+      )}
+
+      {/* ── CÔNG NỢ: tính tới hôm nay, gom theo khách ── */}
+      {bcTab === 'no' && (
+        <>
+          <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 px-4 py-3">
+            <div className="text-[11px] text-gray-500">Khách đang nợ · tính tới hôm nay</div>
+            <div className={`text-xl font-bold mt-0.5 ${debt.total > 0 ? 'text-red-500' : 'text-gray-300'}`}>{moneyFull(debt.total)}</div>
+            <div className="text-[11px] text-gray-500 mt-1">
+              {debt.customers.length} khách · {debt.orders} đơn
+              {stats.heldDeposit > 0 && ` · đang giữ cọc ${fmtMoney(stats.heldDeposit)}`}
+            </div>
+          </div>
+
+          {section('Theo khách · nợ lâu nhất lên đầu')}
+          {debt.customers.length === 0
+            ? <div className="text-center py-8 text-gray-400 text-sm">Không có khách nào đang nợ 👍</div>
+            : debt.customers.map(c => (
+              <div key={c.customer} className="bg-white border-b border-gray-100 px-4 py-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="text-xs font-semibold text-gray-800 truncate">{c.customer}</div>
+                    <div className="text-[10px] text-gray-400">
+                      {c.orders.length} đơn · lâu nhất {c.maxDays} ngày{c.phone ? ` · ${c.phone}` : ''}
+                      {c.maxDays >= 14 && <span className="text-amber-600 font-semibold"> · nên nhắc</span>}
+                    </div>
+                  </div>
+                  <div className="text-sm font-bold text-red-500 flex-shrink-0">{moneyFull(c.total)}</div>
+                </div>
+                {c.orders.map(o => (
+                  <div key={o.id} className="flex justify-between text-[10px] text-gray-400 mt-1 pl-1">
+                    <span className="truncate">{dm(o.day)} · {o.label}</span>
+                    <span className="flex-shrink-0 ml-2">{fmtMoney(o.amount)}</span>
+                  </div>
+                ))}
+              </div>
+            ))
           }
+
+          {stats.overdueCount > 0 && (
+            <>
+              <div className="px-3 mt-4 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
+                Đơn quá hẹn giao
+              </div>
+              {stats.overdue.map(s => (
+                <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
+                  <AlertCircle size={16} className="text-amber-500 flex-shrink-0"/>
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs font-semibold text-gray-800 truncate">
+                      {s.jewelry?.code || s.item_name || 'Hàng order'}
+                    </div>
+                    <div className="text-[10px] text-gray-400">
+                      {s.customer_name || 'Khách lẻ'} · hẹn {fmtDate(s.due_date)}
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-amber-600 flex-shrink-0">
+                    {moneyFull(Number(s.qty)*Number(s.sell_price))}
+                  </span>
+                </div>
+              ))}
+            </>
+          )}
         </>
       )}
 
@@ -1437,72 +1660,6 @@ function BcTab({ stats }) {
         </>
       )}
 
-      {bcTab === 'no' && (
-        <>
-          <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 overflow-hidden">
-            <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
-              <span className="text-xs text-gray-500">Tổng công nợ</span>
-              <span className={`text-xs font-semibold ${stats.totalDebt > 0 ? 'text-red-500' : 'text-gray-300'}`}>
-                {moneyFull(stats.totalDebt)}
-              </span>
-            </div>
-            <div className="flex justify-between px-4 py-2.5 border-b border-gray-100">
-              <span className="text-xs text-gray-500">Số khách nợ</span>
-              <span className="text-xs font-semibold text-purple-600">{stats.debtors.length} khách</span>
-            </div>
-            <div className="flex justify-between px-4 py-2.5">
-              <span className="text-xs text-gray-500">Tiền cọc đang giữ</span>
-              <span className="text-xs font-semibold text-amber-600">{moneyFull(stats.heldDeposit)}</span>
-            </div>
-          </div>
-
-          <div className="px-3 mt-3 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
-            Danh sách khách nợ
-          </div>
-          {stats.debtors.length === 0
-            ? <div className="text-center py-8 text-gray-400 text-sm">Không có khách nào đang nợ 👍</div>
-            : stats.debtors.map((d,i) => (
-              <div key={d.name} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
-                <div className="w-8 h-8 rounded-full bg-red-50 flex items-center justify-center
-                  text-[10px] font-bold text-red-600 flex-shrink-0">
-                  {i+1}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs font-semibold text-gray-800">{d.name}</div>
-                  <div className="text-[10px] text-gray-400">
-                    {d.count} đơn{d.phone ? ` · ${d.phone}` : ''}
-                  </div>
-                </div>
-                <div className="text-sm font-bold text-red-500 flex-shrink-0">{moneyFull(d.amount)}</div>
-              </div>
-            ))
-          }
-
-          {stats.overdueCount > 0 && (
-            <>
-              <div className="px-3 mt-4 pb-1 text-[10px] font-medium text-gray-400 uppercase tracking-wider">
-                Đơn quá hẹn giao
-              </div>
-              {stats.overdue.map(s => (
-                <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-2.5 flex items-center gap-3">
-                  <AlertCircle size={16} className="text-amber-500 flex-shrink-0"/>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-semibold text-gray-800 truncate">
-                      {s.jewelry?.code || s.item_name || 'Hàng order'}
-                    </div>
-                    <div className="text-[10px] text-gray-400">
-                      {s.customer_name || 'Khách lẻ'} · hẹn {fmtDate(s.due_date)}
-                    </div>
-                  </div>
-                  <span className="text-xs font-semibold text-amber-600 flex-shrink-0">
-                    {moneyFull(Number(s.qty)*Number(s.sell_price))}
-                  </span>
-                </div>
-              ))}
-            </>
-          )}
-        </>
-      )}
       <div className="h-4"/>
     </>
   )

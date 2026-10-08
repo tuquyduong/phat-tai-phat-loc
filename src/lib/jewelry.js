@@ -1290,3 +1290,137 @@ export function intakeDate(iso) {
 export function fmtIntakeTime(iso) {
   return iso ? timeLocal(new Date(iso)) : ''
 }
+
+// ============================================
+// BÁO CÁO THEO THÁNG — doanh thu, dòng tiền, công nợ
+// Chỉ đọc dữ liệu đang có, không ghi gì vào database.
+// ============================================
+const saleTotal = s => (Number(s.qty) || 0) * (Number(s.sell_price) || 0)
+
+// Ngày theo giờ Việt Nam: chuỗi '2026-09-28' giữ nguyên, mốc giờ đầy đủ thì quy về VN
+function vnDay(v) {
+  if (!v) return null
+  const s = String(v)
+  return s.length <= 10 ? s : todayLocal(new Date(s))
+}
+const saleDay = s => vnDay(s.sold_at) || vnDay(s.created_at)
+
+function saleLabel(s, jMap) {
+  const j = s.jewelry_id && jMap[s.jewelry_id]
+  if (j) return j.code + (j.name ? ' · ' + j.name : '')
+  return s.item_name || 'Hàng order'
+}
+const customerOf = s => (s.customer_name || '').trim() || 'Khách lẻ'
+
+// Tháng liền trước theo LỊCH: '2026-01' → '2025-12'
+export function prevMonthOf(m) {
+  const [y, mo] = m.split('-').map(Number)
+  return mo === 1 ? `${y - 1}-12` : `${y}-${String(mo - 1).padStart(2, '0')}`
+}
+
+// Danh sách tháng LIÊN TỤC từ tháng đầu tiên có bán/thu tới tháng hiện tại.
+// Tháng không có đơn vẫn có mặt — bấm mũi tên đi đúng từng tháng, không nhảy cóc.
+export function reportMonths(sales) {
+  const now = monthLocal()
+  let first = now
+  sales.forEach(s => {
+    const d = saleDay(s); if (d && d.slice(0, 7) < first) first = d.slice(0, 7)
+    const p = vnDay(s.paid_at); if (p && p.slice(0, 7) < first) first = p.slice(0, 7)
+  })
+  const out = []
+  // tối đa 10 năm — chặn vòng lặp nếu có ngày tháng bị nhập sai
+  for (let m = now, n = 0; m >= first && n < 120; m = prevMonthOf(m), n++) out.unshift(m)
+  return out
+}
+
+// DOANH THU: tính vào đúng tháng BÁN. month = 'YYYY-MM', hoặc null = tất cả
+export function revenueReport(sales, jewelry, month) {
+  const jMap = {}; jewelry.forEach(j => { jMap[j.id] = j })
+  const inMonth = s => !month || (saleDay(s) || '').startsWith(month)
+  const rows = sales.filter(inMonth).map(s => {
+    const day = saleDay(s), total = saleTotal(s)
+    const paidDay = s.paid ? (vnDay(s.paid_at) || day) : null
+    return {
+      id: s.id, day, label: saleLabel(s, jMap), qty: Number(s.qty) || 0, total,
+      customer: customerOf(s),
+      category: (s.jewelry_id && jMap[s.jewelry_id]?.category) || 'Hàng order',
+      gift: total === 0,                       // giá 0đ = quà tặng
+      paid: !!s.paid, paidDay, paidLate: !!(paidDay && paidDay !== day),
+    }
+  }).sort((a, b) => (b.day || '').localeCompare(a.day || ''))
+
+  const sold = rows.filter(r => !r.gift), gifts = rows.filter(r => r.gift)
+  const cats = {}
+  sold.forEach(r => { cats[r.category] = (cats[r.category] || 0) + r.total })
+
+  // Bảng từng tháng (dùng cho chế độ Tất cả)
+  const byMonth = {}
+  sold.forEach(r => {
+    const m = (r.day || '').slice(0, 7); if (!m) return
+    const x = byMonth[m] || (byMonth[m] = { month: m, revenue: 0, qty: 0, orders: 0 })
+    x.revenue += r.total; x.qty += r.qty; x.orders += 1
+  })
+
+  return {
+    rows,
+    revenue: sold.reduce((a, r) => a + r.total, 0),
+    orders:  sold.length,
+    qty:     sold.reduce((a, r) => a + r.qty, 0),
+    giftQty: gifts.reduce((a, r) => a + r.qty, 0),
+    categories: Object.entries(cats).sort((a, b) => b[1] - a[1]),
+    months: Object.values(byMonth).sort((a, b) => b.month.localeCompare(a.month)),
+  }
+}
+
+// DÒNG TIỀN: tính vào đúng ngày TIỀN VỀ.
+// Cọc tính vào ngày bán; phần còn lại tính vào ngày bấm "đã thu".
+export function cashflowReport(sales, jewelry, month) {
+  const jMap = {}; jewelry.forEach(j => { jMap[j.id] = j })
+  const events = []
+  sales.forEach(s => {
+    const total = saleTotal(s); if (total <= 0) return
+    const day = saleDay(s), dep = Math.min(Number(s.deposit) || 0, total)
+    const base = { saleId: s.id, saleDay: day, label: saleLabel(s, jMap), customer: customerOf(s) }
+    if (dep > 0) events.push({ ...base, day, amount: dep, kind: 'Cọc' })
+    if (s.paid && total - dep > 0) {
+      events.push({ ...base, day: vnDay(s.paid_at) || day, amount: total - dep, kind: dep > 0 ? 'Trả nốt' : 'Thanh toán' })
+    }
+  })
+  const list = events.filter(e => !month || (e.day || '').startsWith(month))
+    .sort((a, b) => (b.day || '').localeCompare(a.day || ''))
+  const total = list.reduce((a, e) => a + e.amount, 0)
+  const byDay = {}, byMonth = {}
+  list.forEach(e => {
+    byDay[e.day] = (byDay[e.day] || 0) + e.amount
+    const m = (e.day || '').slice(0, 7)
+    const x = byMonth[m] || (byMonth[m] = { month: m, total: 0, count: 0 })
+    x.total += e.amount; x.count += 1
+  })
+  // Tiền về tháng này nhưng của đơn bán tháng trước = thu nợ cũ
+  const fromOld = month ? list.filter(e => !(e.saleDay || '').startsWith(month)).reduce((a, e) => a + e.amount, 0) : 0
+  return { events: list, total, fromOld, byDay,
+           months: Object.values(byMonth).sort((a, b) => b.month.localeCompare(a.month)) }
+}
+
+// CÔNG NỢ: tính tới hôm nay, gom theo khách, nợ lâu nhất lên đầu
+export function debtReport(sales, jewelry, today = todayLocal()) {
+  const jMap = {}; jewelry.forEach(j => { jMap[j.id] = j })
+  const days = d => d ? Math.max(0, Math.round((new Date(today) - new Date(d)) / 86400000)) : 0
+  const by = {}
+  sales.forEach(s => {
+    if (s.paid) return
+    const owe = saleTotal(s) - (Number(s.deposit) || 0)
+    if (owe <= 0) return
+    const k = customerOf(s)
+    const c = by[k] || (by[k] = { customer: k, phone: '', total: 0, maxDays: 0, orders: [] })
+    if (!c.phone && s.customer_phone) c.phone = s.customer_phone
+    const d = saleDay(s)
+    c.orders.push({ id: s.id, day: d, label: saleLabel(s, jMap), amount: owe, days: days(d) })
+    c.total += owe
+    c.maxDays = Math.max(c.maxDays, days(d))
+  })
+  const customers = Object.values(by).sort((a, b) => b.maxDays - a.maxDays || b.total - a.total)
+  customers.forEach(c => c.orders.sort((a, b) => (a.day || '').localeCompare(b.day || '')))
+  return { customers, total: customers.reduce((a, c) => a + c.total, 0),
+           orders: customers.reduce((a, c) => a + c.orders.length, 0) }
+}
