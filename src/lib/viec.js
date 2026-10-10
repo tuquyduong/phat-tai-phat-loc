@@ -5,7 +5,7 @@
 // ============================================
 import { supabase } from './supabase'
 import { getLocalDateString } from './helpers'
-import { lunarOf } from './lunar'
+import { isSeries, occurrencesBetween, isDoneOn } from './recur'
 
 export const PEOPLE = { linh: 'Anh Linh', mai: 'Chị Mai' }
 export const otherOf = who => (who === 'linh' ? 'mai' : 'linh')
@@ -85,23 +85,15 @@ export async function deleteTask(id) {
   const { error } = await supabase.from('viec_tasks').delete().eq('id', id)
   if (error) throw error
 }
-// Tick xong; việc lặp lại thì tự tạo lần kế tiếp
-export async function toggleTask(task) {
-  const done = !task.done
-  const updated = await updateTask(task.id, { done, done_at: done ? new Date().toISOString() : null })
-  let next = null
-  if (done && task.repeat && task.due_date) {
-    const nd = nextDate(task.due_date, task.repeat)
-    if (nd) {
-      // Chỉ tạo lần kế khi chưa có — tránh đẻ bản trùng khi lỡ tay bỏ tick rồi tick lại
-      const { data: ex, error: e2 } = await supabase.from('viec_tasks').select('id')
-        .eq('owner', task.owner).eq('title', task.title).eq('due_date', nd).eq('repeat', task.repeat)
-      if (e2) throw e2
-      if (!ex || ex.length === 0) next = await createTask({ owner: task.owner, shared: task.shared, title: task.title,
-        due_date: nd, due_time: task.due_time, repeat: task.repeat, note: task.note })
-    }
+// Tick một việc. Việc lặp: chỉ đánh dấu ĐÚNG lần (ngày) được tick, các lần khác giữ nguyên.
+export async function toggleTask(task, iso) {
+  if (isSeries(task)) {
+    const set = new Set(task.done_dates || [])
+    set.has(iso) ? set.delete(iso) : set.add(iso)
+    return { updated: await updateTask(task.id, { done_dates: [...set].sort() }) }
   }
-  return { updated, next }
+  const done = !task.done
+  return { updated: await updateTask(task.id, { done, done_at: done ? new Date().toISOString() : null }) }
 }
 
 // ── Daily ──
@@ -156,21 +148,6 @@ export const daysBetween = (a, b) => {
   const [y1, m1, d1] = a.split('-').map(Number), [y2, m2, d2] = b.split('-').map(Number)
   return Math.round((new Date(y1, m1 - 1, d1) - new Date(y2, m2 - 1, d2)) / 86400000)
 }
-// Ngày lặp kế tiếp
-export function nextDate(iso, repeat) {
-  if (repeat === 'weekly') return addDays(iso, 7)
-  if (repeat === 'monthly') {
-    const [y, m, d] = iso.split('-').map(Number)
-    const last = new Date(y, m + 1, 0).getDate()
-    return getLocalDateString(new Date(y, m, Math.min(d, last)))
-  }
-  if (repeat === 'lunar_1_15') {
-    for (let i = 1; i <= 20; i++) { const s = addDays(iso, i), L = lunarOf(s); if (L.day === 1 || L.day === 15) return s }
-  }
-  return null
-}
-export const REPEAT_LABEL = { '': 'Một lần', weekly: 'Hằng tuần', monthly: 'Hằng tháng', lunar_1_15: 'Mùng 1 & Rằm' }
-
 // Daily có làm vào ngày này không (1 = Thứ Hai … 7 = Chủ nhật)
 export function isDailyDay(daily, iso) {
   const [y, m, d] = iso.split('-').map(Number)
@@ -195,16 +172,26 @@ export function looksForgotten(log, daily, nowMs = Date.now()) {
   const mins = (nowMs - new Date(log.start_at)) / 60000
   return mins > Math.max(90, daily.target_min * 3) || log.day !== getLocalDateString(new Date(nowMs))
 }
-// Sắp tới: quá hạn + hôm nay + 7 ngày tới
+// Sắp tới: quá hạn + hôm nay + 7 ngày tới. Mỗi dòng là { t, date }.
+// Việc lặp: hiện mọi lần trong 7 ngày tới; quá hạn chỉ hiện LẦN GẦN NHẤT bị sót (không dồn cả loạt).
 export function upcoming(tasks, today, horizon = 7) {
-  const open = tasks.filter(t => !t.done && t.due_date)
-  const byTime = (a, b) => a.due_date.localeCompare(b.due_date) || (a.due_time || '99').localeCompare(b.due_time || '99')
-  return {
-    late:  open.filter(t => t.due_date < today).sort(byTime),
-    today: open.filter(t => t.due_date === today).sort(byTime),
-    soon:  open.filter(t => t.due_date > today && daysBetween(t.due_date, today) <= horizon).sort(byTime),
+  const end = addDays(today, horizon), from = addDays(today, -30)
+  const late = [], tday = [], soon = []
+  for (const t of tasks) {
+    if (isSeries(t)) {
+      const occ = occurrencesBetween(t, from, end)
+      const missed = occ.filter(d => d < today && !isDoneOn(t, d))
+      if (missed.length) late.push({ t, date: missed[missed.length - 1] })
+      for (const d of occ) if (d >= today && !isDoneOn(t, d)) (d === today ? tday : soon).push({ t, date: d })
+    } else if (!t.done && t.due_date) {
+      const e = { t, date: t.due_date }
+      if (t.due_date < today) late.push(e); else if (t.due_date === today) tday.push(e); else if (t.due_date <= end) soon.push(e)
+    }
   }
+  const by = (a, b) => a.date.localeCompare(b.date) || (a.t.due_time || '99').localeCompare(b.t.due_time || '99')
+  return { late: late.sort(by), today: tday.sort(by), soon: soon.sort(by) }
 }
+
 // Thống kê nhiều ngày
 export function periodStats(daily, logs, fromIso, toIso) {
   const days = []; for (let s = fromIso; s <= toIso; s = addDays(s, 1)) days.push(s)

@@ -9,8 +9,10 @@ import { lunarOf, isTraiDay, isMakeupDay } from '../lib/lunar'
 import {
   PEOPLE, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG,
   loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick,
-  addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats, REPEAT_LABEL,
+  addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
 } from '../lib/viec'
+import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
+import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
 
 const WD = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
 const WD_FULL = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy']
@@ -51,10 +53,10 @@ function SetRow({ title, sub, children }) {
   return <div className="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
     <div className="flex-1"><div className="text-[15px] font-medium text-gray-800">{title}</div>{sub && <div className="text-xs text-gray-500">{sub}</div>}</div>{children}</div>
 }
-function UpRow({ t, tag, cls, onOpen }) {
-  return <button onClick={() => onOpen(t.due_date)} className="w-full flex items-center gap-2.5 py-3 border-b border-gray-100 last:border-0 text-left active:bg-gray-50">
+function UpRow({ t, date, tag, cls, onOpen }) {
+  return <button onClick={() => onOpen(date)} className="w-full flex items-center gap-2.5 py-3 border-b border-gray-100 last:border-0 text-left active:bg-gray-50">
     <span className={`text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap min-w-[72px] text-center ${cls}`}>{tag}</span>
-    <span className="flex-1 text-sm text-gray-800">{t.title}{t.shared && ' 👥'}</span>
+    <span className="flex-1 text-sm text-gray-800">{t.title}{isSeries(t) && ' ↻'}{t.shared && ' 👥'}</span>
     {t.due_time && <span className="text-xs text-gray-500">{t.due_time}</span>}
   </button>
 }
@@ -155,6 +157,16 @@ export default function Viec() {
     return () => document.removeEventListener('visibilitychange', onVis)
   }, [load])
 
+  const [pushLost, setPushLost] = useState(false)
+  useEffect(() => {                                // đổi người trên máy này → thông báo đi theo người mới
+    if (who) moveSubscription(who).catch(() => {})
+  }, [who])
+  useEffect(() => {                                // đã cho phép mà mất đăng ký (iPhone hay bị sau cập nhật) → nhắc bật lại
+    if (!who || view !== 'main') return
+    const sp = pushSupport()
+    if (sp.supported && sp.permission === 'granted') isRegistered().then(r => setPushLost(!r)).catch(() => {})
+    else setPushLost(false)
+  }, [who, view])
   const running = useMemo(() => runningLog(data.logs, who), [data.logs, who])
   useEffect(() => {                                       // đồng hồ chạy thì cập nhật mỗi 15 giây
     if (!running) return
@@ -181,10 +193,9 @@ export default function Viec() {
   const addTask = (fields) => run(async () => { const t = await createTask({ owner: who, ...fields }); patch('tasks', ts => [...ts, t]) })
   const editTask = (id, fields) => run(async () => { const t = await updateTask(id, fields); patch('tasks', ts => ts.map(x => x.id === id ? t : x)) })
   const removeTask = (id) => run(async () => { await deleteTask(id); patch('tasks', ts => ts.filter(x => x.id !== id)) }, 'Đã xoá')
-  const tick = (task) => run(async () => {
-    const { updated, next } = await toggleTask(task)
-    patch('tasks', ts => [...ts.map(x => x.id === task.id ? updated : x), ...(next ? [next] : [])])
-    if (next) toast.success(`Đã lên lịch lần tới: ${dm(next.due_date)}`)
+  const tick = (task, iso) => run(async () => {
+    const { updated } = await toggleTask(task, iso)
+    patch('tasks', ts => ts.map(x => x.id === task.id ? updated : x))
   })
   const start = (d) => run(async () => {
     const log = await startTimer(d, who, running)
@@ -237,6 +248,7 @@ export default function Viec() {
     <div className="pb-6">
       {header}
       <div className="max-w-2xl mx-auto px-3 pt-2">
+        {pushLost && <button onClick={() => setView('set')} className="w-full mb-2 text-left text-sm bg-amber-50 text-amber-800 rounded-xl px-3 py-2.5">🔕 Thông báo đang tắt trên máy này — bấm để bật lại</button>}
         <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel}/>
 
         <div className="flex gap-1.5 mt-3 mb-2 bg-gray-200/70 rounded-2xl p-1">
@@ -270,7 +282,12 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen }) {
   const first = new Date(y, m - 1, 1), start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7))
   const cells = []
   for (let i = 0; i < 42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); if (i >= 35 && d.getMonth() !== m - 1) break; cells.push(d) }
-  const byDay = useMemo(() => { const o = {}; tasks.forEach(t => { if (t.due_date) (o[t.due_date] = o[t.due_date] || []).push(t) }); return o }, [tasks])
+  const from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
+  const byDay = useMemo(() => {                         // mọi lần lặp rơi vào khung đang xem
+    const o = {}
+    tasks.forEach(t => occurrencesBetween(t, from, to).forEach(d => (o[d] = o[d] || []).push({ t, done: isDoneOn(t, d) })))
+    return o
+  }, [tasks, from, to])
   const midL = lunarOf(`${month}-15`)
   const traiN = cells.filter(d => d.getMonth() === m - 1 && isTraiDay(getLocalDateString(d), cfg)).length
   const shift = n => { const d = new Date(y, m - 1 + n, 1); setMonth(getLocalDateString(d).slice(0, 7)) }
@@ -289,7 +306,7 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen }) {
         {cells.map(d => {
           const iso = getLocalDateString(d), L = lunarOf(iso), out = d.getMonth() !== m - 1
           const trai = isTraiDay(iso, cfg), isToday = iso === today, ts = byDay[iso] || []
-          const open = ts.filter(t => !t.done).length
+          const open = ts.filter(x => !x.done).length
           const mark = open ? (iso < today ? 'bg-red-500' : 'bg-purple-500') : ts.length ? 'bg-emerald-400' : ''
           return (
             <button key={iso} onClick={() => onOpen(iso)}
@@ -321,9 +338,9 @@ function Upcoming({ U, today, cfg, onOpen }) {
     <div>
       {nextTrai && <div className="text-[13px] text-emerald-800 bg-emerald-50 rounded-lg px-3 py-2 my-1.5">
         🌿 {nextTrai[0] === 0 ? 'Hôm nay ngày trai — ăn chay' : nextTrai[0] === 1 ? 'Mai là ngày trai' : `Ngày trai tới: ${dm(nextTrai[1])} (${nextTrai[0]} ngày nữa)`}</div>}
-      {U.late.map(t => <UpRow key={t.id} t={t} onOpen={onOpen} tag={`Quá ${daysBetween(today, t.due_date)} ngày`} cls="bg-red-100 text-red-700"/>)}
-      {U.today.map(t => <UpRow key={t.id} t={t} onOpen={onOpen} tag="Hôm nay" cls="bg-purple-100 text-purple-700"/>)}
-      {U.soon.map(t => { const n = daysBetween(t.due_date, today); return <UpRow key={t.id} t={t} onOpen={onOpen} tag={n === 1 ? 'Ngày mai' : `Còn ${n} ngày`} cls={n <= 2 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}/> })}
+      {U.late.map(({ t, date }) => <UpRow key={t.id + date} t={t} date={date} onOpen={onOpen} tag={`Quá ${daysBetween(today, date)} ngày`} cls="bg-red-100 text-red-700"/>)}
+      {U.today.map(({ t, date }) => <UpRow key={t.id + date} t={t} date={date} onOpen={onOpen} tag="Hôm nay" cls="bg-purple-100 text-purple-700"/>)}
+      {U.soon.map(({ t, date }) => { const n = daysBetween(date, today); return <UpRow key={t.id + date} t={t} date={date} onOpen={onOpen} tag={n === 1 ? 'Ngày mai' : `Còn ${n} ngày`} cls={n <= 2 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}/> })}
       {!U.late.length && !U.today.length && !U.soon.length && <p className="text-center text-sm text-gray-400 py-5">Không có việc nào trong 7 ngày tới · bấm vào một ngày để thêm</p>}
     </div>
   )
@@ -374,15 +391,71 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
   )
 }
 
+// ── BỘ CHỌN LẶP LẠI ──
+// Lựa chọn nhanh + Tuỳ chỉnh (mỗi N ngày/tuần/tháng/năm, bắt đầu, kết thúc) + xem trước các lần tới
+const PRESETS = [
+  ['', 1, 'Không lặp'], ['day', 1, 'Hằng ngày'], ['week', 1, 'Hằng tuần'], ['week', 2, '2 tuần'],
+  ['month', 1, 'Hằng tháng'], ['month', 3, '3 tháng'], ['month', 6, '6 tháng'], ['year', 1, 'Hằng năm'], ['lunar', 1, 'Mùng 1 & Rằm'],
+]
+function RepeatPicker({ value, onChange }) {
+  const v = value, set = patch => onChange({ ...v, ...patch })
+  const isPreset = !v.custom && PRESETS.some(([u, n]) => u === v.unit && (u === '' || u === 'lunar' || n === v.every))
+  const preview = v.unit ? nextOccurrences({ repeat_unit: v.unit, repeat_every: v.every, repeat_start: v.start, repeat_until: v.until || null }, v.start, 4) : []
+  return (
+    <div>
+      <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+        {PRESETS.map(([u, n, label]) => (
+          <Chip key={label} on={isPreset && v.unit === u && (u === '' || u === 'lunar' || v.every === n)}
+            onClick={() => set({ unit: u, every: n, custom: false })}>{label}</Chip>))}
+        <Chip on={!isPreset} onClick={() => set({ custom: true, unit: !v.unit || v.unit === 'lunar' ? 'week' : v.unit })}>Tuỳ chỉnh…</Chip>
+      </div>
+      {!isPreset && (
+        <div className="bg-gray-50 rounded-2xl p-3 mt-2 flex flex-col gap-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-gray-600 w-[70px]">Mỗi</span>
+            <button onClick={() => set({ every: Math.max(1, v.every - 1) })} className="w-10 h-10 rounded-full bg-white text-xl" aria-label="Bớt">−</button>
+            <span className="w-8 text-center text-lg font-semibold">{v.every}</span>
+            <button onClick={() => set({ every: Math.min(99, v.every + 1) })} className="w-10 h-10 rounded-full bg-white text-xl" aria-label="Thêm">+</button>
+            <select value={v.unit} onChange={e => set({ unit: e.target.value })}
+              className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-base bg-white">
+              {Object.entries(UNITS).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+            </select>
+          </div>
+          <label className="flex items-center gap-2"><span className="text-sm text-gray-600 w-[70px]">Bắt đầu</span>
+            <input type="date" value={v.start} onChange={e => e.target.value && set({ start: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-base bg-white"/></label>
+          <div className="flex items-center gap-2"><span className="text-sm text-gray-600 w-[70px]">Kết thúc</span>
+            <Chip on={!v.until} onClick={() => set({ until: '' })}>Không bao giờ</Chip>
+            <input type="date" value={v.until || ''} min={v.start} onChange={e => set({ until: e.target.value })}
+              className={`flex-1 min-w-0 border rounded-xl px-2 py-2 text-base bg-white ${v.until ? 'border-purple-300' : 'border-gray-200'}`}/></div>
+        </div>
+      )}
+      {v.unit && (
+        <div className="mt-2 text-[13px] text-gray-600 bg-purple-50 rounded-xl px-3 py-2">
+          <div className="font-medium text-purple-800">↻ {describe({ repeat_unit: v.unit, repeat_every: v.every, repeat_start: v.start, repeat_until: v.until || null })}</div>
+          <div className="mt-0.5">Các lần tới: {preview.length ? preview.map(dm).join(' · ') : 'không còn lần nào'}</div>
+        </div>
+      )}
+    </div>
+  )
+}
+const repeatFields = r => r.unit
+  ? { repeat_unit: r.unit, repeat_every: r.unit === 'lunar' ? 1 : r.every, repeat_start: r.start, repeat_until: r.until || null, due_date: r.start }
+  : { repeat_unit: '', repeat_every: 1, repeat_start: null, repeat_until: null }
+
 // ── BẢNG CHI TIẾT NGÀY ──
 function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
-  const [opt, setOpt] = useState({ due_time: '', repeat: '', shared: false })
+  const [opt, setOpt] = useState({ due_time: '', shared: false })
+  const [rep, setRep] = useState({ unit: '', every: 1, start: iso, until: '', custom: false })
   const [editing, setEditing] = useState(null)
   const d = pdate(iso), L = lunarOf(iso), trai = isTraiDay(iso, cfg)
-  const list = tasks.filter(t => t.due_date === iso).sort((a, b) => (a.due_time || '99').localeCompare(b.due_time || '99'))
+  const list = tasks.filter(t => occurrencesBetween(t, iso, iso).length).sort((a, b) => (a.due_time || '99').localeCompare(b.due_time || '99'))
   const ds = daily.filter(x => isDailyDay(x, iso))
-  const add = () => { const t = text.trim(); if (!t) return; onAdd({ title: t, due_date: iso, ...opt, due_time: opt.due_time || null }); setText(''); setOpt({ due_time: '', repeat: '', shared: false }) }
+  const add = () => {
+    const t = text.trim(); if (!t) return
+    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, ...repeatFields(rep) })
+    setText(''); setOpt({ due_time: '', shared: false }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
+  }
   return (
     <>
       <div className="fixed inset-0 bg-black/40 z-[60]" onClick={onClose}/>
@@ -407,26 +480,28 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
           {['', '08:00', '14:00', '20:00'].map(h => <Chip key={h} on={opt.due_time === h} onClick={() => setOpt(o => ({ ...o, due_time: h }))}>{h ? '⏰ ' + h : 'Cả ngày'}</Chip>)}
           <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
         </div>
-        <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
-          {Object.entries(REPEAT_LABEL).map(([k, v]) => <Chip key={k} on={opt.repeat === k} onClick={() => setOpt(o => ({ ...o, repeat: k }))}>{v}</Chip>)}
-        </div>
+        <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>
 
-        <div className="text-[13px] text-gray-400 mt-4 mb-1">To-do · {list.filter(t => !t.done).length} việc</div>
+        <div className="text-[13px] text-gray-400 mt-4 mb-1">To-do · {list.filter(t => !isDoneOn(t, iso)).length} việc</div>
         {list.length === 0 && <p className="text-sm text-gray-400 text-center py-4">Chưa có việc — gõ vào ô ở trên để thêm</p>}
-        {list.map(t => editing === t.id
-          ? <EditRow key={t.id} t={t} who={who} onCancel={() => setEditing(null)} onDelete={() => { onDelete(t.id); setEditing(null) }}
-              onSave={f => { onEdit(t.id, f); setEditing(null) }}/>
-          : (
-            <div key={t.id} className="flex items-center gap-3 border-b border-gray-100">
-              <button onClick={() => onTick(t)} aria-label={t.done ? 'Bỏ đánh dấu' : 'Đánh dấu xong'}
-                className={`w-8 h-8 rounded-full border-2 flex-shrink-0 flex items-center justify-center text-white ${t.done ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>{t.done && '✓'}</button>
-              <button onClick={() => setEditing(t.id)} className="flex-1 text-left py-3">
-                <div className={`text-[15px] ${t.done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
-                <div className="text-xs text-gray-400 mt-0.5">{[t.due_time && '⏰ ' + t.due_time, t.repeat && '↻ ' + REPEAT_LABEL[t.repeat],
-                  t.shared && (t.owner === who ? '👥 chung' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).join(' · ') || 'Bấm để sửa'}</div>
-              </button>
-            </div>
-          ))}
+        {list.map(t => {
+          const done = isDoneOn(t, iso), next = isSeries(t) ? nextOccurrences(t, addDays(iso, 1), 1)[0] : null
+          return editing === t.id
+            ? <EditRow key={t.id} t={t} who={who} onCancel={() => setEditing(null)} onDelete={() => { onDelete(t.id); setEditing(null) }}
+                onSave={f => { onEdit(t.id, f); setEditing(null) }}/>
+            : (
+              <div key={t.id} className="flex items-center gap-3 border-b border-gray-100">
+                <button onClick={() => onTick(t, iso)} aria-label={done ? 'Bỏ đánh dấu' : 'Đánh dấu xong'}
+                  className={`w-8 h-8 rounded-full border-2 flex-shrink-0 flex items-center justify-center text-white ${done ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>{done && '✓'}</button>
+                <button onClick={() => setEditing(t.id)} className="flex-1 text-left py-3">
+                  <div className={`text-[15px] ${done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
+                  <div className="text-xs text-gray-400 mt-0.5">{[t.due_time && '⏰ ' + t.due_time,
+                    t.shared && (t.owner === who ? '👥 chung' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).join(' · ') || (isSeries(t) ? '' : 'Bấm để sửa')}</div>
+                  {isSeries(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {describe(t)}{next ? ` · lần tới ${dm(next)}` : ' · lần cuối'}</div>}
+                </button>
+              </div>
+            )
+        })}
 
         {ds.length > 0 && iso <= today && <>
           <div className="text-[13px] text-gray-400 mt-4 mb-1">Daily {iso === today ? 'hôm nay' : 'ngày này'}</div>
@@ -444,28 +519,37 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
 }
 
 function EditRow({ t, who, onSave, onCancel, onDelete }) {
-  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', repeat: t.repeat || '', shared: t.shared })
+  const series = isSeries(t)
+  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared })
+  const [rep, setRep] = useState(series
+    ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
+    : { unit: '', every: 1, start: t.due_date, until: '', custom: false })
+  const [confirmDel, setConfirmDel] = useState(false)
   const canShare = t.owner === who
+  const save = () => {
+    if (!f.title.trim()) return
+    const base = { title: f.title.trim(), due_time: f.due_time || null, shared: f.shared }
+    // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
+    onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date, ...repeatFields(rep) })
+  }
   return (
     <div className="bg-gray-50 rounded-2xl p-3 my-2 flex flex-col gap-2">
       <input value={f.title} onChange={e => setF({ ...f, title: e.target.value })} className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
       <div className="flex gap-2">
-        <input type="date" value={f.due_date || ''} onChange={e => e.target.value && setF({ ...f, due_date: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
-        <select value={f.due_time} onChange={e => setF({ ...f, due_time: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white">
+        {!rep.unit && <input type="date" value={f.due_date || ''} onChange={e => e.target.value && setF({ ...f, due_date: e.target.value })}
+          className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base" aria-label="Ngày"/>}
+        <select value={f.due_time} onChange={e => setF({ ...f, due_time: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white" aria-label="Giờ">
           {[...new Set([...TIMES, f.due_time])].map(x => <option key={x} value={x}>{x || 'Cả ngày'}</option>)}
         </select>
+        {canShare && <Chip on={f.shared} onClick={() => setF({ ...f, shared: !f.shared })}>👥 Chung</Chip>}
       </div>
-      <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
-        {Object.entries(REPEAT_LABEL).map(([k, v]) => <button key={k} onClick={() => setF({ ...f, repeat: k })}
-          className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap ${f.repeat === k ? 'bg-purple-100 text-purple-800' : 'bg-white text-gray-600'}`}>{v}</button>)}
-        {canShare && <button onClick={() => setF({ ...f, shared: !f.shared })}
-          className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap ${f.shared ? 'bg-purple-100 text-purple-800' : 'bg-white text-gray-600'}`}>👥 Chung</button>}
-      </div>
+      <RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date } : r)}/>
+      {series && <p className="text-xs text-gray-500">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
       <div className="flex gap-2">
-        {canShare && <button onClick={onDelete} className="flex-1 py-2.5 rounded-xl bg-white text-red-600 text-sm">Xoá</button>}
+        {canShare && <button onClick={() => series && !confirmDel ? setConfirmDel(true) : onDelete()}
+          className={`flex-1 py-2.5 rounded-xl text-sm ${confirmDel ? 'bg-red-600 text-white' : 'bg-white text-red-600'}`}>{confirmDel ? 'Xoá cả chuỗi?' : 'Xoá'}</button>}
         <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl bg-white text-gray-600 text-sm">Huỷ</button>
-        <button onClick={() => f.title.trim() && onSave({ ...f, title: f.title.trim(), due_time: f.due_time || null })}
-          className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">Lưu</button>
+        <button onClick={save} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">Lưu</button>
       </div>
     </div>
   )
@@ -529,6 +613,55 @@ function StatsPage({ daily, logs, today, now, onBack }) {
   )
 }
 
+
+// ── THÔNG BÁO ──
+const PREF_TIMES = ['06:00', '06:30', '07:00', '07:30', '08:00', '20:30', '21:00', '21:30', '22:00']
+function NotifySection({ who }) {
+  const toast = useToast()
+  const [sp] = useState(pushSupport)
+  const [on, setOn] = useState(null)               // null = đang kiểm tra
+  const [prefs, setPrefs] = useState(DEFAULT_PREFS)
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    isRegistered().then(setOn).catch(() => setOn(false))
+    getPrefs(who).then(setPrefs).catch(() => {})
+  }, [who])
+  const act = async (fn, ok) => { if (busy) return; setBusy(true); try { await fn(); ok && toast.success(ok) } catch (e) { toast.error(e.message) } setBusy(false) }
+  const upd = p => { setPrefs(p); savePrefs(who, p).catch(e => toast.error('Lỗi: ' + e.message)) }
+  const status = !sp.supported
+    ? (sp.ios ? 'iPhone: cần thêm app vào màn hình chính (Chia sẻ → Thêm vào MH chính) rồi mở từ biểu tượng đó' : 'Trình duyệt này không hỗ trợ thông báo')
+    : sp.permission === 'denied' ? 'Điện thoại đang chặn thông báo của app — vào Cài đặt điện thoại để cho phép'
+    : on === null ? 'Đang kiểm tra…' : on ? `Máy này đang nhận thông báo của ${PEOPLE[who]}` : 'Máy này chưa bật thông báo'
+  const dis = !prefs.all
+  return (
+    <div className="bg-white rounded-2xl px-4">
+      <div className="text-xs text-gray-400 pt-3">Thông báo</div>
+      <div className={`text-sm mt-2 rounded-xl px-3 py-2.5 ${on ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>{on ? '🔔 ' : '🔕 '}{status}</div>
+      {sp.supported && sp.permission !== 'denied' && (
+        <div className="flex gap-2 py-3">
+          {!on && <button disabled={busy} onClick={() => act(async () => { await enablePush(who); setOn(true) }, 'Đã bật thông báo')}
+            className="flex-1 py-3 rounded-xl bg-purple-600 text-white font-semibold disabled:opacity-50">Bật thông báo</button>}
+          {on && <button disabled={busy} onClick={() => act(sendTest, 'Đã gửi — xem thông báo trên máy')} className="flex-1 py-3 rounded-xl bg-purple-50 text-purple-800 font-semibold disabled:opacity-50">Gửi thử</button>}
+          {on && <button disabled={busy} onClick={() => act(async () => { await disablePush(); setOn(false) }, 'Đã tắt trên máy này')} className="flex-1 py-3 rounded-xl bg-gray-100 text-gray-600 disabled:opacity-50">Tắt trên máy này</button>}
+        </div>
+      )}
+      <SetRow title="Nhận nhắc nhở" sub={`Áp dụng cho ${PEOPLE[who]} trên mọi máy`}><Switch on={prefs.all} onClick={() => upd({ ...prefs, all: !prefs.all })} label="Nhận nhắc nhở"/></SetRow>
+      <div className={dis ? 'opacity-40 pointer-events-none' : ''}>
+        <SetRow title="To-do có giờ" sub="Báo đúng giờ hẹn"><Switch on={prefs.todo} onClick={() => upd({ ...prefs, todo: !prefs.todo })} label="To-do có giờ"/></SetRow>
+        <SetRow title="Daily tới giờ" sub="Daily có bật nhắc và có giờ bắt đầu"><Switch on={prefs.daily} onClick={() => upd({ ...prefs, daily: !prefs.daily })} label="Daily tới giờ"/></SetRow>
+        <SetRow title="Quên bấm kết thúc" sub="Khi đồng hồ chạy quá 3 lần mục tiêu"><Switch on={prefs.forgot} onClick={() => upd({ ...prefs, forgot: !prefs.forgot })} label="Quên bấm kết thúc"/></SetRow>
+        <SetRow title="Tóm tắt buổi sáng" sub="Việc và Daily trong ngày">
+          <select value={prefs.moAt} onChange={e => upd({ ...prefs, moAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white mr-2">{PREF_TIMES.slice(0, 5).map(x => <option key={x}>{x}</option>)}</select>
+          <Switch on={prefs.mo} onClick={() => upd({ ...prefs, mo: !prefs.mo })} label="Tóm tắt buổi sáng"/></SetRow>
+        <SetRow title="Tổng kết cuối ngày" sub="Làm được gì, bao lâu, bỏ lỡ gì">
+          <select value={prefs.evAt} onChange={e => upd({ ...prefs, evAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white mr-2">{PREF_TIMES.slice(5).map(x => <option key={x}>{x}</option>)}</select>
+          <Switch on={prefs.ev} onClick={() => upd({ ...prefs, ev: !prefs.ev })} label="Tổng kết cuối ngày"/></SetRow>
+      </div>
+      <p className="text-xs text-gray-400 pb-3">Ngày trai nhắc theo giờ đặt ở mục Ngày trai, gửi cho cả hai người.</p>
+    </div>
+  )
+}
+
 // ── CÀI ĐẶT ──
 function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack }) {
   const toast = useToast()
@@ -546,10 +679,11 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack })
           <div className="text-xs text-gray-400 pt-3">Ngày trai · chung cả nhà</div>
           <SetRow title="Đánh dấu 10 ngày trai" sub="Mùng 1, 8, 14, 15, 18, 23, 24, 28, 29, 30 âm"><Switch on={cfg.trai} onClick={() => onCfg({ ...cfg, trai: !cfg.trai })} label="Đánh dấu ngày trai"/></SetRow>
           <SetRow title="Tháng thiếu ăn bù ngày 27" sub="Tháng âm 29 ngày không có ngày 30"><Switch on={cfg.bu27} onClick={() => onCfg({ ...cfg, bu27: !cfg.bu27 })} label="Ăn bù ngày 27"/></SetRow>
-          <SetRow title="Nhắc ngày trai lúc" sub="Dùng khi bật thông báo (bước sau)">
+          <SetRow title="Nhắc ngày trai lúc" sub="Gửi cho cả hai người">
             <select value={cfg.traiAt} onChange={e => onCfg({ ...cfg, traiAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white">
               {['05:00', '05:30', '06:00', '06:30', '07:00'].map(x => <option key={x}>{x}</option>)}</select></SetRow>
         </div>
+        <NotifySection who={who}/>
         <div className="bg-white rounded-2xl px-4">
           <div className="flex items-center pt-3"><span className="text-xs text-gray-400 flex-1">Daily của {PEOPLE[who]}</span>
             <button onClick={() => onEditDaily(null)} className="text-sm text-purple-700 font-medium py-1">+ Thêm</button></div>

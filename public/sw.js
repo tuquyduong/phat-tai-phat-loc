@@ -99,32 +99,34 @@ self.addEventListener('sync', (event) => {
   }
 });
 
-// Push Notification (cho tương lai)
+// ── THÔNG BÁO ĐẨY (tab Việc) ──
+// Máy chủ gửi { title, body, tag, url }. Nội dung hỏng thì vẫn hiện thông báo chung,
+// vì iPhone sẽ tắt quyền thông báo nếu nhận tin mà không hiện gì.
 self.addEventListener('push', (event) => {
-  if (event.data) {
-    const data = event.data.json();
-    
-    const options = {
-      body: data.body,
-      icon: '/icons/icon-192x192.png',
-      badge: '/icons/icon-72x72.png',
-      vibrate: [100, 50, 100],
-      data: {
-        url: data.url || '/'
-      }
-    };
+  let data = {}
+  try { data = event.data ? event.data.json() : {} }
+  catch { data = { body: event.data ? event.data.text() : '' } }
+  const title = data.title || 'Chi Mai'
+  event.waitUntil(self.registration.showNotification(title, {
+    body: data.body || '',
+    icon: '/icons/icon-192.png',
+    badge: '/icons/favicon-32.png',
+    tag: data.tag || undefined,            // cùng tag thì thay thế, không chồng thêm
+    renotify: !!data.tag,
+    vibrate: [100, 50, 100],
+    data: { url: data.url || '/?tab=viec' },
+  }))
+})
 
-    event.waitUntil(
-      self.registration.showNotification(data.title, options)
-    );
-  }
-});
-
-// Click notification
+// Bấm vào thông báo: mở app sẵn có (nếu đang mở) và chuyển tới tab Việc
 self.addEventListener('notificationclick', (event) => {
-  event.notification.close();
-  
-  event.waitUntil(
-    clients.openWindow(event.notification.data.url)
-  );
-});
+  event.notification.close()
+  const url = (event.notification.data && event.notification.data.url) || '/?tab=viec'
+  event.waitUntil((async () => {
+    const all = await clients.matchAll({ type: 'window', includeUncontrolled: true })
+    for (const c of all) {
+      if ('focus' in c) { c.postMessage({ type: 'open-tab', tab: 'viec' }); return c.focus() }
+    }
+    return clients.openWindow(url)
+  })())
+})

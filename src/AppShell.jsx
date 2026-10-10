@@ -16,7 +16,21 @@ import { verifySessionDetailed, hasLocalSession } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
-  const [activeModule, setActiveModule] = useState('home')
+  // Mở từ thông báo (…/?tab=viec) thì vào thẳng tab Việc
+  const [activeModule, setActiveModule] = useState(() => {
+    try {
+      if (new URLSearchParams(window.location.search).get('tab') !== 'viec') return 'home'
+      window.history.replaceState(null, '', window.location.pathname)   // bỏ ?tab=viec để tải lại không bị kéo về
+      return 'viec'
+    } catch { return 'home' }
+  })
+  // App đang mở sẵn mà bấm thông báo → Service Worker nhắn chuyển tab
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    const onMsg = e => { if (e.data?.type === 'open-tab' && e.data.tab) setActiveModule(e.data.tab) }
+    navigator.serviceWorker.addEventListener('message', onMsg)
+    return () => navigator.serviceWorker.removeEventListener('message', onMsg)
+  }, [])
   const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
   const [activeModules, setActiveModulesState] = useState(['expenses', 'lab', 'jewelry'])
 
