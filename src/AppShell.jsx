@@ -2,7 +2,7 @@
 // APP SHELL - v2 (thêm ToastProvider cho module mới)
 // App.jsx gốc KHÔNG bị sửa
 // ============================================
-import { useState, useEffect } from 'react'
+import { useState, useEffect, lazy, Suspense } from 'react'
 import App from './App'
 import { ToastProvider } from './components/Toast'
 import BottomTabs from './components/shared/BottomTabs'
@@ -10,6 +10,8 @@ import Home from './pages/Home'
 import Expenses from './pages/Expenses'
 import Lab from './pages/Lab'
 import Jewelry from './pages/Jewelry'
+// Tab Việc chỉ tải khi mở lần đầu — các tab khác không phải gánh thêm
+const Viec = lazy(() => import('./pages/Viec'))
 import { verifySessionDetailed, hasLocalSession } from './lib/supabase'
 import { getActiveModules } from './lib/config'
 
@@ -99,6 +101,12 @@ export default function AppShell() {
         return <Lab />
       case 'jewelry':
         return <Jewelry />
+      case 'viec':
+        return (
+          <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
+            <Viec />
+          </Suspense>
+        )
       default:
         return null
     }

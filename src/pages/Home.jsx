@@ -16,7 +16,8 @@ const BACKUP_TABLES = [
   'app_config', 'transactions', 'ingredients', 'formulas', 'formula_ingredients',
   'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
   'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
-  'stocks', 'stock_transactions', 'dividends'
+  'stocks', 'stock_transactions', 'dividends',
+  'viec_tasks', 'viec_daily', 'viec_logs',
 ]
 
 // Lấy MỌI bảng đang có trong database (qua hàm db_usage), gộp với danh sách cố định.
@@ -215,7 +216,8 @@ export default function Home({ onNavigate, activeModules }) {
           'ingredients', 'formulas', 'formula_ingredients',
           'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
           'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
-          'stocks', 'stock_transactions', 'dividends', 'transactions'
+          'stocks', 'stock_transactions', 'dividends', 'transactions',
+          'viec_tasks', 'viec_daily', 'viec_logs'
         ]
         // Bảng có trong file backup nhưng không nằm trong thứ tự trên → khôi phục cuối
         Object.keys(backup.tables || {}).forEach(t => { if (!restoreOrder.includes(t)) restoreOrder.push(t) })
