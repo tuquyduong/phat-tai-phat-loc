@@ -14,32 +14,23 @@ function groupVN(n) {
   return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 }
 
-// Đầy đủ, dùng ở chỗ cần đối chiếu: 8.750.000đ
+// Một định dạng tiền duy nhất cho cả app: đầy đủ, nhóm ba số bằng dấu chấm — 8.750.000đ
+// Dưới 1.000đ giữ tối đa 2 số lẻ (đơn giá nguyên liệu như 0,02đ/g), từ 1.000đ trở lên làm tròn tới đồng.
 export function moneyFull(amount) {
   const x = Number(amount)
-  if (!amount && amount !== 0 || !isFinite(x)) return '0đ'
-  const n = Math.round(Math.abs(x))
+  if ((!amount && amount !== 0) || !isFinite(x)) return '0đ'
+  const a = Math.abs(x)
+  if (a < 1000) {
+    const r = Math.round(a * 100) / 100
+    if (r === 0) return '0đ'
+    if (r < 1000) return (x < 0 ? '-' : '') + String(r).replace('.', ',') + 'đ'
+  }
+  const n = Math.round(a)
   return (x < 0 && n > 0 ? '-' : '') + groupVN(n) + 'đ'
 }
 
-// Gọn nhưng KHÔNG mất số: 8tr750 · 17tr500 · 690k · 45k.
-// Chỗ nào không gọn được mà vẫn đúng (lẻ đồng, từ 1 tỷ) thì hiện đầy đủ.
-export function moneyShort(amount) {
-  const x = Number(amount)
-  if (!amount && amount !== 0 || !isFinite(x)) return '0đ'
-  const a = Math.round(Math.abs(x) * 100) / 100     // làm tròn tới 2 số lẻ trước khi xét
-  if (a === 0) return '0đ'                          // tránh "-0đ"
-  const sign = x < 0 ? '-' : ''
-  if (a < 1000) {                                   // dưới nghìn: giữ tối đa 2 số lẻ
-    return sign + String(a).replace('.', ',') + 'đ'
-  }
-  const n = Math.round(a)
-  if (n >= 1e9 || n % 1000 !== 0) return moneyFull(x)
-  const tr = Math.floor(n / 1e6)
-  const k  = (n % 1e6) / 1000
-  if (tr === 0) return sign + k + 'k'
-  return sign + tr + 'tr' + (k ? String(k).padStart(3, '0') : '')
-}
+// Trước đây là kiểu gọn (8tr750); nay dùng chung kiểu đầy đủ để cả app hiển thị thống nhất
+export function moneyShort(amount) { return moneyFull(amount) }
 
 // Tên cũ — giữ lại để mọi chỗ đang gọi tự dùng cách mới
 export function formatMoney(amount)     { return moneyShort(amount) }

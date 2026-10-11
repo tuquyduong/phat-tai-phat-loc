@@ -21,7 +21,6 @@ const WD_FULL = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ N�
 const AVA = { linh: 'bg-blue-100 text-blue-800', mai: 'bg-pink-100 text-pink-800' }
 const EMOJI = ['📿', '💻', '📖', '🀄', '🧪', '🧘', '🏃', '🍵', '📸', '💰', '🎯', '⭐']
 const COLORS = ['#7F77DD', '#378ADD', '#1D9E75', '#639922', '#EF9F27', '#D85A30', '#D4537E', '#888780']
-const TIMES = ['', '07:00', '08:00', '09:00', '10:00', '14:00', '16:00', '18:00', '20:00', '21:00']
 const pdate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
 const dm = s => { const d = pdate(s); return `${d.getDate()}/${d.getMonth() + 1}` }
 const du = m => m >= 60 ? Math.floor(m / 60) + 'g' + (m % 60 ? String(m % 60).padStart(2, '0') : '') : m + 'p'
@@ -453,6 +452,20 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
   )
 }
 
+
+// ── CHỌN GIỜ: cả ngày, giờ tuỳ ý tới từng phút, hoặc bấm nhanh giờ hay dùng ──
+const QUICK_TIMES = ['07:00', '08:00', '12:00', '14:00', '17:00', '20:00']
+function TimePicker({ value, onChange }) {
+  return (
+    <div className="flex gap-1.5 items-center overflow-x-auto no-scrollbar">
+      <Chip on={!value} onClick={() => onChange('')}>Cả ngày</Chip>
+      <input type="time" value={value || ''} onChange={e => onChange(e.target.value)} aria-label="Giờ tuỳ chỉnh"
+        className={`flex-shrink-0 w-[112px] min-w-0 block appearance-none rounded-full px-3 py-1.5 text-base text-center border ${value ? 'bg-purple-100 text-purple-800 border-purple-300' : 'bg-gray-100 text-gray-600 border-transparent'}`}/>
+      {QUICK_TIMES.map(t => <Chip key={t} on={value === t} onClick={() => onChange(t)}>{t}</Chip>)}
+    </div>
+  )
+}
+
 // ── BỘ CHỌN LẶP LẠI ──
 // Lựa chọn nhanh + Tuỳ chỉnh (mỗi N ngày/tuần/tháng/năm, bắt đầu, kết thúc) + xem trước các lần tới
 const PRESETS = [
@@ -548,8 +561,8 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
             placeholder="+ Thêm việc cho ngày này…" className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
           <button onClick={add} className="bg-purple-600 text-white rounded-xl px-4 font-semibold">Thêm</button>
         </div>
-        <div className="flex gap-1.5 overflow-x-auto pt-2 no-scrollbar">
-          {['', '08:00', '14:00', '20:00'].map(h => <Chip key={h} on={opt.due_time === h} onClick={() => setOpt(o => ({ ...o, due_time: h }))}>{h ? '⏰ ' + h : 'Cả ngày'}</Chip>)}
+        <div className="pt-2"><TimePicker value={opt.due_time} onChange={h => setOpt(o => ({ ...o, due_time: h }))}/></div>
+        <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
           <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
         </div>
         <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>
@@ -629,14 +642,12 @@ function EditRow({ t, who, projects = [], tasks = [], onSave, onCancel, onDelete
   return (
     <div className="bg-gray-50 rounded-2xl p-3 my-2 flex flex-col gap-2">
       <input value={f.title} onChange={e => setF({ ...f, title: e.target.value })} className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
-      <div className="flex gap-2">
+      {(!rep.unit || canShare) && <div className="flex gap-2">
         {!rep.unit && <input type="date" value={f.due_date || ''} onChange={e => (e.target.value || f.project_id) && setF({ ...f, due_date: e.target.value || null })}
           className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-base bg-white" aria-label="Ngày"/>}
-        <select value={f.due_time} onChange={e => setF({ ...f, due_time: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white" aria-label="Giờ">
-          {[...new Set([...TIMES, f.due_time])].map(x => <option key={x} value={x}>{x || 'Cả ngày'}</option>)}
-        </select>
         {canShare && <Chip on={f.shared} onClick={() => setF({ ...f, shared: !f.shared })}>👥 Chung</Chip>}
-      </div>
+      </div>}
+      <TimePicker value={f.due_time} onChange={h => setF({ ...f, due_time: h })}/>
       {!rep.unit && f.project_id && f.due_date && <button onClick={() => setF({ ...f, due_date: null })} className="self-start text-xs text-gray-500 underline">Bỏ ngày (chỉ để trong dự án)</button>}
       <RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/>
       {projects.length > 0 && <div className="flex gap-2">
@@ -866,7 +877,6 @@ function StatsPage({ daily, logs, today, now, onBack }) {
 
 
 // ── THÔNG BÁO ──
-const PREF_TIMES = ['06:00', '06:30', '07:00', '07:30', '08:00', '20:30', '21:00', '21:30', '22:00']
 function NotifySection({ who }) {
   const toast = useToast()
   const [sp] = useState(pushSupport)
@@ -902,10 +912,10 @@ function NotifySection({ who }) {
         <SetRow title="Daily tới giờ" sub="Daily có bật nhắc và có giờ bắt đầu"><Switch on={prefs.daily} onClick={() => upd({ ...prefs, daily: !prefs.daily })} label="Daily tới giờ"/></SetRow>
         <SetRow title="Quên bấm kết thúc" sub="Khi đồng hồ chạy quá 3 lần mục tiêu"><Switch on={prefs.forgot} onClick={() => upd({ ...prefs, forgot: !prefs.forgot })} label="Quên bấm kết thúc"/></SetRow>
         <SetRow title="Tóm tắt buổi sáng" sub="Việc và Daily trong ngày">
-          <select value={prefs.moAt} onChange={e => upd({ ...prefs, moAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white mr-2">{PREF_TIMES.slice(0, 5).map(x => <option key={x}>{x}</option>)}</select>
+          <input type="time" value={prefs.moAt} onChange={e => e.target.value && upd({ ...prefs, moAt: e.target.value })} aria-label="Giờ tóm tắt sáng" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center mr-2"/>
           <Switch on={prefs.mo} onClick={() => upd({ ...prefs, mo: !prefs.mo })} label="Tóm tắt buổi sáng"/></SetRow>
         <SetRow title="Tổng kết cuối ngày" sub="Làm được gì, bao lâu, bỏ lỡ gì">
-          <select value={prefs.evAt} onChange={e => upd({ ...prefs, evAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white mr-2">{PREF_TIMES.slice(5).map(x => <option key={x}>{x}</option>)}</select>
+          <input type="time" value={prefs.evAt} onChange={e => e.target.value && upd({ ...prefs, evAt: e.target.value })} aria-label="Giờ tổng kết" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center mr-2"/>
           <Switch on={prefs.ev} onClick={() => upd({ ...prefs, ev: !prefs.ev })} label="Tổng kết cuối ngày"/></SetRow>
       </div>
       <p className="text-xs text-gray-400 pb-3">Ngày trai nhắc theo giờ đặt ở mục Ngày trai, gửi cho cả hai người.</p>
@@ -931,8 +941,7 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
           <SetRow title="Đánh dấu 10 ngày trai" sub="Mùng 1, 8, 14, 15, 18, 23, 24, 28, 29, 30 âm"><Switch on={cfg.trai} onClick={() => onCfg({ ...cfg, trai: !cfg.trai })} label="Đánh dấu ngày trai"/></SetRow>
           <SetRow title="Tháng thiếu ăn bù ngày 27" sub="Tháng âm 29 ngày không có ngày 30"><Switch on={cfg.bu27} onClick={() => onCfg({ ...cfg, bu27: !cfg.bu27 })} label="Ăn bù ngày 27"/></SetRow>
           <SetRow title="Nhắc ngày trai lúc" sub="Gửi cho cả hai người">
-            <select value={cfg.traiAt} onChange={e => onCfg({ ...cfg, traiAt: e.target.value })} className="border border-gray-200 rounded-lg px-2 py-2 text-base bg-white">
-              {['05:00', '05:30', '06:00', '06:30', '07:00'].map(x => <option key={x}>{x}</option>)}</select></SetRow>
+            <input type="time" value={cfg.traiAt} onChange={e => e.target.value && onCfg({ ...cfg, traiAt: e.target.value })} aria-label="Giờ nhắc ngày trai" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center"/></SetRow>
         </div>
         <NotifySection who={who}/>
         <div className="bg-white rounded-2xl px-4">
