@@ -25,8 +25,7 @@ import {
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, moneyFull, fmtInput, parseInput, todayLocal,
-  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf
-} from '../lib/jewelry'
+  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf, flushPendingIntakes } from '../lib/jewelry'
 
 // ============================================
 // MAIN
@@ -99,6 +98,9 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
   }, [toast])
 
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {                                     // ghi bù các dòng sổ nhập lần trước mạng lỗi chưa ghi được
+    flushPendingIntakes().then(n => { if (n) { toast.success(`Đã ghi bù ${n} dòng sổ nhập`); loadData() } }).catch(() => {})
+  }, [])                                                // eslint-disable-line react-hooks/exhaustive-deps
 
   // Mở thẳng một món khi bấm từ lịch (tab Việc): đợi tải xong rồi mở đúng sản phẩm / đơn
   useEffect(() => {

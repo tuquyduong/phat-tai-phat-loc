@@ -5,6 +5,7 @@
 // + Stock deduction + undo
 // ============================================
 import { supabase } from './supabase'
+import { fetchAll } from './fetchAll'
 
 // ============================================
 // UNIT CONVERSION
@@ -114,8 +115,7 @@ export async function deleteLabCategory(id) {
 // NGUYÊN LIỆU
 // ============================================
 export async function getIngredients() {
-  const { data, error } = await supabase.from('ingredients').select('*').eq('is_active',true).order('name')
-  if (error) throw error; return data || []
+  return fetchAll(() => supabase.from('ingredients').select('*').eq('is_active',true).order('name'))
 }
 export async function createIngredient(item) {
   const { data, error } = await supabase.from('ingredients')
@@ -151,11 +151,10 @@ export async function getIngredient(id) {
 // CÔNG THỨC
 // ============================================
 export async function getFormulas() {
-  const { data, error } = await supabase.from('formulas').select(`
+  const data = await fetchAll(() => supabase.from('formulas').select(`
     *, items:formula_ingredients(id, quantity, unit, note, sort_order,
       ingredient:ingredients(id, name, unit, price_per_unit, stock_qty))
-  `).order('is_favorite',{ascending:false}).order('sort_order',{ascending:true}).order('updated_at',{ascending:false})
-  if (error) throw error
+  `).order('is_favorite',{ascending:false}).order('sort_order',{ascending:true}).order('updated_at',{ascending:false}))
   return (data||[]).map(f => ({ ...f, sort_order:f.sort_order||0, items:(f.items||[]).sort((a,b)=>a.sort_order-b.sort_order), steps:f.steps||[], extra_costs:f.extra_costs||[], selling_price:f.selling_price||0 }))
 }
 export async function createFormula(formula) {
@@ -246,10 +245,10 @@ export async function deleteFormulaIngredientsByFormula(formulaId) {
 // BATCHES (Lô sản xuất)
 // ============================================
 export async function getBatches(formulaId) {
-  let q = supabase.from('lab_batches').select('*').order('created_at',{ascending:false})
-  if (formulaId) q = q.eq('formula_id', formulaId)
-  const { data, error } = await q
-  if (error) throw error; return data || []
+  return fetchAll(() => {
+    let q = supabase.from('lab_batches').select('*').order('created_at',{ascending:false})
+    return formulaId ? q.eq('formula_id', formulaId) : q
+  })
 }
 
 export async function createBatch(batch) {
@@ -325,11 +324,11 @@ export async function undoDeductStock(batchId, items, ingredients) {
 // GHI CHÚ + THÍ NGHIỆM
 // ============================================
 export async function getLabNotes(formulaId = null) {
-  let q = supabase.from('lab_notes').select('*')
-    .order('is_pinned',{ascending:false}).order('created_at',{ascending:false})
-  if (formulaId) q = q.eq('formula_id', formulaId)
-  const { data, error } = await q
-  if (error) throw error
+  const data = await fetchAll(() => {
+    let q = supabase.from('lab_notes').select('*')
+      .order('is_pinned',{ascending:false}).order('created_at',{ascending:false})
+    return formulaId ? q.eq('formula_id', formulaId) : q
+  })
   return (data||[]).map(n => ({ ...n, discoveries:n.discoveries||[], changes:n.changes||'', observation:n.observation||'', rating:n.rating||'' }))
 }
 export async function createLabNote(note) {

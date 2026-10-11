@@ -2,6 +2,7 @@
 // JEWELRY LIB - Trang sức
 // ============================================
 import { supabase } from './supabase'
+import { fetchAll } from './fetchAll'
 import { moneyShort, moneyFull } from './helpers'
 
 const BUCKET = 'jewelry-images'
@@ -104,11 +105,10 @@ export function thumbUrl(url, size = 200) {
 // JEWELRY CRUD
 // ============================================
 export async function getJewelry() {
-  const { data, error } = await supabase
+  const data = await fetchAll(() => supabase
     .from('jewelry')
     .select('*, jewelry_trips(id, name)')
-    .order('created_at', { ascending: false })
-  if (error) throw error
+    .order('created_at', { ascending: false }))
   return (data || []).map(j => ({
     ...j,
     trip_name: j.jewelry_trips?.name || null,
@@ -307,13 +307,11 @@ export async function deleteJewelry(id) {
 // SALES CRUD
 // ============================================
 export async function getJewelrySales() {
-  const { data, error } = await supabase
+  return fetchAll(() => supabase
     .from('jewelry_sales')
     .select('*, jewelry(code, name, category)')
     .order('sold_at', { ascending: false })
-    .order('created_at', { ascending: false })
-  if (error) throw error
-  return data || []
+    .order('created_at', { ascending: false }))
 }
 
 // Tạo đơn — hỗ trợ cả hàng có sẵn (jewelry_id) và hàng order (item_name)
@@ -813,12 +811,11 @@ export function calcStats(jewelry, sales) {
 }
 
 export async function getSuppliers() {
-  const { data, error } = await supabase
+  const data = await fetchAll(() => supabase
     .from('jewelry')
     .select('supplier_name, supplier_contact')
     .not('supplier_name', 'is', null)
-    .order('supplier_name')
-  if (error) throw error
+    .order('supplier_name'))
   // Group by supplier_name, lấy contact mới nhất
   const map = {}
   ;(data || []).forEach(j => {
@@ -897,10 +894,7 @@ export const MOUNT_TYPES = ['Ổ nhẫn', 'Khuyên tai', 'Vòng', 'Lắc', 'Mặ
 export const GOLD_TYPES  = ['18k', '24k', '14k', '10k', 'Bạc 925', 'Khác']
 
 export async function getMounts() {
-  const { data, error } = await supabase
-    .from('jewelry_mounts').select('*').order('created_at', { ascending: false })
-  if (error) throw error
-  return data || []
+  return fetchAll(() => supabase.from('jewelry_mounts').select('*').order('created_at', { ascending: false }))
 }
 
 export async function createMount(m) {
@@ -1175,7 +1169,7 @@ export async function logIntake({ jewelry_id, qty, cost_price, supplier_name,
                                   trip_id, source = 'new', note }) {
   const n = nonNeg(qty)
   if (!jewelry_id || n <= 0) return null
-  const { data, error } = await supabase.from('jewelry_intakes').insert([{
+  const row = {
     jewelry_id,
     qty:           n,
     cost_price:    cost_price != null && cost_price !== '' ? nonNeg(cost_price) : null,
@@ -1184,13 +1178,38 @@ export async function logIntake({ jewelry_id, qty, cost_price, supplier_name,
     source,
     note:          note?.trim() || null,
     intake_at:     new Date().toISOString(),
-  }]).select().single()
-  if (error) {
-    // Ghi sổ hỏng không được chặn việc nhập hàng
-    console.warn('Không ghi được sổ nhập:', error.message)
-    return null
   }
-  return data
+  // Ghi sổ hỏng không được chặn việc nhập hàng — nhưng cũng KHÔNG được mất dòng sổ:
+  // thử lại một lần; vẫn lỗi thì cất vào hàng chờ trên máy, lần sau mở Trang sức tự ghi bù.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const { data, error } = await supabase.from('jewelry_intakes').insert([row]).select().single()
+      if (!error) return data
+      console.warn('Không ghi được sổ nhập:', error.message)
+    } catch (e) { console.warn('Không ghi được sổ nhập:', e?.message) }
+    if (attempt === 0) await new Promise(r => setTimeout(r, 800))
+  }
+  pendingIntakes.push(row)
+  return null
+}
+
+// Hàng chờ sổ nhập (lưu trên máy) — ghi bù khi mạng ổn
+const PENDING_KEY = 'jewelry_pending_intakes'
+const pendingIntakes = {
+  read() { try { return JSON.parse(localStorage.getItem(PENDING_KEY) || '[]') } catch { return [] } },
+  write(a) { try { a.length ? localStorage.setItem(PENDING_KEY, JSON.stringify(a)) : localStorage.removeItem(PENDING_KEY) } catch { /* máy không cho lưu */ } },
+  push(row) { const a = this.read(); a.push(row); this.write(a) },
+}
+// Gọi khi mở tab Trang sức: trả về số dòng đã ghi bù
+export async function flushPendingIntakes() {
+  const a = pendingIntakes.read()
+  if (!a.length) return 0
+  const left = []
+  for (const row of a) {
+    try { const { error } = await supabase.from('jewelry_intakes').insert([row]); if (error) left.push(row) } catch { left.push(row) }
+  }
+  pendingIntakes.write(left)
+  return a.length - left.length
 }
 
 // Lịch sử nhập của 1 sản phẩm

@@ -2,7 +2,7 @@
 // EXPENSES PAGE - v3
 // + TM/CK/TD, Lũy kế, Chuyển nội bộ, Trả nợ TD
 // ============================================
-import { useState, useEffect, useMemo, useCallback } from 'react'
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import {
   RefreshCw, ChevronLeft, ChevronRight, Trash2,
   ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2, ArrowLeftRight, CreditCard,
@@ -14,7 +14,9 @@ import { formatMoney, moneyFull, getLocalDateString, stripVN } from '../lib/help
 import {
   getExpenseCategories, createExpenseCategory, updateExpenseCategory, deleteExpenseCategory,
   getTransactions, createTransaction, updateTransaction, deleteTransaction,
-  getExpenseSummary, getRunningBalance, getInitialBalances, saveInitialBalances
+  getExpenseSummary, getRunningBalance, getInitialBalances, saveInitialBalances,
+  getCards, saveCard, archiveCard, getUnassignedCredit, suggestCard, assignCard, reconcile, previewReconcile, closeCardBooks, getCardCutoff,
+  getReconState, backdateWarnings, warnText, getHealth, convertToPayCredit, keepAsExpense
 } from '../lib/expenses'
 
 // Helpers
@@ -74,16 +76,21 @@ export default function Expenses() {
   const [showTransfer, setShowTransfer] = useState(false)
   const [showPayCredit, setShowPayCredit] = useState(false)
   const [showInitBal, setShowInitBal] = useState(false)
+  const [cards, setCards] = useState([])
+  const [showCards, setShowCards] = useState(false)
+  const [recon, setRecon] = useState(null)              // { kind, cardId } đang đối soát
+  const [reconLast, setReconLast] = useState({})        // mốc đối soát gần nhất của từng tài khoản
+  const [showHealth, setShowHealth] = useState(false)
 
   const loadData = useCallback(async () => {
     setLoading(true)
     try {
       const { start, end } = getMonthRange(currentMonth)
-      const [cats,txs,sum,running,initBal] = await Promise.all([
+      const [cats,txs,sum,running,initBal,cds,rl] = await Promise.all([
         getExpenseCategories(), getTransactions({startDate:start,endDate:end}),
-        getExpenseSummary(start,end), getRunningBalance(start), getInitialBalances()
+        getExpenseSummary(start,end), getRunningBalance(start), getInitialBalances(), getCards(), getReconState()
       ])
-      setCategories(cats); setTransactions(txs); setSummary(sum); setRunningBal(running); setInitialBal(initBal)
+      setCategories(cats); setTransactions(txs); setSummary(sum); setRunningBal(running); setInitialBal(initBal); setCards(cds); setReconLast(rl)
     } catch(err) { console.error(err); toast.error('Lỗi tải dữ liệu') }
     finally { setLoading(false) }
   }, [currentMonth, toast])
@@ -95,27 +102,31 @@ export default function Expenses() {
     cash: initialBal.cash + runningBal.cash,
     transfer: initialBal.transfer + runningBal.transfer,
     credit: initialBal.credit + runningBal.credit, // nợ TD
+    cards: { ...(runningBal.cards || {}), none: ((runningBal.cards || {}).none || 0) + initialBal.credit },
     get total() { return this.cash + this.transfer - this.credit }
   }), [initialBal, runningBal])
 
   const monthMoves = useMemo(() => {
-    let c2t=0, t2c=0, payCreditCash=0, payCreditTransfer=0, creditSpend=0
+    let c2t=0, t2c=0, payCreditCash=0, payCreditTransfer=0, creditSpend=0, adjCash=0, adjTransfer=0, adjCredit=0
+    const cardMv = {}, card = (id, d) => { const k = id || 'none'; cardMv[k] = (cardMv[k] || 0) + d }
     transactions.forEach(t => {
       const amt = Number(t.amount), m = t.payment_method||'cash'
       if (t.type==='transfer') { if(m==='cash') c2t+=amt; else t2c+=amt }
-      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else payCreditTransfer+=amt }
-      else if (t.type==='expense' && m==='credit') creditSpend+=amt
+      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else payCreditTransfer+=amt; card(t.card_id, -amt) }
+      else if (t.type==='expense' && m==='credit') { creditSpend+=amt; card(t.card_id, amt) }
+      else if (t.type==='adjust') { if(m==='cash') adjCash+=amt; else if(m==='transfer') adjTransfer+=amt; else if(m==='credit') { adjCredit+=amt; card(t.card_id, amt) } }
     })
-    return { c2t, t2c, payCreditCash, payCreditTransfer, creditSpend }
+    return { c2t, t2c, payCreditCash, payCreditTransfer, creditSpend, adjCash, adjTransfer, adjCredit, cardMv }
   }, [transactions])
 
   const closeBal = useMemo(() => {
     const m = summary.byMethod||{cash:{income:0,expense:0},transfer:{income:0,expense:0},credit:{income:0,expense:0}}
     const mv = monthMoves
     return {
-      cash: openBal.cash + m.cash.income - m.cash.expense - mv.c2t + mv.t2c - mv.payCreditCash,
-      transfer: openBal.transfer + m.transfer.income - m.transfer.expense - mv.t2c + mv.c2t - mv.payCreditTransfer,
-      credit: openBal.credit + mv.creditSpend - mv.payCreditCash - mv.payCreditTransfer,
+      cash: openBal.cash + m.cash.income - m.cash.expense - mv.c2t + mv.t2c - mv.payCreditCash + mv.adjCash,
+      transfer: openBal.transfer + m.transfer.income - m.transfer.expense - mv.t2c + mv.c2t - mv.payCreditTransfer + mv.adjTransfer,
+      credit: openBal.credit + mv.creditSpend - mv.payCreditCash - mv.payCreditTransfer + mv.adjCredit,
+      cards: Object.fromEntries([...new Set([...Object.keys(openBal.cards), ...Object.keys(mv.cardMv)])].map(k => [k, (openBal.cards[k] || 0) + (mv.cardMv[k] || 0)])),
       get total() { return this.cash + this.transfer - this.credit }
     }
   }, [openBal, summary, monthMoves])
@@ -151,16 +162,17 @@ export default function Expenses() {
     let thu = 0, chi = 0
     groupedTx.forEach(([, list]) => list.forEach(t => {
       const a = Number(t.amount) || 0
-      if (t.type === 'income') thu += a; else chi += a
+      if (t.type === 'income') thu += a; else if (t.type === 'expense') chi += a   // trả thẻ, chuyển, điều chỉnh không phải chi
     }))
     return { thu, chi, count: groupedTx.reduce((s, [, l]) => s + l.length, 0) }
   }, [groupedTx, search, filterCategory, filterMethod])
 
   // Handlers
   const handleAddTx = (type) => { setAddType(type); setEditingTx(null); setShowAdd(true) }
-  const handleEditTx = (tx) => { if(tx.type==='transfer'||tx.type==='pay_credit') return; setEditingTx(tx); setAddType(tx.type); setShowAdd(true) }
+  const handleEditTx = (tx) => { if(tx.type==='transfer'||tx.type==='pay_credit'||tx.type==='adjust') return; setEditingTx(tx); setAddType(tx.type); setShowAdd(true) }
   const handleDeleteTx = async (tx) => {
     if(!confirm(`Xóa "${tx.note||tx.category?.name||'giao dịch'}"?`)) return
+    const ws = backdateWarnings(tx, reconLast, cards); if (ws.length && !confirm(warnText(ws))) return
     try { await deleteTransaction(tx.id); toast.success('Đã xóa'); loadData() } catch { toast.error('Lỗi xóa') }
   }
   const handleSaveTx = async (fd) => {
@@ -175,26 +187,31 @@ export default function Expenses() {
   const txIcon = (tx) => {
     if(tx.type==='transfer') return '🔄'
     if(tx.type==='pay_credit') return '💳'
+    if(tx.type==='adjust') return '⚖️'
     return tx.category?.icon||'📦'
   }
   const txBg = (tx) => {
     if(tx.type==='transfer') return '#E0E7FF'
     if(tx.type==='pay_credit') return '#F3E8FF'
+    if(tx.type==='adjust') return '#F3F4F6'
     return (tx.category?.color||'#6B7280')+'15'
   }
   const txLabel = (tx) => {
     if(tx.type==='transfer') return `Chuyển ${(tx.payment_method||'cash')==='cash'?'TM → CK':'CK → TM'}`
     if(tx.type==='pay_credit') return `Trả nợ TD từ ${(tx.payment_method||'cash')==='cash'?'TM':'CK'}`
+    if(tx.type==='adjust') return `Điều chỉnh đối soát · ${tx.payment_method==='cash'?'TM':tx.payment_method==='transfer'?'CK':'thẻ '+(cardName(tx.card_id)||'chưa phân')}`
     return tx.note||tx.category?.name||'Giao dịch'
   }
   const txColor = (tx) => {
     if(tx.type==='income') return 'text-green-600'
     if(tx.type==='expense') return 'text-red-600'
     if(tx.type==='pay_credit') return 'text-purple-600'
+    if(tx.type==='adjust') return 'text-gray-600'
     return 'text-indigo-600'
   }
-  const txPrefix = (tx) => tx.type==='income'?'+':tx.type==='expense'?'-':''
-  const isSpecialTx = (tx) => tx.type==='transfer'||tx.type==='pay_credit'
+  const txPrefix = (tx) => tx.type==='income'?'+':tx.type==='expense'?'-':tx.type==='adjust'&&Number(tx.amount)>0?'+':''
+  const isSpecialTx = (tx) => tx.type==='transfer'||tx.type==='pay_credit'||tx.type==='adjust'
+  const cardName = (id) => id ? cards.find(c => c.id === id)?.name : null
 
   return (
     <div className="pb-4">
@@ -202,6 +219,7 @@ export default function Expenses() {
         <div className="max-w-2xl mx-auto px-4 py-3 flex items-center justify-between">
           <h2 className="text-lg font-bold text-gray-800">💰 Thu Chi</h2>
           <div className="flex items-center gap-1">
+            <button onClick={() => setShowHealth(true)} aria-label="Sức khoẻ sổ" className="p-2 text-gray-400 hover:text-gray-600 rounded-lg text-base">🩺</button>
             <button onClick={() => setShowInitBal(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg text-base">💰</button>
             <button onClick={() => setShowCatMgr(true)} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><Settings size={18}/></button>
             <button onClick={loadData} className="p-2 text-gray-400 hover:text-gray-600 rounded-lg"><RefreshCw size={18} className={loading?'animate-spin':''}/></button>
@@ -225,18 +243,18 @@ export default function Expenses() {
             <div className="text-right"><p className="text-gray-400">Cuối kỳ</p><p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{moneyFull(closeBal.total)}</p></div>
           </div>
           <div className="flex gap-1.5">
-            <div className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center">
-              <p className="text-[9px] text-gray-400">💵 TM</p>
+            <button onClick={() => setRecon({ kind: 'cash' })} aria-label="Đối soát tiền mặt" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
+              <p className="text-[9px] text-gray-400">💵 TM ⚖️</p>
               <p className={`text-xs font-bold ${closeBal.cash>=0?'text-amber-300':'text-red-300'}`}>{formatMoney(closeBal.cash)}</p>
-            </div>
-            <div className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center">
-              <p className="text-[9px] text-gray-400">🏦 CK</p>
+            </button>
+            <button onClick={() => setRecon({ kind: 'transfer' })} aria-label="Đối soát chuyển khoản" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
+              <p className="text-[9px] text-gray-400">🏦 CK ⚖️</p>
               <p className={`text-xs font-bold ${closeBal.transfer>=0?'text-blue-300':'text-red-300'}`}>{formatMoney(closeBal.transfer)}</p>
-            </div>
-            <div className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center">
-              <p className="text-[9px] text-gray-400">💳 Nợ TD</p>
+            </button>
+            <button onClick={() => setShowCards(true)} aria-label="Thẻ tín dụng" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
+              <p className="text-[9px] text-gray-400">💳 Nợ TD ›</p>
               <p className={`text-xs font-bold ${closeBal.credit<=0?'text-green-300':'text-red-300'}`}>{closeBal.credit>0?'-':''}{formatMoney(Math.abs(closeBal.credit))}</p>
-            </div>
+            </button>
           </div>
         </div>
 
@@ -348,7 +366,7 @@ export default function Expenses() {
                         <p className="text-sm font-medium text-gray-800 truncate">{txLabel(tx)}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {!isSpecialTx(tx) && <span className="text-xs text-gray-400">{tx.category?.name}</span>}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}{(tx.payment_method==='credit'||tx.type==='pay_credit') && cardName(tx.card_id) ? '·' + cardName(tx.card_id) : ''}</span>
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
@@ -374,11 +392,16 @@ export default function Expenses() {
         <button onClick={() => handleAddTx('expense')} className="w-12 h-12 bg-red-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90"><ArrowUpCircle size={24}/></button>
       </div>
 
-      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx}
+      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx} cards={cards} reconLast={reconLast}
         categories={categories} type={addType} editingTx={editingTx}
         onDelete={editingTx?() => { handleDeleteTx(editingTx); setShowAdd(false) }:null} />
-      <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} />
-      <PayCreditForm isOpen={showPayCredit} onClose={() => setShowPayCredit(false)} toast={toast} onSaved={loadData} closeBal={closeBal} />
+      <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} reconLast={reconLast} />
+      <PayCreditForm isOpen={showPayCredit} onClose={() => setShowPayCredit(false)} toast={toast} onSaved={loadData} closeBal={closeBal} cards={cards} reconLast={reconLast} />
+      <CardsSheet isOpen={showCards} onClose={() => setShowCards(false)} cards={cards} cardDebts={closeBal.cards || {}} toast={toast} onSaved={loadData}
+        onReconcile={t => { setShowCards(false); setRecon(t) }} />
+      <ReconcileForm target={recon} cards={cards} toast={toast} onClose={() => setRecon(null)} onSaved={loadData} />
+      <HealthSheet isOpen={showHealth} onClose={() => setShowHealth(false)} cards={cards} reconLast={reconLast} toast={toast} onSaved={loadData}
+        onReconcile={t => { setShowHealth(false); setRecon(t) }} onOpenCards={() => { setShowHealth(false); setShowCards(true) }} />
       <InitialBalanceForm isOpen={showInitBal} onClose={() => setShowInitBal(false)} initialBal={initialBal} toast={toast} onSaved={loadData} />
       <CategoryManager isOpen={showCatMgr} onClose={() => setShowCatMgr(false)} categories={categories} onChanged={loadData} />
     </div>
@@ -436,7 +459,7 @@ function SummaryView({ summary, onCatClick }) {
 // ============================================
 // TRANSACTION FORM - TM/CK/TD
 // ============================================
-function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete }) {
+function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete, cards = [], reconLast = {} }) {
   const toast = useToast()
   const [formType, setFormType] = useState(type)
   const [amount, setAmount] = useState('')
@@ -444,14 +467,15 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   const [note, setNote] = useState('')
   const [date, setDate] = useState(getLocalDateString())
   const [pm, setPm] = useState('cash')
-  const [saving, setSaving] = useState(false)
+  const [cardId, setCardId] = useState('')               // thẻ nào (khi trả bằng TD)
+  const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
 
   const filteredCats = categories.filter(c => { const isInc=c.metadata?.is_income===true; return formType==='income'?isInc:!isInc })
 
   useEffect(() => {
     if(isOpen) {
-      if(editingTx) { setFormType(editingTx.type); setAmount(String(editingTx.amount)); setCategoryId(editingTx.category_id||''); setNote(editingTx.note||''); setDate(editingTx.date); setPm(editingTx.payment_method||'cash') }
-      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(getLocalDateString()); setPm('cash') }
+      if(editingTx) { setFormType(editingTx.type); setAmount(String(editingTx.amount)); setCategoryId(editingTx.category_id||''); setNote(editingTx.note||''); setDate(editingTx.date); setPm(editingTx.payment_method||'cash'); setCardId(editingTx.card_id||'') }
+      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(getLocalDateString()); setPm('cash'); setCardId((()=>{try{return localStorage.getItem('thuchi_last_card')||''}catch{return ''}})()) }
     }
   }, [isOpen, editingTx, type])
 
@@ -460,9 +484,20 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   const handleSubmit = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
     if(!categoryId) { toast.error('Chọn danh mục'); return }
-    setSaving(true)
-    await onSave({ type:formType, amount:Number(amount), category_id:categoryId, note, date, payment_method:pm })
-    setSaving(false)
+    const useCard = pm==='credit' && cards.length > 0
+    if(useCard && !cards.some(c => c.id === cardId)) { toast.error('Chọn thẻ tín dụng'); return }
+    if (busyRef.current) return
+    { const next = { type: formType, payment_method: pm, card_id: pm==='credit' ? (cardId || null) : null, date }
+      // Sửa mà không đổi tiền, ngày, loại, nguồn, thẻ (vd chỉ sửa ghi chú) → số dư không đổi, không cần hỏi
+      const same = editingTx && editingTx.type === formType && Number(editingTx.amount) === Number(amount) && editingTx.date === date
+        && (editingTx.payment_method || 'cash') === pm && (pm !== 'credit' || (editingTx.card_id || '') === (cardId || ''))
+      const ws = same ? [] : [...backdateWarnings(next, reconLast, cards), ...(editingTx ? backdateWarnings(editingTx, reconLast, cards) : [])]
+      const uniq = ws.filter((w, i) => ws.findIndex(x => x.key === w.key) === i)
+      if (uniq.length && !confirm(warnText(uniq))) return }
+    busyRef.current = true; setSaving(true)
+    if (useCard) { try { localStorage.setItem('thuchi_last_card', cardId) } catch { /* bỏ qua */ } }
+    await onSave({ type:formType, amount:Number(amount), category_id:categoryId, note, date, payment_method:pm, ...(cards.length ? { card_id: pm==='credit' ? (cardId || null) : null } : {}) })   // chỉ gửi cột thẻ khi đã có thẻ (an toàn nếu chưa chạy SQL)
+    setSaving(false); busyRef.current = false
   }
 
   // Thu không cho chọn TD
@@ -501,6 +536,12 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
                 className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${pm===o.v?o.active:'border-gray-200 bg-white text-gray-500'}`}>{o.l}</button>
             ))}
           </div>
+          {pm==='credit' && cards.length > 0 && <div className="flex flex-wrap gap-1.5 mt-2">
+            {cards.map(c => <button key={c.id} onClick={() => setCardId(c.id)}
+              className={`px-3 py-2 rounded-full text-xs font-bold border-2 ${cardId===c.id ? 'text-white' : 'bg-white text-gray-600 border-gray-200'}`}
+              style={cardId===c.id ? { background: c.color, borderColor: c.color } : {}}>💳 {c.name}{c.last4 ? ' ·' + c.last4 : ''}</button>)}
+          </div>}
+          {pm==='credit' && cards.length === 0 && <p className="text-[11px] text-purple-600 mt-1.5">Mẹo: bấm ô "Nợ TD" trên đầu để thêm các thẻ, theo dõi riêng từng thẻ.</p>}
         </div>
 
         <div>
@@ -532,16 +573,18 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
 // ============================================
 // TRANSFER FORM (TM↔CK)
 // ============================================
-function TransferForm({ isOpen, onClose, toast, onSaved, closeBal }) {
+function TransferForm({ isOpen, onClose, toast, onSaved, closeBal, reconLast = {} }) {
   const [amount, setAmount] = useState(''); const [dir, setDir] = useState('cash')
-  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
+  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
   useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setDir('cash'); setDate(getLocalDateString()) } }, [isOpen])
 
   const handleSave = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
-    setSaving(true)
+    { const ws = backdateWarnings({ type: 'transfer', payment_method: dir, date }, reconLast); if (ws.length && !confirm(warnText(ws))) return }
+    if (busyRef.current) return
+    busyRef.current = true; setSaving(true)
     try { await createTransaction({ type:'transfer', amount:Number(amount), payment_method:dir, date, note:note||(dir==='cash'?'Chuyển TM → CK':'Chuyển CK → TM'), category_id:null }); toast.success('Đã chuyển'); onClose(); onSaved() }
-    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false) }
+    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
   return (
@@ -572,31 +615,38 @@ function TransferForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 // ============================================
 // PAY CREDIT FORM (Trả nợ TD)
 // ============================================
-function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
+function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], reconLast = {} }) {
   const [amount, setAmount] = useState(''); const [source, setSource] = useState('transfer')
-  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false)
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()) } }, [isOpen])
+  const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
+  const [cardId, setCardId] = useState('')
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()); setCardId(cards.length === 1 ? cards[0].id : '') } }, [isOpen])
 
-  const creditDebt = closeBal?.credit||0
+  const card = cards.find(c => c.id === cardId)
+  const creditDebt = cards.length ? Math.round((closeBal?.cards||{})[cardId || 'none'] || 0) : (closeBal?.credit||0)
 
   const handleSave = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
-    setSaving(true)
-    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:source, date, note:note||`Trả nợ TD từ ${source==='cash'?'TM':'CK'}`, category_id:null }); toast.success('Đã trả nợ TD'); onClose(); onSaved() }
-    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false) }
+    if(cards.length && !card) { toast.error('Chọn thẻ đang trả'); return }
+    if (busyRef.current) return
+    { const ws = backdateWarnings({ type: 'pay_credit', payment_method: source, card_id: card ? card.id : null, date }, reconLast, cards); if (ws.length && !confirm(warnText(ws))) return }
+    busyRef.current = true; setSaving(true)
+    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:source, date, note:note||`Trả thẻ ${card ? card.name : 'TD'} từ ${source==='cash'?'TM':'CK'}`, category_id:null, ...(card ? { card_id: card.id } : {}) }); toast.success('Đã trả nợ TD'); onClose(); onSaved() }
+    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="💳 Trả nợ thẻ tín dụng">
       <div className="space-y-4 p-5">
+        {cards.length > 0 && <div className="flex flex-wrap gap-1.5">{cards.map(c => <button key={c.id} onClick={() => setCardId(c.id)}
+          className={`px-3 py-2 rounded-full text-xs font-bold border-2 ${cardId===c.id ? 'text-white' : 'bg-white text-gray-600 border-gray-200'}`}
+          style={cardId===c.id ? { background: c.color, borderColor: c.color } : {}}>💳 {c.name}</button>)}</div>}
         <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-center">
-          <p className="text-xs text-purple-600">Nợ TD hiện tại</p>
+          <p className="text-xs text-purple-600">{card ? `Nợ thẻ ${card.name} hiện tại` : 'Nợ TD hiện tại'}</p>
           <p className={`text-xl font-bold ${creditDebt>0?'text-red-600':'text-green-600'}`}>{creditDebt>0?'-':''}{moneyFull(Math.abs(creditDebt))}</p>
         </div>
 
-        {creditDebt<=0 ? (
-          <div className="text-center py-4"><p className="text-gray-500 text-sm">Không có nợ TD cần trả 🎉</p></div>
-        ) : (<>
+        {creditDebt<=0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">App đang ghi nhận thẻ này không có nợ. Nếu bạn vừa trả thật, vẫn ghi bình thường — rồi dùng ⚖️ Đối soát để khớp với sao kê.</p>}
+        {(<>
           <div><label className="text-xs text-gray-500 mb-1.5 block">Trả từ</label>
             <div className="flex gap-2">
               <button onClick={() => setSource('transfer')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='transfer'?'border-blue-400 bg-blue-50 text-blue-700':'border-gray-200 text-gray-500'}`}>🏦 CK ({formatMoney(closeBal?.transfer||0)})</button>
@@ -606,7 +656,8 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 
           <div><label className="text-xs text-gray-500 mb-1 block">Số tiền trả</label>
             <div className="relative"><input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''} onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" autoFocus className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div>
-            <button onClick={() => setAmount(String(creditDebt))} className="mt-1.5 text-xs text-purple-600 font-medium hover:underline">Trả hết ({moneyFull(creditDebt)})</button>
+            {creditDebt > 0 && <button onClick={() => setAmount(String(creditDebt))} className="mt-1.5 text-xs text-purple-600 font-medium hover:underline">Trả hết ({moneyFull(creditDebt)})</button>}
+            {creditDebt > 0 && Number(amount) > creditDebt && <p className="mt-1 text-xs text-amber-700">Số trả lớn hơn nợ app đang ghi — vẫn lưu được, nhớ đối soát sau.</p>}
           </div>
 
           <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
@@ -615,7 +666,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
           {amount && Number(amount)>0 && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs space-y-0.5">
               <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {moneyFull(closeBal?.[source]||0)} → {moneyFull((closeBal?.[source]||0)-Number(amount))}</p>
-              <p className="text-purple-700 font-medium">💳 Nợ TD: {moneyFull(creditDebt)} → {moneyFull(creditDebt-Number(amount))}</p>
+              <p className="text-purple-700 font-medium">💳 {card ? 'Nợ thẻ ' + card.name : 'Nợ TD'}: {moneyFull(creditDebt)} → {moneyFull(creditDebt-Number(amount))}</p>
             </div>
           )}
 
@@ -633,13 +684,14 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal }) {
 // INITIAL BALANCE FORM
 // ============================================
 function InitialBalanceForm({ isOpen, onClose, initialBal, toast, onSaved }) {
-  const [cash, setCash] = useState(''); const [transfer, setTransfer] = useState(''); const [credit, setCredit] = useState(''); const [saving, setSaving] = useState(false)
+  const [cash, setCash] = useState(''); const [transfer, setTransfer] = useState(''); const [credit, setCredit] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
   useEffect(() => { if(isOpen) { setCash(String(initialBal.cash||'')); setTransfer(String(initialBal.transfer||'')); setCredit(String(initialBal.credit||'')) } }, [isOpen, initialBal])
 
   const handleSave = async () => {
-    setSaving(true)
+    if (busyRef.current) return
+    busyRef.current = true; setSaving(true)
     try { await saveInitialBalances(Number(cash)||0, Number(transfer)||0, Number(credit)||0, initialBal.id); toast.success('Đã lưu'); onClose(); onSaved() }
-    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false) }
+    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
   return (
@@ -676,7 +728,7 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   const toast = useToast()
   const [showForm, setShowForm] = useState(false); const [editingCat, setEditingCat] = useState(null)
   const [fd, setFd] = useState({ name:'', icon:'📦', color:'#3B82F6', is_income:false })
-  const [saving, setSaving] = useState(false)
+  const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
   const [iconSearch, setIconSearch] = useState('')
 
   // Lọc nhóm icon theo từ khoá — bỏ dấu để gõ "an uong" cũng ra "Ăn uống"
@@ -692,14 +744,14 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
   const openEdit = (cat) => { setEditingCat(cat); setFd({name:cat.name,icon:cat.icon,color:cat.color,is_income:cat.metadata?.is_income||false}); setShowForm(true) }
 
   const handleSave = async () => {
-    if(!fd.name.trim()) return; setSaving(true)
+    if(!fd.name.trim() || busyRef.current) return; busyRef.current = true; setSaving(true)
     try {
       if(editingCat) {
         await updateExpenseCategory(editingCat.id,{name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income}}); toast.success('✓ Đã cập nhật')
       }
       else { await createExpenseCategory({name:fd.name.trim(),icon:fd.icon,color:fd.color,metadata:{is_income:fd.is_income},sort_order:categories.length+1}); toast.success('✓ Đã thêm') }
       setShowForm(false); onChanged()
-    } catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false) }
+    } catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
   const handleDel = async (cat) => {
@@ -789,6 +841,237 @@ function CategoryManager({ isOpen, onClose, categories, onChanged }) {
           </div>
         </div>
       )}
+    </Modal>
+  )
+}
+
+// ============================================
+// THẺ TÍN DỤNG & ĐỐI SOÁT
+// ============================================
+const CARD_COLORS = ['#7C3AED', '#2563EB', '#DC2626', '#059669', '#D97706', '#DB2777', '#0891B2', '#4B5563']
+const kindLabel = k => k === 'cash' ? '💵 Tiền mặt' : k === 'transfer' ? '🏦 Chuyển khoản' : '💳 Nợ thẻ'
+
+// Đối soát một nguồn tiền: gõ số thực tế → app ghi 1 dòng điều chỉnh cho phần chênh
+function ReconcileForm({ target, cards, toast, onClose, onSaved }) {
+  const [date, setDate] = useState(getLocalDateString()), [actual, setActual] = useState(''), [note, setNote] = useState('')
+  const [recorded, setRecorded] = useState(null), [saving, setSaving] = useState(false); const busyRef = useRef(false)
+  const card = target?.cardId ? cards.find(c => c.id === target.cardId) : null
+  useEffect(() => {
+    if (!target) return
+    let alive = true; setRecorded(null)
+    previewReconcile({ kind: target.kind, cardId: target.cardId || null, date }).then(v => { if (alive) setRecorded(Math.round(v)) }).catch(() => {})
+    return () => { alive = false }
+  }, [target, date])
+  useEffect(() => { if (target) { setActual(''); setNote(''); setDate(getLocalDateString()) } }, [target])
+  if (!target) return null
+  const diff = actual === '' || recorded === null ? null : Number(actual) * (target.neg ? -1 : 1) - recorded
+  const save = async () => {
+    if (actual === '' || busyRef.current) return
+    busyRef.current = true; setSaving(true)
+    try {
+      const r = await reconcile({ kind: target.kind, cardId: target.cardId || null, actual: Number(actual) * (target.neg ? -1 : 1), date, note })
+      toast.success(r.diff === 0 ? 'Đã khớp — không cần điều chỉnh' : `Đã điều chỉnh ${r.diff > 0 ? '+' : ''}${moneyFull(r.diff)}`)
+      onClose(); onSaved()
+    } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
+  }
+  const title = target.kind === 'credit' ? `⚖️ Đối soát thẻ ${card ? card.name : '(chưa phân thẻ)'}` : `⚖️ Đối soát ${kindLabel(target.kind)}`
+  return (
+    <Modal isOpen={!!target} onClose={onClose} title={title}>
+      <div className="space-y-4 p-5">
+        <p className="text-xs text-gray-500">Mở app ngân hàng (hoặc đếm tiền mặt), gõ số thực tế. App ghi một dòng <b>điều chỉnh</b> cho phần chênh — không sửa giao dịch cũ nào.</p>
+        <div><label className="text-xs text-gray-500 mb-1 block">Tính tới hết ngày</label>
+          <input type="date" value={date} max={getLocalDateString()} onChange={e => e.target.value && setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/></div>
+        <div className="bg-gray-50 rounded-xl p-3 flex justify-between text-sm"><span className="text-gray-500">Theo app</span>
+          <b>{recorded === null ? '…' : moneyFull(target.neg ? -recorded : recorded)}</b></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">{target.kind === 'credit' ? 'Dư nợ thực tế trên app ngân hàng' : 'Số dư thực tế'}</label>
+          <div className="relative"><input type="text" inputMode="numeric" value={actual === '' ? '' : Number(actual).toLocaleString('vi-VN')}
+            onChange={e => setActual(e.target.value.replace(/[^0-9]/g, ''))} placeholder="0" aria-label="Số thực tế"
+            className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
+        {diff !== null && <div className={`rounded-xl p-3 text-sm font-medium ${diff === 0 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-800'}`}>
+          {diff === 0 ? '✓ Khớp — không cần điều chỉnh' : <>Chênh {diff > 0 ? '+' : ''}{moneyFull(target.neg ? -diff : diff)} → sẽ ghi 1 dòng điều chỉnh</>}</div>}
+        <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ghi chú (tuỳ chọn), ví dụ: theo sao kê kỳ 10" className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
+          <button onClick={save} disabled={saving || actual === ''} className="flex-1 py-3 bg-gray-800 text-white rounded-xl font-bold text-sm disabled:opacity-40">{saving ? '...' : 'Đối soát'}</button>
+        </div>
+      </div>
+    </Modal>
+  )
+}
+
+function CardForm({ initial, toast, onClose, onSaved }) {
+  const [f, setF] = useState(initial || { name: '', last4: '', keywords: '', color: CARD_COLORS[0], credit_limit: '', statement_day: '', due_day: '' })
+  const [saving, setSaving] = useState(false); const busyRef = useRef(false)
+  const save = async () => {
+    if (!f.name.trim()) { toast.error('Nhập tên thẻ'); return }
+    if (busyRef.current) return; busyRef.current = true; setSaving(true)
+    try { await saveCard(f); toast.success('Đã lưu thẻ'); onSaved() } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
+  }
+  const inp = 'w-full px-3 py-2.5 border border-gray-200 rounded-xl text-base'
+  return (
+    <div className="bg-gray-50 rounded-xl p-3 space-y-2.5">
+      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên thẻ, ví dụ: VIB, VPB Mai" className={inp} aria-label="Tên thẻ"/>
+      <div className="flex gap-2">
+        <input value={f.last4 || ''} onChange={e => setF({ ...f, last4: e.target.value.replace(/\D/g, '').slice(0, 4) })} inputMode="numeric" placeholder="4 số cuối" className={inp}/>
+        <input value={f.credit_limit ? Number(f.credit_limit).toLocaleString('vi-VN') : ''} onChange={e => setF({ ...f, credit_limit: e.target.value.replace(/\D/g, '') })} inputMode="numeric" placeholder="Hạn mức" className={inp}/>
+      </div>
+      <div className="flex gap-2">
+        <input value={f.statement_day || ''} onChange={e => setF({ ...f, statement_day: e.target.value.replace(/\D/g, '').slice(0, 2) })} inputMode="numeric" placeholder="Ngày sao kê" className={inp}/>
+        <input value={f.due_day || ''} onChange={e => setF({ ...f, due_day: e.target.value.replace(/\D/g, '').slice(0, 2) })} inputMode="numeric" placeholder="Hạn thanh toán" className={inp}/>
+      </div>
+      <input value={f.keywords || ''} onChange={e => setF({ ...f, keywords: e.target.value })} placeholder="Từ khoá nhận diện, ví dụ: vp, 4438" className={inp}/>
+      <div className="flex gap-2">{CARD_COLORS.map(c => <button key={c} onClick={() => setF({ ...f, color: c })} aria-label={'Màu ' + c}
+        className="w-7 h-7 rounded-full" style={{ background: c, outline: f.color === c ? '2px solid #111' : 'none', outlineOffset: 2 }}/>)}</div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2.5 bg-white text-gray-600 rounded-xl text-sm">Hủy</button>
+        <button onClick={save} disabled={saving} className="flex-1 py-2.5 bg-purple-600 text-white rounded-xl font-bold text-sm disabled:opacity-50">{saving ? '...' : 'Lưu thẻ'}</button>
+      </div>
+    </div>
+  )
+}
+
+// Bảng thẻ: nợ từng thẻ, đối soát, chốt sổ, phân thẻ cho giao dịch quên chọn thẻ
+function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onReconcile }) {
+  const [edit, setEdit] = useState(null)          // null | 'new' | thẻ
+  const [closing, setClosing] = useState(false), [actuals, setActuals] = useState({}), [saving, setSaving] = useState(false)
+  const [cutoff, setCutoff] = useState(null), [unassigned, setUnassigned] = useState(null)
+  const busyRef = useRef(false)
+  const loadUn = useCallback(async () => {
+    const c = await getCardCutoff().catch(() => null); setCutoff(c)
+    setUnassigned(c ? await getUnassignedCredit(c).catch(() => []) : null)
+  }, [])
+  useEffect(() => { if (isOpen) { setEdit(null); setClosing(false); setActuals({}); loadUn() } }, [isOpen, loadUn])
+  const none = Math.round(cardDebts.none || 0)
+  const total = Object.values(cardDebts).reduce((a, v) => a + v, 0)
+  const doClose = async () => {
+    if (busyRef.current) return; busyRef.current = true; setSaving(true)
+    try {
+      await closeCardBooks({ actuals: Object.fromEntries(Object.entries(actuals).filter(([, v]) => v !== '').map(([k, v]) => [k, Number(v)])), date: getLocalDateString() })
+      toast.success('Đã chốt sổ thẻ — từ nay mỗi thẻ khớp sao kê'); setClosing(false); onSaved(); loadUn()
+    } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
+  }
+  const assign = async (ids, cardId) => {
+    try { await assignCard(ids, cardId); toast.success(`Đã gán ${ids.length} giao dịch`); onSaved(); loadUn() } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+  const sugg = (unassigned || []).map(t => [t, suggestCard(t, cards)])
+  const byCard = cards.map(c => ({ c, ids: sugg.filter(([, s]) => s?.id === c.id).map(([t]) => t.id) })).filter(x => x.ids.length)
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="💳 Thẻ tín dụng">
+      <div className="space-y-3 p-5">
+        <div className="bg-purple-50 rounded-xl p-3 flex justify-between items-baseline"><span className="text-sm text-purple-700">Tổng nợ thẻ</span>
+          <b className="text-lg text-purple-800">{moneyFull(total)}</b></div>
+
+        {cards.map(c => { const d = Math.round(cardDebts[c.id] || 0)
+          return edit && edit !== 'new' && edit.id === c.id ? <CardForm key={c.id} initial={c} toast={toast} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved() }}/> : (
+          <div key={c.id} className="border border-gray-100 rounded-xl p-3">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: c.color }}/>
+              <button onClick={() => setEdit(c)} className="flex-1 text-left"><b className="text-sm">{c.name}</b>{c.last4 && <span className="text-xs text-gray-400"> ·{c.last4}</span>}
+                {(c.statement_day || c.due_day) && <span className="block text-[11px] text-gray-400">{c.statement_day && `sao kê ngày ${c.statement_day}`}{c.statement_day && c.due_day && ' · '}{c.due_day && `hạn trả ngày ${c.due_day}`}</span>}</button>
+              <b className={`text-sm ${d > 0 ? 'text-red-600' : 'text-green-600'}`}>{moneyFull(d)}</b>
+            </div>
+            {c.credit_limit > 0 && <div className="h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: Math.min(100, Math.max(0, d / c.credit_limit * 100)) + '%', background: c.color }}/></div>}
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => onReconcile({ kind: 'credit', cardId: c.id })} className="flex-1 py-2 bg-gray-100 rounded-lg text-xs font-medium">⚖️ Đối soát</button>
+              <button onClick={async () => { if (confirm(`Ẩn thẻ ${c.name}? Giao dịch cũ vẫn giữ nguyên.`)) { await archiveCard(c.id); onSaved() } }} className="py-2 px-3 bg-gray-50 rounded-lg text-xs text-gray-400">Ẩn</button>
+            </div>
+          </div>) })}
+
+        {Math.abs(none) > 0 && <div className="border border-dashed border-amber-300 bg-amber-50 rounded-xl p-3">
+          <div className="flex justify-between"><span className="text-sm text-amber-800">Chưa phân thẻ{!cutoff && ' (dữ liệu cũ)'}</span><b className="text-sm text-amber-800">{moneyFull(none)}</b></div>
+          {!cutoff && <p className="text-[11px] text-amber-700 mt-1">Giao dịch cũ không ghi rõ thẻ. Thêm các thẻ rồi bấm <b>Chốt sổ</b> để bắt đầu theo dõi từng thẻ đúng với sao kê.</p>}
+        </div>}
+
+        {edit === 'new' ? <CardForm toast={toast} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved() }}/>
+          : <button onClick={() => setEdit('new')} className="w-full py-2.5 border-2 border-dashed border-purple-200 text-purple-700 rounded-xl text-sm font-medium">+ Thêm thẻ</button>}
+
+        {cards.length > 0 && !closing && <button onClick={() => setClosing(true)} className="w-full py-3 bg-purple-600 text-white rounded-xl text-sm font-bold">📒 {cutoff ? 'Chốt sổ lại' : 'Chốt sổ thẻ — bắt đầu theo dõi từng thẻ'}</button>}
+        {closing && <div className="bg-purple-50 rounded-xl p-3 space-y-2">
+          <p className="text-xs text-purple-800">Mở app từng ngân hàng, gõ <b>dư nợ hiện tại</b> của mỗi thẻ. Thẻ nào để trống thì giữ nguyên. Phần "chưa phân thẻ" sẽ về 0. Không giao dịch cũ nào bị sửa.</p>
+          {cards.map(c => <div key={c.id} className="flex items-center gap-2"><span className="w-20 text-sm font-medium truncate">{c.name}</span>
+            <input inputMode="numeric" value={actuals[c.id] ? Number(actuals[c.id]).toLocaleString('vi-VN') : ''} onChange={e => setActuals({ ...actuals, [c.id]: e.target.value.replace(/\D/g, '') })}
+              placeholder="Dư nợ thực tế" aria-label={'Dư nợ ' + c.name} className="flex-1 min-w-0 px-3 py-2 border border-purple-200 rounded-lg text-base text-right"/></div>)}
+          <div className="flex justify-between text-sm pt-1"><span className="text-purple-700">Tổng nợ sau chốt sổ</span>
+            <b>{moneyFull(cards.reduce((a, c) => a + (actuals[c.id] !== undefined && actuals[c.id] !== '' ? Number(actuals[c.id]) : Math.round(cardDebts[c.id] || 0)), 0))}</b></div>
+          <div className="flex gap-2"><button onClick={() => setClosing(false)} className="flex-1 py-2.5 bg-white rounded-xl text-sm">Hủy</button>
+            <button onClick={doClose} disabled={saving} className="flex-1 py-2.5 bg-purple-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">{saving ? '...' : 'Chốt sổ'}</button></div>
+        </div>}
+
+        {cutoff && unassigned && unassigned.length > 0 && <div className="border-t border-gray-100 pt-3">
+          <p className="text-xs font-semibold text-gray-600 mb-2">⚠️ {unassigned.length} giao dịch thẻ từ {cutoff.split('-').reverse().join('/')} chưa chọn thẻ</p>
+          {byCard.map(({ c, ids }) => <button key={c.id} onClick={() => assign(ids, c.id)} className="w-full mb-1.5 py-2 bg-purple-50 text-purple-800 rounded-lg text-xs font-medium">Gán {ids.length} giao dịch nhắc tới "{c.name}" vào thẻ {c.name}</button>)}
+          {sugg.slice(0, 30).map(([t, s]) => <div key={t.id} className="flex items-center gap-2 py-1.5 border-b border-gray-50 text-xs">
+            <span className="flex-1 min-w-0 truncate">{t.date.slice(8)}/{t.date.slice(5, 7)} · {t.note || t.category?.name || (t.type === 'pay_credit' ? 'Trả thẻ' : 'Quẹt thẻ')}</span>
+            <b>{formatMoney(t.amount)}</b>
+            <select value="" onChange={e => e.target.value && assign([t.id], e.target.value)} className="text-xs border rounded px-1 py-1 bg-white" aria-label="Chọn thẻ">
+              <option value="">{s ? `→ ${s.name}?` : 'Thẻ…'}</option>{cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+          </div>)}
+        </div>}
+      </div>
+    </Modal>
+  )
+}
+
+// ============================================
+// 🩺 SỨC KHOẺ SỔ — mỗi tài khoản một dòng ✓/⚠, kèm nút xử lý
+// ============================================
+function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReconcile, onOpenCards }) {
+  const [h, setH] = useState(null), [showMis, setShowMis] = useState(false), [pick, setPick] = useState({}), [busy, setBusy] = useState(false)
+  const load = useCallback(() => { getHealth(cards).then(setH).catch(e => toast.error('Lỗi: ' + e.message)) }, [cards])
+  useEffect(() => { if (isOpen) { setH(null); setShowMis(false); setPick({}) } }, [isOpen])   // chỉ gập lại khi MỞ màn này
+  useEffect(() => { if (isOpen) load() }, [isOpen, load])                         // tải lại số liệu, giữ nguyên chỗ đang xem
+  const dmy = s => s ? s.split('-').reverse().join('/') : ''
+  const icon = k => k === 'cash' ? '💵' : k === 'transfer' ? '🏦' : '💳'
+  const name = a => a.key === 'cash' ? 'Tiền mặt' : a.key === 'transfer' ? 'Chuyển khoản' : 'Thẻ ' + a.card.name
+  const convert = async (t) => {
+    const cardId = pick[t.id] ?? (suggestCard(t, cards)?.id || '')
+    const ws = backdateWarnings({ type: 'pay_credit', payment_method: t.payment_method, card_id: cardId || null, date: t.date }, reconLast, cards)
+    if (ws.length && !confirm(warnText(ws))) return
+    setBusy(true)
+    try { await convertToPayCredit(t.id, cardId || null); toast.success('Đã chuyển thành trả thẻ'); onSaved(); load() } catch (e) { toast.error('Lỗi: ' + e.message) } finally { setBusy(false) }
+  }
+  const keep = async (t) => { setBusy(true); try { await keepAsExpense([t.id]); load() } catch (e) { toast.error('Lỗi: ' + e.message) } finally { setBusy(false) } }
+  const issues = h ? h.accounts.filter(a => !a.last || a.backdated.length || a.statementDue).length + (h.unassigned ? 1 : 0) + (h.misrecorded.length ? 1 : 0) : 0
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="🩺 Sức khoẻ sổ">
+      <div className="p-5 space-y-2">
+        {!h ? <p className="text-center text-sm text-gray-400 py-6">Đang kiểm tra…</p> : <>
+          <p className={`text-sm font-semibold rounded-xl px-3 py-2 ${issues ? 'bg-amber-50 text-amber-800' : 'bg-green-50 text-green-700'}`}>{issues ? `${issues} việc nên xử lý` : '✓ Sổ khoẻ — mọi tài khoản đã đối soát, không có gì bất thường'}</p>
+          {h.accounts.map(a => {
+            const bad = !a.last || a.backdated.length || a.statementDue
+            const why = !a.last ? 'Chưa đối soát lần nào' : a.backdated.length ? `${a.backdated.length} khoản ghi lùi ngày sau lần đối soát ${dmy(a.last.date)}` : a.statementDue ? `Đã tới kỳ sao kê ${dmy(a.statementDate)} — nên đối soát` : `Đối soát ${dmy(a.last.date)}`
+            return (
+              <div key={a.key} className="flex items-center gap-2.5 py-2 border-b border-gray-50">
+                <span className="text-lg">{icon(a.key)}</span>
+                <div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-800">{name(a)}</p>
+                  <p className={`text-xs ${bad ? 'text-amber-700' : 'text-gray-400'}`}>{bad ? '⚠ ' : '✓ '}{why}</p></div>
+                <button onClick={() => onReconcile({ kind: a.key.startsWith('card:') ? 'credit' : a.key, cardId: a.card?.id || null })}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium ${bad ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}>Đối soát</button>
+              </div>)
+          })}
+          {h.unassigned > 0 && <button onClick={onOpenCards} className="w-full flex items-center gap-2.5 py-2.5 border-b border-gray-50 text-left">
+            <span className="text-lg">🏷️</span><span className="flex-1 text-sm text-amber-700">⚠ {h.unassigned} giao dịch thẻ chưa chọn thẻ</span><span className="text-gray-300">›</span></button>}
+          {h.misrecorded.length > 0 && <>
+            <button onClick={() => setShowMis(!showMis)} className="w-full flex items-center gap-2.5 py-2.5 text-left">
+              <span className="text-lg">🔁</span><span className="flex-1 text-sm text-amber-700">⚠ {h.misrecorded.length} khoản giống trả thẻ nhưng đang ghi là Chi</span><span className="text-gray-300">{showMis ? '▴' : '▾'}</span></button>
+            {showMis && <div className="bg-gray-50 rounded-xl p-2.5 space-y-2">
+              <p className="text-[11px] text-gray-500">Chuyển thành <b>Trả nợ thẻ</b>: tiền mặt/CK giữ nguyên, nợ thẻ giảm, và không còn bị tính vào Chi. Nên làm <b>trước khi chốt sổ</b>.</p>
+              {h.misrecorded.map(t => { const s = suggestCard(t, cards)
+                return (
+                  <div key={t.id} className="bg-white rounded-lg p-2">
+                    <div className="flex justify-between text-xs"><span className="truncate">{dmy(t.date)} · {t.note || t.category?.name}</span><b>{formatMoney(t.amount)}</b></div>
+                    <div className="flex gap-1.5 mt-1.5">
+                      <select value={pick[t.id] ?? (s?.id || '')} onChange={e => setPick({ ...pick, [t.id]: e.target.value })} aria-label="Thẻ" className="flex-1 min-w-0 text-xs border rounded-lg px-1.5 py-1.5 bg-white">
+                        <option value="">Chưa rõ thẻ</option>{cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+                      <button disabled={busy} onClick={() => convert(t)} className="px-2.5 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium disabled:opacity-50">→ Trả thẻ</button>
+                      <button disabled={busy} onClick={() => keep(t)} className="px-2.5 py-1.5 bg-gray-100 rounded-lg text-xs disabled:opacity-50">Giữ là Chi</button>
+                    </div>
+                  </div>)
+              })}
+            </div>}
+          </>}
+        </>}
+      </div>
     </Modal>
   )
 }

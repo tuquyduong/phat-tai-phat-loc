@@ -17,7 +17,7 @@ const BACKUP_TABLES = [
   'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
   'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
   'stocks', 'stock_transactions', 'dividends',
-  'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders',
+  'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders', 'expense_cards',
 ]
 
 // Lấy MỌI bảng đang có trong database (qua hàm db_usage), gộp với danh sách cố định.
@@ -216,7 +216,7 @@ export default function Home({ onNavigate, activeModules }) {
           'ingredients', 'formulas', 'formula_ingredients',
           'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
           'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
-          'stocks', 'stock_transactions', 'dividends', 'transactions',
+          'stocks', 'stock_transactions', 'dividends', 'expense_cards', 'transactions',
           'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders'
         ]
         // Bảng có trong file backup nhưng không nằm trong thứ tự trên → khôi phục cuối

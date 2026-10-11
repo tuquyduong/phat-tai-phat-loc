@@ -4,6 +4,7 @@
 // Không đụng bảng nào của Trang sức, Lab, Thu Chi.
 // ============================================
 import { supabase } from './supabase'
+import { fetchAll } from './fetchAll'
 import { getLocalDateString } from './helpers'
 import { isSeries, occurrencesBetween, isDoneOn } from './recur'
 
@@ -60,15 +61,16 @@ export async function loadAll(who, sinceDays = 40) {
   const since = addDays(getLocalDateString(), -sinceDays)
   // Việc đã xong quá 13 tháng thì không tải nữa (vẫn nằm trong database và bản sao lưu)
   const oldest = addDays(getLocalDateString(), -400)
+  const wrap = p => p.then(data => ({ data, error: null }), error => ({ data: null, error }))   // đọc hết, giữ dạng { data, error }
   const [t, d, l, p, o] = await Promise.all([
     // Việc của dự án luôn tải đủ (kể cả đã xong) để tính đúng tiến độ dự án
-    supabase.from('viec_tasks').select('*').or(mineFilter(who)).or(`done.eq.false,due_date.gte.${oldest},project_id.not.is.null`)
-      .order('due_date', { ascending: true }),
+    wrap(fetchAll(() => supabase.from('viec_tasks').select('*').or(mineFilter(who)).or(`done.eq.false,due_date.gte.${oldest},project_id.not.is.null`)
+      .order('due_date', { ascending: true }))),
     supabase.from('viec_daily').select('*').or(mineFilter(who)).order('sort').order('created_at'),
-    supabase.from('viec_logs').select('*').eq('who', who).gte('day', since).order('start_at'),
+    wrap(fetchAll(() => supabase.from('viec_logs').select('*').eq('who', who).gte('day', since).order('start_at'))),
     supabase.from('viec_projects').select('*').or(mineFilter(who)).order('created_at'),
     // Hàng đặt: mọi đơn chưa về + đơn đặt trong 13 tháng gần nhất (đủ cho tổng kết và số ngày về trung bình)
-    supabase.from('viec_orders').select('*').or(mineFilter(who)).or(`received_at.is.null,order_date.gte.${oldest}`).order('order_date'),
+    wrap(fetchAll(() => supabase.from('viec_orders').select('*').or(mineFilter(who)).or(`received_at.is.null,order_date.gte.${oldest}`).order('order_date'))),
   ])
   for (const r of [t, d, l, p, o]) if (r.error) throw r.error
   return { tasks: t.data || [], daily: d.data || [], logs: l.data || [], projects: p.data || [], orders: o.data || [] }
