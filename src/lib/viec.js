@@ -60,14 +60,16 @@ export async function loadAll(who, sinceDays = 40) {
   const since = addDays(getLocalDateString(), -sinceDays)
   // Việc đã xong quá 13 tháng thì không tải nữa (vẫn nằm trong database và bản sao lưu)
   const oldest = addDays(getLocalDateString(), -400)
-  const [t, d, l] = await Promise.all([
-    supabase.from('viec_tasks').select('*').or(mineFilter(who)).or(`done.eq.false,due_date.gte.${oldest}`)
+  const [t, d, l, p] = await Promise.all([
+    // Việc của dự án luôn tải đủ (kể cả đã xong) để tính đúng tiến độ dự án
+    supabase.from('viec_tasks').select('*').or(mineFilter(who)).or(`done.eq.false,due_date.gte.${oldest},project_id.not.is.null`)
       .order('due_date', { ascending: true }),
     supabase.from('viec_daily').select('*').or(mineFilter(who)).order('sort').order('created_at'),
     supabase.from('viec_logs').select('*').eq('who', who).gte('day', since).order('start_at'),
+    supabase.from('viec_projects').select('*').or(mineFilter(who)).order('created_at'),
   ])
-  for (const r of [t, d, l]) if (r.error) throw r.error
-  return { tasks: t.data || [], daily: d.data || [], logs: l.data || [] }
+  for (const r of [t, d, l, p]) if (r.error) throw r.error
+  return { tasks: t.data || [], daily: d.data || [], logs: l.data || [], projects: p.data || [] }
 }
 
 // ── To-do ──
@@ -94,6 +96,43 @@ export async function toggleTask(task, iso) {
   }
   const done = !task.done
   return { updated: await updateTask(task.id, { done, done_at: done ? new Date().toISOString() : null }) }
+}
+
+
+// ── Dự án ──
+export async function saveProject(fields) {
+  const q = fields.id
+    ? supabase.from('viec_projects').update(fields).eq('id', fields.id)
+    : supabase.from('viec_projects').insert([fields])
+  const { data, error } = await q.select().single()
+  if (error) throw error
+  return data
+}
+// Bật/tắt chia sẻ dự án thì mọi việc trong dự án đổi theo — hai người nhìn cùng một tiến độ
+export async function setProjectShared(projectId, shared) {
+  const { data, error } = await supabase.from('viec_tasks').update({ shared }).eq('project_id', projectId).select()
+  if (error) throw error
+  return data || []
+}
+// Xoá dự án: các việc vẫn giữ, chỉ bỏ liên kết (cơ sở dữ liệu tự làm)
+export async function deleteProject(id) {
+  const { error } = await supabase.from('viec_projects').delete().eq('id', id)
+  if (error) throw error
+}
+// Tiến độ dự án: việc lặp không tính vào phần trăm (vì không bao giờ "xong hẳn")
+export function projectProgress(projectId, tasks, today) {
+  const ts = tasks.filter(t => t.project_id === projectId)
+  const plain = ts.filter(t => !t.repeat_unit), done = plain.filter(t => t.done).length
+  const next = plain.filter(t => !t.done && t.due_date).sort((a, b) => a.due_date.localeCompare(b.due_date))[0] || null
+  const late = plain.filter(t => !t.done && t.due_date && t.due_date < today).length
+  return { total: plain.length, done, pct: plain.length ? Math.round(done / plain.length * 100) : 0, next, late,
+           undated: plain.filter(t => !t.done && !t.due_date).length, series: ts.length - plain.length }
+}
+// Các nhóm trong dự án, theo thứ tự xuất hiện; việc không có nhóm vào "Chung"
+export function projectGroups(projectId, tasks) {
+  const names = []
+  tasks.filter(t => t.project_id === projectId).forEach(t => { const g = t.group_name || 'Chung'; if (!names.includes(g)) names.push(g) })
+  return names
 }
 
 // ── Daily ──

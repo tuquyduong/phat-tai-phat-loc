@@ -5,13 +5,15 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useToast } from '../components/Toast'
 import { getLocalDateString } from '../lib/helpers'
-import { lunarOf, isTraiDay, isMakeupDay } from '../lib/lunar'
+import { lunarOf, isTraiDay, isMakeupDay, hairOf } from '../lib/lunar'
 import {
   PEOPLE, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG,
   loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick,
+  saveProject, deleteProject, setProjectShared, projectProgress, projectGroups,
   addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
 } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
+import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
 
 const WD = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
@@ -25,6 +27,16 @@ const dm = s => { const d = pdate(s); return `${d.getDate()}/${d.getMonth() + 1}
 const du = m => m >= 60 ? Math.floor(m / 60) + 'g' + (m % 60 ? String(m % 60).padStart(2, '0') : '') : m + 'p'
 const hhmm = iso => { const d = new Date(iso); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0') }
 const lunarLabel = L => L.day === 1 ? `1/${L.month}` : L.day === 15 ? 'Rằm' : L.day
+
+
+// Khung ngày lịch tháng hiển thị (bắt đầu Thứ Hai, 5–6 tuần)
+function gridRange(month) {
+  const [y, m] = month.split('-').map(Number)
+  const first = new Date(y, m - 1, 1), start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7))
+  const cells = []
+  for (let i = 0; i < 42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); if (i >= 35 && d.getMonth() !== m - 1) break; cells.push(d) }
+  return cells
+}
 
 function Ring({ pct, color, size = 44, label }) {
   const r = size / 2 - 4, C = 2 * Math.PI * r
@@ -125,11 +137,11 @@ function PinGate({ onDone }) {
   )
 }
 
-export default function Viec() {
+export default function Viec({ onNavigate }) {
   const toast = useToast()
   const today = getLocalDateString()
   const [who, setWhoState] = useState(getWho)
-  const [data, setData] = useState({ tasks: [], daily: [], logs: [] })
+  const [data, setData] = useState({ tasks: [], daily: [], logs: [], projects: [] })
   const [cfg, setCfgState] = useState(DEFAULT_CFG)
   const [loading, setLoading] = useState(true)
   const [view, setView] = useState('main')                // main | stat | set | daily
@@ -138,6 +150,10 @@ export default function Viec() {
   const [tab, setTab] = useState('up')
   const [now, setNow] = useState(Date.now())
   const [editDaily, setEditDaily] = useState(null)
+  const [projId, setProjId] = useState(null)
+  const [linkPrefs, setLinkPrefs] = useState(DEFAULT_LINKS)
+  const [links, setLinks] = useState([])
+  const [linkTick, setLinkTick] = useState(0)                // tăng để tải lại mốc khi quay lại app
 
   const loaded = useRef(false)
   const load = useCallback(async () => {
@@ -150,9 +166,18 @@ export default function Viec() {
     setLoading(false)
   }, [who])
   useEffect(() => { load() }, [load])
+  // Mốc từ Trang sức & Lab cho khung lịch đang xem (chỉ đọc)
+  useEffect(() => { if (who) getLinkPrefs(who).then(setLinkPrefs).catch(() => {}) }, [who])
+  useEffect(() => {
+    if (!who) return
+    const cells = gridRange(month), from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
+    let alive = true
+    loadLinks(from, to, linkPrefs).then(ev => { if (alive) setLinks(ev) }).catch(() => {})
+    return () => { alive = false }
+  }, [who, month, linkPrefs, linkTick])
   // Hai người dùng hai máy: quay lại app thì lấy dữ liệu mới nhất (việc chung người kia vừa thêm, ngày mới…)
   useEffect(() => {
-    const onVis = () => { if (document.visibilityState === 'visible' && !busy.current) { setNow(Date.now()); load() } }
+    const onVis = () => { if (document.visibilityState === 'visible' && !busy.current) { setNow(Date.now()); load(); setLinkTick(x => x + 1) } }
     document.addEventListener('visibilitychange', onVis)
     return () => document.removeEventListener('visibilitychange', onVis)
   }, [load])
@@ -168,6 +193,7 @@ export default function Viec() {
     else setPushLost(false)
   }, [who, view])
   const running = useMemo(() => runningLog(data.logs, who), [data.logs, who])
+  const marks = useMemo(() => linkMarks(links), [links])            // chỉ tính lại khi mốc đổi
   useEffect(() => {                                       // đồng hồ chạy thì cập nhật mỗi 15 giây
     if (!running) return
     const t = setInterval(() => setNow(Date.now()), 15000)
@@ -214,6 +240,22 @@ export default function Viec() {
     setView('set'); setEditDaily(null)
   }, 'Đã lưu Daily')
   const updCfg = (c) => { setCfgState(c); run(() => saveCfg(c)) }
+  const saveP = (fields) => run(async () => {
+    const before = fields.id && data.projects.find(x => x.id === fields.id)
+    const p = await saveProject(fields)
+    patch('projects', ps => fields.id ? ps.map(x => x.id === p.id ? p : x) : [...ps, p])
+    if (before && 'shared' in fields && !!before.shared !== !!fields.shared) {     // đổi chia sẻ → việc trong dự án đổi theo
+      const changed = await setProjectShared(p.id, !!fields.shared)
+      const byId = Object.fromEntries(changed.map(t => [t.id, t]))
+      patch('tasks', ts => ts.map(t => byId[t.id] || t))
+    }
+  })
+  const removeP = (id) => run(async () => {
+    await deleteProject(id)
+    patch('projects', ps => ps.filter(x => x.id !== id))
+    patch('tasks', ts => ts.map(t => t.project_id === id ? { ...t, project_id: null } : t))   // việc vẫn giữ
+    setView('proj'); setProjId(null)
+  }, 'Đã xoá dự án, việc vẫn giữ')
 
   if (!who) return <PinGate onDone={w => setWhoState(w)}/>
 
@@ -229,19 +271,28 @@ export default function Viec() {
     <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
       <div className="max-w-2xl mx-auto px-4 py-2.5 flex items-center gap-2">
         <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${AVA[who]}`}>{PEOPLE[who].split(' ')[1][0]}</span>
-        <h2 className="text-lg font-bold text-gray-800 flex-1">📅 Việc · {PEOPLE[who]}</h2>
+        <h2 className="text-lg font-bold text-gray-800 flex-1 truncate">📅 {PEOPLE[who]}</h2>
         <button onClick={() => { setMonth(today.slice(0, 7)); setSel(today) }}
           className="text-sm px-3 py-1.5 rounded-full bg-purple-50 text-purple-700 font-medium active:scale-95">Hôm nay</button>
+        <button onClick={() => setView('proj')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Dự án">📁</button>
         <button onClick={() => setView('set')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Cài đặt">⚙️</button>
       </div>
     </header>
   )
 
+  if (view === 'proj') return <ProjectsPage who={who} projects={data.projects} tasks={data.tasks} today={today}
+    onOpen={id => { setProjId(id); setView('projd') }} onSave={saveP} onBack={() => setView('main')}/>
+  const curProj = data.projects.find(p => p.id === projId)
+  if (view === 'projd' && curProj) return <ProjectDetail who={who} project={curProj} projects={data.projects} tasks={data.tasks} today={today}
+    onSaveProject={saveP} onDeleteProject={removeP} onAdd={addTask} onEdit={editTask} onDelete={removeTask}
+    onTick={t => tick(t, today)} onOpenDay={iso => { setView('main'); setMonth(iso.slice(0, 7)); setSel(iso) }}
+    onBack={() => setView('proj')}/>
   if (view === 'stat') return <StatsPage daily={daily} logs={data.logs} today={today} now={now} onBack={() => setView('main')}/>
   if (view === 'daily') return <DailyForm initial={editDaily} who={who} onSave={saveD} onBack={() => { setView('set'); setEditDaily(null) }}/>
   if (view === 'set') return <SettingsPage who={who} cfg={cfg} onCfg={updCfg} daily={data.daily}
+    linkPrefs={linkPrefs} onLinkPrefs={p => { setLinkPrefs(p); saveLinkPrefs(who, p).catch(e => toast.error('Lỗi: ' + e.message)) }}
     onEditDaily={d => { setEditDaily(d); setView('daily') }}
-    onSwitch={() => { loaded.current = false; setWho(null); setWhoState(null); setView('main'); setData({ tasks: [], daily: [], logs: [] }) }}
+    onSwitch={() => { loaded.current = false; setWho(null); setWhoState(null); setView('main'); setData({ tasks: [], daily: [], logs: [], projects: [] }) }}
     onBack={() => setView('main')}/>
 
   return (
@@ -249,7 +300,7 @@ export default function Viec() {
       {header}
       <div className="max-w-2xl mx-auto px-3 pt-2">
         {pushLost && <button onClick={() => setView('set')} className="w-full mb-2 text-left text-sm bg-amber-50 text-amber-800 rounded-xl px-3 py-2.5">🔕 Thông báo đang tắt trên máy này — bấm để bật lại</button>}
-        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel}/>
+        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel} marks={marks} showHair={linkPrefs.hair !== false}/>
 
         <div className="flex gap-1.5 mt-3 mb-2 bg-gray-200/70 rounded-2xl p-1">
           <button onClick={() => setTab('up')} className={`flex-1 py-2.5 rounded-xl text-sm flex items-center justify-center gap-1.5 ${tab === 'up' ? 'bg-white font-semibold text-gray-800 shadow-sm' : 'text-gray-500'}`}>
@@ -269,7 +320,8 @@ export default function Viec() {
         </div>
       </div>
 
-      {sel && <DaySheet iso={sel} today={today} who={who} cfg={cfg} tasks={data.tasks} daily={daily} logs={data.logs} now={now}
+      {sel && <DaySheet iso={sel} today={today} who={who} cfg={cfg} showHair={linkPrefs.hair !== false} tasks={data.tasks} projects={data.projects} daily={daily} logs={data.logs} now={now}
+        links={linkGroups(links, sel)} onNavigate={tab => { setSel(null); onNavigate?.(tab) }}
         onClose={() => setSel(null)} onAdd={addTask} onEdit={editTask} onDelete={removeTask} onTick={tick}
         onMove={iso => setSel(iso)}/>}
     </div>
@@ -277,11 +329,9 @@ export default function Viec() {
 }
 
 // ── LỊCH THÁNG ──
-function Calendar({ month, setMonth, today, tasks, cfg, onOpen }) {
+function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, showHair = true }) {
   const [y, m] = month.split('-').map(Number)
-  const first = new Date(y, m - 1, 1), start = new Date(first); start.setDate(1 - ((first.getDay() + 6) % 7))
-  const cells = []
-  for (let i = 0; i < 42; i++) { const d = new Date(start); d.setDate(start.getDate() + i); if (i >= 35 && d.getMonth() !== m - 1) break; cells.push(d) }
+  const cells = gridRange(month)
   const from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
   const byDay = useMemo(() => {                         // mọi lần lặp rơi vào khung đang xem
     const o = {}
@@ -312,9 +362,11 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen }) {
             <button key={iso} onClick={() => onOpen(iso)}
               className={`relative rounded-xl flex flex-col items-center justify-center min-h-[50px] border-[1.5px] active:scale-95 transition-transform
                 ${trai ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-transparent'} ${out ? 'opacity-35' : ''}`}
-              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${open ? `, ${open} việc` : ''}`}>
+              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}`}>
               <span className={`text-base font-semibold leading-none ${isToday ? 'bg-purple-600 text-white w-7 h-7 rounded-full flex items-center justify-center' : d.getDay() === 0 ? 'text-red-500' : 'text-gray-900'}`}>{d.getDate()}</span>
               <span className={`text-[11px] leading-tight mt-0.5 ${trai ? 'text-emerald-700 font-semibold' : L.day === 1 || L.day === 15 ? 'text-orange-700 font-semibold' : 'text-orange-600/80'}`}>{lunarLabel(L)}</span>
+              {showHair && hairOf(iso)?.good && <span className="absolute bottom-0.5 right-1 text-[10px] leading-none font-bold text-red-600" aria-hidden="true">✂</span>}
+              {(marks[iso]?.jewelry || marks[iso]?.lab) && <span className="absolute top-0.5 left-1 text-[9px] leading-none" aria-hidden="true">{marks[iso].jewelry ? '💎' : ''}{marks[iso].lab ? '🧪' : ''}</span>}
               {mark && <i className={`absolute top-1 right-1 ${open > 1 ? 'min-w-[15px] h-[15px] px-0.5 text-[9px] leading-[15px] text-white not-italic' : 'w-2 h-2'} rounded-full ${mark}`}>{open > 1 ? open : ''}</i>}
             </button>
           )
@@ -325,7 +377,17 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen }) {
         <span className="flex items-center gap-1"><i className="w-2.5 h-2.5 rounded bg-emerald-50 border border-emerald-300"/>ngày trai</span>
         <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-purple-500"/>có việc</span>
         <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-red-500"/>sót</span>
+        <span>💎🧪 mốc</span>
+        {showHair && <span><b className="text-red-600">✂</b> tốt cắt tóc</span>}
       </div>
+      {showHair && (() => {                                  // ngày tốt cắt tóc trong tháng đang xem
+        const good = cells.filter(d => d.getMonth() === m - 1).map(d => getLocalDateString(d)).filter(s => hairOf(s)?.good)
+        return good.length > 0 && <div className="mt-2 flex gap-1.5 overflow-x-auto no-scrollbar items-center">
+          <span className="text-xs text-gray-500 flex-shrink-0">✂ Tháng này:</span>
+          {good.map(s => <button key={s} onClick={() => onOpen(s)} className={`flex-shrink-0 text-xs px-2.5 py-1.5 rounded-full ${s < today ? 'bg-gray-100 text-gray-400' : 'bg-red-50 text-red-700 font-semibold'}`}
+            title={hairOf(s).text}>{dm(s)}</button>)}
+        </div>
+      })()}
     </div>
   )
 }
@@ -422,11 +484,11 @@ function RepeatPicker({ value, onChange }) {
             </select>
           </div>
           <label className="flex items-center gap-2"><span className="text-sm text-gray-600 w-[70px]">Bắt đầu</span>
-            <input type="date" value={v.start} onChange={e => e.target.value && set({ start: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-base bg-white"/></label>
+            <input type="date" value={v.start} onChange={e => e.target.value && set({ start: e.target.value })} className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-xl px-3 py-2 text-base bg-white"/></label>
           <div className="flex items-center gap-2"><span className="text-sm text-gray-600 w-[70px]">Kết thúc</span>
             <Chip on={!v.until} onClick={() => set({ until: '' })}>Không bao giờ</Chip>
             <input type="date" value={v.until || ''} min={v.start} onChange={e => set({ until: e.target.value })}
-              className={`flex-1 min-w-0 border rounded-xl px-2 py-2 text-base bg-white ${v.until ? 'border-purple-300' : 'border-gray-200'}`}/></div>
+              className={`flex-1 min-w-0 block appearance-none border rounded-xl px-2 py-2 text-base bg-white ${v.until ? 'border-purple-300' : 'border-gray-200'}`}/></div>
         </div>
       )}
       {v.unit && (
@@ -443,18 +505,20 @@ const repeatFields = r => r.unit
   : { repeat_unit: '', repeat_every: 1, repeat_start: null, repeat_until: null }
 
 // ── BẢNG CHI TIẾT NGÀY ──
-function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAdd, onEdit, onDelete, onTick }) {
+function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
-  const [opt, setOpt] = useState({ due_time: '', shared: false })
+  const [opt, setOpt] = useState({ due_time: '', shared: false, project_id: '' })
   const [rep, setRep] = useState({ unit: '', every: 1, start: iso, until: '', custom: false })
   const [editing, setEditing] = useState(null)
   const d = pdate(iso), L = lunarOf(iso), trai = isTraiDay(iso, cfg)
+  const hair = hairOf(iso)
+  const nextGood = hair && !hair.good ? (() => { for (let i = 1; i <= 10; i++) { const s = addDays(iso, i); if (hairOf(s)?.good) return s } return null })() : null
   const list = tasks.filter(t => occurrencesBetween(t, iso, iso).length).sort((a, b) => (a.due_time || '99').localeCompare(b.due_time || '99'))
   const ds = daily.filter(x => isDailyDay(x, iso))
   const add = () => {
     const t = text.trim(); if (!t) return
-    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, ...repeatFields(rep) })
-    setText(''); setOpt({ due_time: '', shared: false }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
+    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, project_id: opt.project_id || null, ...repeatFields(rep) })
+    setText(''); setOpt({ due_time: '', shared: false, project_id: '' }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
   }
   return (
     <>
@@ -470,6 +534,14 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
           <button onClick={onClose} className="w-9 h-9 rounded-full bg-gray-100 text-gray-500" aria-label="Đóng">✕</button>
         </div>
         {trai && <div className="mt-3 bg-emerald-50 text-emerald-800 rounded-xl px-3 py-2.5 text-sm font-semibold">🌿 Ngày trai — ăn chay{isMakeupDay(iso) ? ' · ăn bù ngày 27 tháng thiếu' : ''}</div>}
+        {showHair && hair && (
+          <div className={`mt-2 rounded-xl px-3 py-2.5 border-[1.5px] ${hair.good ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
+            <div className="text-xs text-gray-500">✂️ Cắt tóc, cắt móng tay</div>
+            <div className={`text-[16px] mt-0.5 ${hair.good ? 'text-red-700 font-bold' : 'text-gray-900'}`}>{hair.text}</div>
+            <div className={`text-xs mt-0.5 ${hair.good ? 'text-red-600' : 'text-gray-500'}`}>
+              {hair.good ? 'Ngày tốt' : 'Không nên'}{!hair.good && nextGood && ` · ngày tốt gần nhất ${dm(nextGood)}: ${hairOf(nextGood).text}`}</div>
+          </div>
+        )}
 
         <div className="flex gap-2 mt-3">
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
@@ -481,13 +553,17 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
           <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
         </div>
         <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>
+        {projects.some(p => !p.archived) && <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
+          <Chip on={!opt.project_id} onClick={() => setOpt(o => ({ ...o, project_id: '' }))}>Không thuộc dự án</Chip>
+          {projects.filter(p => !p.archived).map(p => <Chip key={p.id} on={opt.project_id === p.id} onClick={() => setOpt(o => ({ ...o, project_id: p.id, shared: o.shared || p.shared }))}>{p.emoji} {p.name}</Chip>)}
+        </div>}
 
         <div className="text-[13px] text-gray-400 mt-4 mb-1">To-do · {list.filter(t => !isDoneOn(t, iso)).length} việc</div>
         {list.length === 0 && <p className="text-sm text-gray-400 text-center py-4">Chưa có việc — gõ vào ô ở trên để thêm</p>}
         {list.map(t => {
           const done = isDoneOn(t, iso), next = isSeries(t) ? nextOccurrences(t, addDays(iso, 1), 1)[0] : null
           return editing === t.id
-            ? <EditRow key={t.id} t={t} who={who} onCancel={() => setEditing(null)} onDelete={() => { onDelete(t.id); setEditing(null) }}
+            ? <EditRow key={t.id} t={t} who={who} projects={projects} tasks={tasks} onCancel={() => setEditing(null)} onDelete={() => { onDelete(t.id); setEditing(null) }}
                 onSave={f => { onEdit(t.id, f); setEditing(null) }}/>
             : (
               <div key={t.id} className="flex items-center gap-3 border-b border-gray-100">
@@ -496,12 +572,27 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
                 <button onClick={() => setEditing(t.id)} className="flex-1 text-left py-3">
                   <div className={`text-[15px] ${done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
                   <div className="text-xs text-gray-400 mt-0.5">{[t.due_time && '⏰ ' + t.due_time,
+                    t.project_id && (p => p ? p.emoji + ' ' + p.name + (t.group_name ? ' · ' + t.group_name : '') : null)(projects.find(p => p.id === t.project_id)),
                     t.shared && (t.owner === who ? '👥 chung' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).join(' · ') || (isSeries(t) ? '' : 'Bấm để sửa')}</div>
                   {isSeries(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {describe(t)}{next ? ` · lần tới ${dm(next)}` : ' · lần cuối'}</div>}
                 </button>
               </div>
             )
         })}
+
+        {links.length > 0 && <>
+          <div className="text-[13px] text-gray-400 mt-4 mb-1">Từ Trang sức & Lab · chỉ xem</div>
+          {links.map(g => (
+            <button key={g.kind} onClick={() => onNavigate?.(g.src)} className="w-full flex items-start gap-2.5 py-2.5 border-b border-gray-100 last:border-0 text-left active:bg-gray-50">
+              <span className="text-lg leading-none mt-0.5">{g.icon}</span>
+              <div className="flex-1 min-w-0">
+                <div className="text-[14px] text-gray-800">{g.src === 'jewelry' ? '💎' : '🧪'} {g.label}{g.items.length > 1 ? ` · ${g.items.length}` : ''}</div>
+                <div className="text-xs text-gray-500 truncate">{g.items.slice(0, 3).join(' · ')}{g.items.length > 3 ? ` · +${g.items.length - 3}` : ''}</div>
+              </div>
+              <span className="text-gray-300 text-lg">›</span>
+            </button>
+          ))}
+        </>}
 
         {ds.length > 0 && iso <= today && <>
           <div className="text-[13px] text-gray-400 mt-4 mb-1">Daily {iso === today ? 'hôm nay' : 'ngày này'}</div>
@@ -518,38 +609,198 @@ function DaySheet({ iso, today, who, cfg, tasks, daily, logs, now, onClose, onAd
   )
 }
 
-function EditRow({ t, who, onSave, onCancel, onDelete }) {
+function EditRow({ t, who, projects = [], tasks = [], onSave, onCancel, onDelete }) {
   const series = isSeries(t)
-  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared })
+  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '' })
   const [rep, setRep] = useState(series
     ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
     : { unit: '', every: 1, start: t.due_date, until: '', custom: false })
-  const [confirmDel, setConfirmDel] = useState(false)
+  const [confirmDel, setConfirmDel] = useState(false), [err, setErr] = useState('')
   const canShare = t.owner === who
   const save = () => {
-    if (!f.title.trim()) return
-    const base = { title: f.title.trim(), due_time: f.due_time || null, shared: f.shared }
+    if (!f.title.trim()) { setErr('Chưa có tên việc'); return }
+    const proj = projects.find(p => p.id === f.project_id)
+    const base = { title: f.title.trim(), due_time: f.due_time || null, shared: f.shared || !!proj?.shared,      // vào dự án chung → việc thành chung
+      project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null }
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
-    onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date, ...repeatFields(rep) })
+    if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc dự án cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
+    onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date || null, ...repeatFields(rep) })
   }
   return (
     <div className="bg-gray-50 rounded-2xl p-3 my-2 flex flex-col gap-2">
       <input value={f.title} onChange={e => setF({ ...f, title: e.target.value })} className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
       <div className="flex gap-2">
-        {!rep.unit && <input type="date" value={f.due_date || ''} onChange={e => e.target.value && setF({ ...f, due_date: e.target.value })}
-          className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base" aria-label="Ngày"/>}
+        {!rep.unit && <input type="date" value={f.due_date || ''} onChange={e => (e.target.value || f.project_id) && setF({ ...f, due_date: e.target.value || null })}
+          className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-xl px-3 py-2.5 text-base bg-white" aria-label="Ngày"/>}
         <select value={f.due_time} onChange={e => setF({ ...f, due_time: e.target.value })} className="flex-1 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white" aria-label="Giờ">
           {[...new Set([...TIMES, f.due_time])].map(x => <option key={x} value={x}>{x || 'Cả ngày'}</option>)}
         </select>
         {canShare && <Chip on={f.shared} onClick={() => setF({ ...f, shared: !f.shared })}>👥 Chung</Chip>}
       </div>
-      <RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date } : r)}/>
+      {!rep.unit && f.project_id && f.due_date && <button onClick={() => setF({ ...f, due_date: null })} className="self-start text-xs text-gray-500 underline">Bỏ ngày (chỉ để trong dự án)</button>}
+      <RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/>
+      {projects.length > 0 && <div className="flex gap-2">
+        <select value={f.project_id} onChange={e => setF({ ...f, project_id: e.target.value })} aria-label="Dự án" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white">
+          <option value="">Không thuộc dự án</option>
+          {projects.filter(p => !p.archived || p.id === f.project_id).map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+        </select>
+        {f.project_id && <input value={f.group_name} onChange={e => setF({ ...f, group_name: e.target.value })} placeholder="Nhóm" list={'g-' + f.project_id}
+          className="w-[38%] min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>}
+        {f.project_id && <datalist id={'g-' + f.project_id}>{projectGroups(f.project_id, tasks).map(x => <option key={x} value={x}/>)}</datalist>}
+      </div>}
       {series && <p className="text-xs text-gray-500">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
+      {err && <p className="text-xs text-red-600" role="alert">{err}</p>}
       <div className="flex gap-2">
         {canShare && <button onClick={() => series && !confirmDel ? setConfirmDel(true) : onDelete()}
           className={`flex-1 py-2.5 rounded-xl text-sm ${confirmDel ? 'bg-red-600 text-white' : 'bg-white text-red-600'}`}>{confirmDel ? 'Xoá cả chuỗi?' : 'Xoá'}</button>}
         <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl bg-white text-gray-600 text-sm">Huỷ</button>
         <button onClick={save} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">Lưu</button>
+      </div>
+    </div>
+  )
+}
+
+// ── DỰ ÁN ──
+const P_EMOJI = ['📁', '🧪', '💎', '✈️', '🏠', '📚', '💻', '🍵', '🎯', '🛠️', '🌿', '⭐']
+function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
+  const [f, setF] = useState(initial ? { ...initial } : { name: '', emoji: '📁', color: '#7F77DD', shared: false })
+  const [confirm, setConfirm] = useState(false)
+  const canShare = !initial || initial.owner === who
+  return (
+    <div className="bg-white rounded-2xl p-4 flex flex-col gap-3">
+      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên dự án, ví dụ: Bạch Mẫu Đơn V2"
+        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base" autoFocus={!initial}/>
+      <div className="flex flex-wrap gap-1.5">{P_EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => setF({ ...f, emoji: e })} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div>
+      <div className="flex flex-wrap gap-2.5">{COLORS.map(c => <button key={c} onClick={() => setF({ ...f, color: c })} aria-label={'Màu ' + c}
+        className="w-8 h-8 rounded-full" style={{ background: c, outline: f.color === c ? '2px solid #1F2937' : 'none', outlineOffset: 2 }}/>)}</div>
+      {canShare && <label className="flex items-center gap-3"><input type="checkbox" checked={!!f.shared} onChange={e => setF({ ...f, shared: e.target.checked })} className="w-5 h-5"/>
+        <span className="text-[15px]">Chia sẻ với {PEOPLE[otherOf(who)]}</span></label>}
+      <div className="flex gap-2">
+        {initial && canShare && <button onClick={() => confirm ? onDelete() : setConfirm(true)}
+          className={`flex-1 py-2.5 rounded-xl text-sm ${confirm ? 'bg-red-600 text-white' : 'bg-gray-100 text-red-600'}`}>{confirm ? 'Xoá? Việc vẫn giữ' : 'Xoá'}</button>}
+        <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-600 text-sm">Huỷ</button>
+        <button onClick={() => f.name.trim() && onSave({ ...f, name: f.name.trim() })} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">Lưu</button>
+      </div>
+    </div>
+  )
+}
+
+function ProjectCard({ p, tasks, today, onOpen }) {
+  const g = projectProgress(p.id, tasks, today)
+  return (
+      <button onClick={() => onOpen(p.id)} className="w-full bg-white rounded-2xl p-3.5 text-left active:scale-[0.99]">
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">{p.emoji}</span>
+          <div className="flex-1 min-w-0">
+            <div className="text-[15px] font-semibold text-gray-800 truncate">{p.name}{p.shared && ' 👥'}</div>
+            <div className="text-xs text-gray-500 truncate">{g.next ? `Tiếp: ${g.next.title} · ${dm(g.next.due_date)}` : g.undated ? `${g.undated} việc chưa có ngày` : g.total ? 'Không còn việc có hạn' : 'Chưa có việc'}
+              {g.late > 0 && <span className="text-red-600"> · {g.late} quá hạn</span>}</div>
+          </div>
+          <span className="text-sm font-semibold" style={{ color: p.color }}>{g.total ? g.pct + '%' : ''}</span>
+        </div>
+        <div className="h-1.5 bg-gray-100 rounded-full mt-2.5 overflow-hidden"><div className="h-full rounded-full" style={{ width: g.pct + '%', background: p.color }}/></div>
+        <div className="text-[11px] text-gray-400 mt-1">{g.done}/{g.total} việc xong{g.series ? ` · ${g.series} việc lặp` : ''}</div>
+      </button>
+  )
+}
+
+function ProjectsPage({ who, projects, tasks, today, onOpen, onSave, onBack }) {
+  const [adding, setAdding] = useState(false), [showArch, setShowArch] = useState(false)
+  const active = projects.filter(p => !p.archived), arch = projects.filter(p => p.archived)
+
+
+  return (
+    <div className="pb-6">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-30"><div className="max-w-2xl mx-auto px-2 py-2 flex items-center">
+        <button onClick={onBack} className="w-11 h-11 text-2xl text-gray-500" aria-label="Quay lại">‹</button>
+        <h2 className="flex-1 text-center text-lg font-bold text-gray-800">Dự án</h2>
+        <button onClick={() => setAdding(true)} className="w-11 h-11 text-2xl text-purple-600" aria-label="Thêm dự án">+</button></div></header>
+      <div className="max-w-2xl mx-auto px-3 pt-3 flex flex-col gap-2.5">
+        {adding && <ProjectForm who={who} onCancel={() => setAdding(false)} onSave={f => { onSave({ owner: who, ...f }); setAdding(false) }}/>}
+        {active.map(p => <ProjectCard key={p.id} p={p} tasks={tasks} today={today} onOpen={onOpen}/>)}
+        {!active.length && !adding && <button onClick={() => setAdding(true)} className="bg-white rounded-2xl p-6 text-center text-sm text-gray-500 border-2 border-dashed border-gray-200">
+          Chưa có dự án nào · bấm để tạo dự án đầu tiên</button>}
+        {arch.length > 0 && <button onClick={() => setShowArch(!showArch)} className="text-xs text-gray-400 py-2">{showArch ? '▾' : '▸'} Đã lưu trữ · {arch.length}</button>}
+        {showArch && arch.map(p => <div key={p.id} className="opacity-60"><ProjectCard p={p} tasks={tasks} today={today} onOpen={onOpen}/></div>)}
+      </div>
+    </div>
+  )
+}
+
+function ProjectDetail({ who, project: p, projects, tasks, today, onSaveProject, onDeleteProject, onAdd, onEdit, onDelete, onTick, onOpenDay, onBack }) {
+  const [editP, setEditP] = useState(false), [editing, setEditing] = useState(null)
+  const [title, setTitle] = useState(''), [group, setGroup] = useState(''), [newGroup, setNewGroup] = useState(''), [date, setDate] = useState('')
+  const ts = tasks.filter(t => t.project_id === p.id)
+  const groups = projectGroups(p.id, tasks), g = projectProgress(p.id, tasks, today)
+  const grp = group === '__new' ? newGroup.trim() : group
+  const add = () => { const t = title.trim(); if (!t) return
+    onAdd({ title: t, project_id: p.id, group_name: grp || null, due_date: date || null, shared: p.shared, repeat_unit: '', repeat_every: 1 })
+    setTitle(''); if (group === '__new' && grp) setGroup(grp) }
+  const order = t => [t.done ? 1 : 0, t.due_date || '9999', t.title]
+  const sortT = (a, b) => { const x = order(a), y = order(b); return x[0] - y[0] || x[1].localeCompare(y[1]) || x[2].localeCompare(y[2]) }
+  return (
+    <div className="pb-6">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-30"><div className="max-w-2xl mx-auto px-2 py-2 flex items-center">
+        <button onClick={onBack} className="w-11 h-11 text-2xl text-gray-500" aria-label="Quay lại">‹</button>
+        <h2 className="flex-1 text-center text-lg font-bold text-gray-800 truncate">{p.emoji} {p.name}</h2>
+        <button onClick={() => setEditP(!editP)} className="w-11 h-11 text-lg" aria-label="Sửa dự án">✏️</button></div></header>
+      <div className="max-w-2xl mx-auto px-3 pt-3 flex flex-col gap-3">
+        {editP ? <ProjectForm initial={p} who={who} onCancel={() => setEditP(false)} onDelete={() => onDeleteProject(p.id)}
+            onSave={f => { onSaveProject({ id: p.id, name: f.name, emoji: f.emoji, color: f.color, shared: f.shared }); setEditP(false) }}/>
+          : <div className="bg-white rounded-2xl p-3.5">
+              <div className="flex items-baseline justify-between"><span className="text-sm text-gray-600">{g.done}/{g.total} việc xong{g.late ? <span className="text-red-600"> · {g.late} quá hạn</span> : ''}</span>
+                <span className="text-xl font-bold" style={{ color: p.color }}>{g.pct}%</span></div>
+              <div className="h-2 bg-gray-100 rounded-full mt-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: g.pct + '%', background: p.color }}/></div>
+              {(p.owner === who || p.shared) && <button onClick={() => onSaveProject({ id: p.id, archived: !p.archived })} className="text-xs text-gray-400 mt-2">{p.archived ? 'Bỏ lưu trữ' : 'Xong dự án · lưu trữ'}</button>}
+            </div>}
+
+        <div className="bg-white rounded-2xl p-3 flex flex-col gap-2">
+          <div className="flex gap-2">
+            <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="+ Thêm việc vào dự án…"
+              className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+            <button onClick={add} className="bg-purple-600 text-white rounded-xl px-4 font-semibold">Thêm</button>
+          </div>
+          <div className="flex gap-2">
+            <select value={group} onChange={e => setGroup(e.target.value)} aria-label="Nhóm" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2 py-2 text-base bg-white">
+              <option value="">Nhóm: Chung</option>
+              {groups.filter(x => x !== 'Chung').map(x => <option key={x} value={x}>Nhóm: {x}</option>)}
+              <option value="__new">+ Nhóm mới…</option>
+            </select>
+            <input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Ngày" className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-xl px-2 py-2 text-base bg-white"/>
+          </div>
+          {group === '__new' && <input value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Tên nhóm mới, ví dụ: Đóng gói" className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>}
+          <p className="text-xs text-gray-400">{date ? `Việc sẽ hiện trên lịch ngày ${dm(date)}` : 'Không chọn ngày: việc chỉ nằm trong dự án, đặt ngày sau cũng được'}</p>
+        </div>
+
+        {groups.map(gn => { const list = ts.filter(t => (t.group_name || 'Chung') === gn).sort(sortT)
+          return (
+            <div key={gn}>
+              <div className="flex justify-between text-xs text-gray-400 px-1 mb-1"><span>{gn}</span><span>{list.filter(t => !t.repeat_unit && t.done).length}/{list.filter(t => !t.repeat_unit).length}</span></div>
+              <div className="bg-white rounded-2xl px-3">
+                {list.map(t => {
+                  const series = isSeries(t), late = !series && !t.done && t.due_date && t.due_date < today
+                  const nextD = series ? nextOccurrences(t, today, 1)[0] : null
+                  if (editing === t.id) return <EditRow key={t.id} t={t} who={who} projects={projects} tasks={tasks} onCancel={() => setEditing(null)}
+                    onDelete={() => { onDelete(t.id); setEditing(null) }} onSave={f => { onEdit(t.id, f); setEditing(null) }}/>
+                  return (
+                    <div key={t.id} className="flex items-center gap-3 border-b border-gray-100 last:border-0">
+                      {series
+                        ? <button onClick={() => nextD && onOpenDay(nextD)} className="w-8 h-8 rounded-full bg-purple-50 text-purple-700 flex-shrink-0" aria-label="Mở lần tới trên lịch">↻</button>
+                        : <button onClick={() => onTick(t)} aria-label={t.done ? 'Bỏ đánh dấu' : 'Đánh dấu xong'}
+                            className={`w-8 h-8 rounded-full border-2 flex-shrink-0 flex items-center justify-center text-white ${t.done ? 'bg-emerald-500 border-emerald-500' : 'border-gray-300'}`}>{t.done && '✓'}</button>}
+                      <button onClick={() => setEditing(t.id)} className="flex-1 text-left py-3 min-w-0">
+                        <div className={`text-[15px] ${t.done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
+                        <div className={`text-xs mt-0.5 ${late ? 'text-red-600' : 'text-gray-400'}`}>
+                          {series ? `↻ ${describe(t)}${nextD ? ' · lần tới ' + dm(nextD) : ''}` : t.due_date ? (late ? 'Quá hạn · ' : '') + dm(t.due_date) + (t.due_time ? ' · ' + t.due_time : '') : 'Chưa có ngày · bấm để đặt'}
+                        </div>
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          ) })}
+        {!ts.length && <p className="text-center text-sm text-gray-400 py-6">Chưa có việc nào — thêm ở ô phía trên</p>}
       </div>
     </div>
   )
@@ -663,7 +914,7 @@ function NotifySection({ who }) {
 }
 
 // ── CÀI ĐẶT ──
-function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack }) {
+function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, linkPrefs = DEFAULT_LINKS, onLinkPrefs }) {
   const toast = useToast()
   const [pinMode, setPinMode] = useState(false), [p1, setP1] = useState('')
   const changePin = async () => {
@@ -684,6 +935,13 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack })
               {['05:00', '05:30', '06:00', '06:30', '07:00'].map(x => <option key={x}>{x}</option>)}</select></SetRow>
         </div>
         <NotifySection who={who}/>
+        <div className="bg-white rounded-2xl px-4">
+          <div className="text-xs text-gray-400 pt-3">Hiện thêm trên lịch · chỉ xem</div>
+          <SetRow title="💎 Trang sức" sub="Đặt hàng, hàng dự kiến về, nhập kho, hẹn giao khách"><Switch on={linkPrefs.jewelry} onClick={() => onLinkPrefs({ ...linkPrefs, jewelry: !linkPrefs.jewelry })} label="Mốc Trang sức"/></SetRow>
+          <SetRow title="🧪 Lab" sub="Làm lô, đặt nguyên liệu, nguyên liệu về"><Switch on={linkPrefs.lab} onClick={() => onLinkPrefs({ ...linkPrefs, lab: !linkPrefs.lab })} label="Mốc Lab"/></SetRow>
+          <SetRow title="✂️ Ngày cắt tóc, móng tay" sub="Ngày tốt có dấu ✂ đỏ; kết quả hiện trong chi tiết ngày"><Switch on={linkPrefs.hair !== false} onClick={() => onLinkPrefs({ ...linkPrefs, hair: linkPrefs.hair === false })} label="Ngày cắt tóc"/></SetRow>
+          <p className="text-xs text-gray-400 pb-3">Bật tắt riêng cho {PEOPLE[who]}. Không gửi thông báo cho các mốc này.</p>
+        </div>
         <div className="bg-white rounded-2xl px-4">
           <div className="flex items-center pt-3"><span className="text-xs text-gray-400 flex-1">Daily của {PEOPLE[who]}</span>
             <button onClick={() => onEditDaily(null)} className="text-sm text-purple-700 font-medium py-1">+ Thêm</button></div>
@@ -739,8 +997,18 @@ function DailyForm({ initial, who, onSave, onBack }) {
         <div><span className="text-xs text-gray-500">Ngày làm</span><div className="flex gap-1.5 mt-1">
           {WD.map((w, i) => <Chip key={w} on={f.weekdays.includes(String(i + 1))} onClick={() => toggleDay(String(i + 1))} cls="flex-1 px-0">{w}</Chip>)}</div>
           {!f.weekdays && <p className="text-xs text-red-500 mt-1">Chọn ít nhất một ngày</p>}</div>
-        <label className="block"><span className="text-xs text-gray-500">Giờ bắt đầu · để trống nếu làm lúc nào cũng được</span>
-          <input type="time" value={f.start_time || ''} onChange={e => set('start_time', e.target.value)} className="w-full mt-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/></label>
+        <div><span className="text-xs text-gray-500">Giờ bắt đầu</span>
+          <div className="flex gap-2 mt-1 items-center">
+            <Chip on={!f.start_time} onClick={() => setF(x => ({ ...x, start_time: '', remind: false }))}>Lúc nào cũng được</Chip>
+            <input type="time" value={f.start_time || ''} aria-label="Giờ bắt đầu"
+              onChange={e => setF(x => ({ ...x, start_time: e.target.value, remind: e.target.value ? (x.start_time ? x.remind : true) : false }))}
+              className={`flex-1 min-w-0 block appearance-none border rounded-xl px-3 py-2 text-base bg-white ${f.start_time ? 'border-purple-300' : 'border-gray-200'}`}/>
+          </div>
+          {f.start_time && <div className="flex items-center gap-3 mt-3">
+            <div className="flex-1"><div className="text-[15px] text-gray-800">Nhắc khi tới giờ</div><div className="text-xs text-gray-500">Gửi thông báo lúc {f.start_time} những ngày có làm</div></div>
+            <Switch on={!!f.remind} onClick={() => set('remind', !f.remind)} label="Nhắc khi tới giờ"/>
+          </div>}
+        </div>
         {canShare && <label className="flex items-center gap-3"><input type="checkbox" checked={!!f.shared} onChange={e => set('shared', e.target.checked)} className="w-5 h-5"/>
           <span className="text-[15px]">Chia sẻ với {PEOPLE[otherOf(who)]} <span className="block text-xs text-gray-500">Cả hai cùng thấy, mỗi người bấm giờ riêng</span></span></label>}
       </div>

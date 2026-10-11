@@ -118,7 +118,7 @@ export default function AppShell() {
       case 'viec':
         return (
           <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
-            <Viec />
+            <Viec onNavigate={setActiveModule} />
           </Suspense>
         )
       default:

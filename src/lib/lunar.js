@@ -79,3 +79,22 @@ export function isTraiDay(iso, cfg = {}) {
   return TRAI_DAYS.includes(L.day) || (cfg.bu27 !== false && L.len === 29 && L.day === 27)
 }
 export const isMakeupDay = iso => { const L = lunarOf(iso); return L.len === 29 && L.day === 27 }
+
+// ── CẮT TÓC, CẮT MÓNG TAY theo ngày âm ──
+// [kết quả, tốt?] — tốt là những dòng in đậm trong bảng gốc (mùng 9 xếp tốt theo nội dung "Kính ái")
+export const HAIR_DAYS = {
+  1: ['Đoản thọ', false], 2: ['Chịu ảnh hưởng từ dịch bệnh', false], 3: ['Giàu có', true], 4: ['Kính ái', true],
+  5: ['Tăng trưởng tài bảo', true], 6: ['Tranh chấp, xung đột', false], 7: ['Khí sắc suy nhược, kém hấp dẫn', false],
+  8: ['Trường thọ', true], 9: ['Kính ái, đặc biệt với người kém tuổi hơn', true], 10: ['Tăng trưởng may mắn', true],
+  11: ['Thiếu tỉnh thức, sáng suốt', false], 12: ['Nguy hiểm đến tính mạng', false], 13: ['Viên mãn cát tường', true],
+  14: ['Giàu có', true], 15: ['Đặc biệt cát tường', true], 16: ['Tranh chấp, xung đột', false],
+  17: ['Thần sắc hao tổn, nhợt nhạt', false], 18: ['Tán tài', false], 19: ['Kết giao với thiện hữu tri thức', true],
+  20: ['Nghèo đói', false], 21: ['Bệnh tật', false], 22: ['Được cho tặng thực phẩm', true], 23: ['Viên mãn cát tường', true],
+  24: ['Đau mắt', false], 25: ['Ốm đau', false], 26: ['Cuộc sống bình an', true], 27: ['Tăng trưởng công đức', true],
+  28: ['Bất hoà, cãi vã', false], 29: ['Cơ hội kết giao, sống hoà thuận với thiện tri thức', true],
+  30: ['Đối diện với cái chết và quỷ thần', false],
+}
+export function hairOf(iso) {
+  const h = HAIR_DAYS[lunarOf(iso).day]
+  return h ? { text: h[0], good: h[1] } : null
+}
