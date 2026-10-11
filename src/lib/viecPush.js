@@ -6,7 +6,7 @@
 import { supabase } from './supabase'
 
 const FN = 'viec-push'
-export const DEFAULT_PREFS = { all: true, todo: true, daily: true, forgot: true, mo: true, moAt: '07:30', ev: true, evAt: '21:30' }
+export const DEFAULT_PREFS = { all: true, todo: true, daily: true, timeup: true, forgot: true, mo: true, moAt: '07:30', ev: true, evAt: '21:30' }
 
 // Máy này có nhận được thông báo không, và vì sao
 export function pushSupport() {

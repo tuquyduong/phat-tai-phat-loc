@@ -24,6 +24,11 @@ export default function AppShell() {
       return 'viec'
     } catch { return 'home' }
   })
+  // Mở thẳng một món từ lịch: { type: 'product' | 'sale' | 'batch' | 'ingredient', id }
+  // Xoá ngay khi tab đích đã mở xong, để lần sau vào tab đó không bị nhảy lại món cũ
+  const [deepLink, setDeepLink] = useState(null)
+  const openFromCalendar = (tab, target) => { setDeepLink(target ? { ...target, tab } : null); setActiveModule(tab) }
+  const doneDeepLink = () => setDeepLink(null)
   // App đang mở sẵn mà bấm thông báo → Service Worker nhắn chuyển tab
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
@@ -112,13 +117,13 @@ export default function AppShell() {
       case 'expenses':
         return <Expenses />
       case 'lab':
-        return <Lab />
+        return <Lab openTarget={deepLink?.tab === 'lab' ? deepLink : null} onTargetDone={doneDeepLink} />
       case 'jewelry':
-        return <Jewelry />
+        return <Jewelry openTarget={deepLink?.tab === 'jewelry' ? deepLink : null} onTargetDone={doneDeepLink} />
       case 'viec':
         return (
           <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
-            <Viec onNavigate={setActiveModule} />
+            <Viec onNavigate={openFromCalendar} />
           </Suspense>
         )
       default:

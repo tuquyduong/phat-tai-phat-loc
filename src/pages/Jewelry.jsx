@@ -31,7 +31,7 @@ import {
 // ============================================
 // MAIN
 // ============================================
-export default function Jewelry() {
+export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
   const toast = useToast()
   const [jewelry,  setJewelry]  = useState([])
   const [sales,    setSales]    = useState([])
@@ -99,6 +99,21 @@ export default function Jewelry() {
   }, [toast])
 
   useEffect(() => { loadData() }, [loadData])
+
+  // Mở thẳng một món khi bấm từ lịch (tab Việc): đợi tải xong rồi mở đúng sản phẩm / đơn
+  useEffect(() => {
+    if (!openTarget || loading) return
+    if (openTarget.type === 'product') {
+      const item = jewelry.find(x => x.id === openTarget.id)
+      if (item) { setModTab('kho'); setKhoView(item.status === 'ordered' ? 'incoming' : 'stock'); openDetail(item) }
+      else toast.error('Không tìm thấy món này — có thể đã bị xoá')
+    } else if (openTarget.type === 'sale') {
+      const s = sales.find(x => x.id === openTarget.id)
+      if (s) { setModTab('ban'); setEditSale(s) }
+      else toast.error('Không tìm thấy đơn này — có thể đã bị xoá')
+    }
+    onTargetDone?.()
+  }, [openTarget, loading])                              // eslint-disable-line react-hooks/exhaustive-deps
 
   const stats    = useMemo(() => calcStats(jewelry, sales), [jewelry, sales])
 

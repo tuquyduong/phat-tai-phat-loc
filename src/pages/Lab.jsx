@@ -28,10 +28,11 @@ import {
 // ============================================
 // MAIN
 // ============================================
-export default function Lab() {
+export default function Lab({ openTarget = null, onTargetDone } = {}) {
   const toast = useToast()
   const toastRef = useRef(toast); toastRef.current = toast
   const [activeTab, setActiveTab] = useState('formulas')
+  const [focus, setFocus] = useState(null)        // { type, id, n } — mở thẳng một lô / nguyên liệu từ lịch
   const [ingredients, setIngredients] = useState([])
   const [formulas, setFormulas] = useState([])
   const [notes, setNotes] = useState([])
@@ -56,6 +57,14 @@ export default function Lab() {
     const t = getAlertThreshold(i)
     return t > 0 && Number(i.stock_qty) < t
   }).length
+
+  useEffect(() => {
+    if (!openTarget || loading) return
+    if (openTarget.type === 'batch') setActiveTab('batches')
+    if (openTarget.type === 'ingredient') setActiveTab('ingredients')
+    setFocus({ type: openTarget.type, id: openTarget.id, n: Date.now() })
+    onTargetDone?.()
+  }, [openTarget, loading])                              // eslint-disable-line react-hooks/exhaustive-deps
 
   const tabs = [
     { id:'formulas',     icon:<FlaskConical size={16}/>, label:'Công thức',   count:formulas.length },
@@ -92,9 +101,9 @@ export default function Lab() {
         ) : activeTab==='formulas' ? (
           <FormulasTab formulas={formulas} notes={notes} ingredients={ingredients} labCategories={labCategories} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
         ) : activeTab==='ingredients' ? (
-          <IngredientsTab ingredients={ingredients} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
+          <IngredientsTab ingredients={ingredients} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} focus={focus?.type === 'ingredient' ? focus : null} />
         ) : activeTab==='batches' ? (
-          <BatchesTab batches={batches} formulas={formulas} ingredients={ingredients} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
+          <BatchesTab batches={batches} formulas={formulas} ingredients={ingredients} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} focus={focus?.type === 'batch' ? focus : null} />
         ) : (
           <NotesTab notes={notes} formulas={formulas} search={search} setSearch={setSearch} onRefresh={loadData} toast={toast} />
         )}
@@ -1102,13 +1111,23 @@ function QuickBatchForm({ isOpen, onClose, ingredients, toast, onSaved }) {
 // ============================================
 // BATCHES TAB
 // ============================================
-function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefresh, toast }) {
+function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefresh, toast, focus = null }) {
   const [showQuick, setShowQuick] = useState(false)
   const [editNote,  setEditNote]  = useState(null)
   const [view,      setView]      = useState('list')     // list | summary
   const [period,    setPeriod]    = useState('all')      // month | 3m | year | all
   const [sortBy,    setSortBy]    = useState('newest')
   const [groupKey,  setGroupKey]  = useState(null)       // đang xem lô của 1 loại
+  const [hl, setHl] = useState(null)                     // lô đang được tô sáng (mở từ lịch)
+  // Mở từ lịch: bỏ mọi bộ lọc để chắc chắn lô hiện ra, cuộn tới và tô sáng vài giây
+  useEffect(() => {
+    if (!focus) return
+    setView('list'); setPeriod('all'); setGroupKey(null); setSearch('')
+    setHl(focus.id)
+    const t1 = setTimeout(() => document.getElementById('batch-' + focus.id)?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120)
+    const t2 = setTimeout(() => setHl(null), 3500)
+    return () => { clearTimeout(t1); clearTimeout(t2) }
+  }, [focus?.n])                                          // eslint-disable-line react-hooks/exhaustive-deps
 
   // Tên hiển thị + khoá gom nhóm cho mỗi lô
   const fName = useMemo(() => {
@@ -1306,7 +1325,7 @@ function BatchesTab({ batches, formulas, ingredients, search, setSearch, onRefre
             const f = formulas.find(fm => fm.id===b.formula_id)
             const isQuick = !b.formula_id
             return (
-              <div key={b.id} className="bg-white rounded-xl px-4 py-3 shadow-sm">
+              <div key={b.id} id={'batch-' + b.id} className={`bg-white rounded-xl px-4 py-3 shadow-sm transition-shadow ${hl === b.id ? 'ring-2 ring-purple-500' : ''}`}>
                 <div className="flex items-start gap-3">
                   <div className={`w-9 h-9 rounded-full flex items-center justify-center text-lg flex-shrink-0 ${isQuick?'bg-amber-50':'bg-green-50'}`}>
                     {isQuick?'⚡':'🧪'}
@@ -1366,11 +1385,18 @@ function stockLevel(i) {
   return (t > 0 && q < t) ? 2 : 3
 }
 
-function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast }) {
+function IngredientsTab({ ingredients, search, setSearch, onRefresh, toast, focus = null }) {
   const [showForm, setShowForm]   = useState(false)
   const [editing, setEditing]     = useState(null)
   const [editStock, setEditStock] = useState(null) // { id, qty }
   const [selectedIng, setSelectedIng] = useState(null)
+  // Mở từ lịch: vào thẳng màn chi tiết nguyên liệu (có lịch sử nhập)
+  useEffect(() => {
+    if (!focus) return
+    const ing = ingredients.find(i => i.id === focus.id)
+    if (ing) setSelectedIng(ing)
+    else toast.error('Không tìm thấy nguyên liệu này — có thể đã bị xoá')
+  }, [focus?.n])                                          // eslint-disable-line react-hooks/exhaustive-deps
   const [showThreshold, setShowThreshold] = useState(false)
   const [sortBy, setSortBy] = useState('urgent')   // urgent|name|most|least|negative
 

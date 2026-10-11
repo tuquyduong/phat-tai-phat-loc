@@ -60,16 +60,18 @@ export async function loadAll(who, sinceDays = 40) {
   const since = addDays(getLocalDateString(), -sinceDays)
   // Việc đã xong quá 13 tháng thì không tải nữa (vẫn nằm trong database và bản sao lưu)
   const oldest = addDays(getLocalDateString(), -400)
-  const [t, d, l, p] = await Promise.all([
+  const [t, d, l, p, o] = await Promise.all([
     // Việc của dự án luôn tải đủ (kể cả đã xong) để tính đúng tiến độ dự án
     supabase.from('viec_tasks').select('*').or(mineFilter(who)).or(`done.eq.false,due_date.gte.${oldest},project_id.not.is.null`)
       .order('due_date', { ascending: true }),
     supabase.from('viec_daily').select('*').or(mineFilter(who)).order('sort').order('created_at'),
     supabase.from('viec_logs').select('*').eq('who', who).gte('day', since).order('start_at'),
     supabase.from('viec_projects').select('*').or(mineFilter(who)).order('created_at'),
+    // Hàng đặt: mọi đơn chưa về + đơn đặt trong 13 tháng gần nhất (đủ cho tổng kết và số ngày về trung bình)
+    supabase.from('viec_orders').select('*').or(mineFilter(who)).or(`received_at.is.null,order_date.gte.${oldest}`).order('order_date'),
   ])
-  for (const r of [t, d, l, p]) if (r.error) throw r.error
-  return { tasks: t.data || [], daily: d.data || [], logs: l.data || [], projects: p.data || [] }
+  for (const r of [t, d, l, p, o]) if (r.error) throw r.error
+  return { tasks: t.data || [], daily: d.data || [], logs: l.data || [], projects: p.data || [], orders: o.data || [] }
 }
 
 // ── To-do ──
@@ -135,6 +137,42 @@ export function projectGroups(projectId, tasks) {
   return names
 }
 
+
+// ── Hàng đặt ──
+export async function saveOrder(fields) {
+  const q = fields.id
+    ? supabase.from('viec_orders').update(fields).eq('id', fields.id)
+    : supabase.from('viec_orders').insert([fields])
+  const { data, error } = await q.select().single()
+  if (error) throw error
+  return data
+}
+export async function deleteOrder(id) {
+  const { error } = await supabase.from('viec_orders').delete().eq('id', id)
+  if (error) throw error
+}
+// Mã tracking: một hoặc nhiều mã, cách nhau dấu phẩy / khoảng trắng / xuống dòng
+export const trackingCodes = s => [...new Set(String(s || '').split(/[\s,;]+/).map(x => x.trim()).filter(Boolean))]   // bỏ mã dán trùng
+export const trackUrl = code => 'https://t.17track.net/vi#nums=' + encodeURIComponent(code)
+// Số ngày về trung bình, học từ các đơn đã nhận
+export function avgArrival(orders) {
+  const r = orders.filter(o => o.received_at && o.order_date)
+  return r.length ? Math.round(r.reduce((a, o) => a + daysBetween(o.received_at, o.order_date), 0) / r.length) : null
+}
+// Tình trạng một đơn chưa về: quá hẹn (có ngày về), lâu bất thường (không ngày về, chờ gấp đôi trung bình)
+export function orderFlag(o, today, avg) {
+  if (o.received_at) return null
+  if (o.eta) return o.eta < today ? { kind: 'late', days: daysBetween(today, o.eta) } : { kind: 'eta', days: daysBetween(o.eta, today) }
+  return avg && daysBetween(today, o.order_date) > avg * 2 ? { kind: 'slow' } : null
+}
+// Tổng kết theo tháng đặt (month = 'YYYY-MM'): chưa về gồm cả đơn các tháng trước còn treo
+export function orderSummary(orders, month, today) {
+  const inMonth = orders.filter(o => o.order_date.startsWith(month))
+  const received = inMonth.filter(o => o.received_at).sort((a, b) => b.received_at.localeCompare(a.received_at))
+  const pending = orders.filter(o => !o.received_at && o.order_date.slice(0, 7) <= month).sort((a, b) => a.order_date.localeCompare(b.order_date))
+  return { total: inMonth.length, received, pending, avg: avgArrival(orders) }
+}
+
 // ── Daily ──
 export async function saveDaily(fields) {
   const q = fields.id
@@ -174,6 +212,32 @@ export async function toggleTick(daily, who, logs) {
     .insert([{ daily_id: daily.id, who, day: today, start_at: now, end_at: now, minutes: 0 }]).select().single()
   if (error) throw error
   return { added: data }
+}
+
+
+// Nhập tay khi quên theo dõi: value là số phút (bấm giờ) hoặc số lượng (đếm). day mặc định hôm nay.
+export async function addManual(daily, who, value, day = getLocalDateString(), manual = true) {
+  const v = Math.round(Number(value))
+  if (!(v > 0)) throw new Error(daily.kind === 'count' ? 'Nhập số lượng lớn hơn 0' : 'Nhập số phút lớn hơn 0')
+  if (day > getLocalDateString()) throw new Error('Không ghi cho ngày chưa tới')
+  const now = new Date().toISOString()
+  const { data, error } = await supabase.from('viec_logs')
+    .insert([{ daily_id: daily.id, who, day, start_at: now, end_at: now, minutes: v, manual }]).select().single()
+  if (error) throw error
+  return data
+}
+export async function deleteLog(id) {
+  const { error } = await supabase.from('viec_logs').delete().eq('id', id)
+  if (error) throw error
+}
+// Gợi ý số cho nút cộng nhanh / nhập tay, theo mục tiêu
+export function quickSteps(daily) {
+  if (daily.kind === 'time') return [15, 30, 45, 60, 90]
+  const t = daily.target_min || 10
+  if (t >= 200) return [10, 50, 100]
+  if (t >= 50) return [10, 20, 50]
+  if (t >= 10) return [1, 5, 10]
+  return [1, 2, 5]
 }
 
 // ============================================

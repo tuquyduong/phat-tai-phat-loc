@@ -39,25 +39,27 @@ export async function loadLinks(from, to, prefs = DEFAULT_LINKS) {
         supabase.from('jewelry').select('id,code,name,order_date,status').gte('order_date', from).lte('order_date', to),
         supabase.from('jewelry').select('id,code,name,eta_date,status,incoming_qty').eq('status', 'ordered').gte('eta_date', from).lte('eta_date', to),
       ])
-      ok(ord).forEach(j => ev.push({ date: j.order_date, src: 'jewelry', kind: 'order', text: label(j) }))
-      ok(eta).forEach(j => ev.push({ date: j.eta_date, src: 'jewelry', kind: 'eta', text: label(j) + (j.incoming_qty > 1 ? ` ×${j.incoming_qty}` : '') }))
+      ok(ord).forEach(j => ev.push({ date: j.order_date, src: 'jewelry', kind: 'order', text: label(j), target: { type: 'product', id: j.id } }))
+      ok(eta).forEach(j => ev.push({ date: j.eta_date, src: 'jewelry', kind: 'eta', text: label(j) + (j.incoming_qty > 1 ? ` ×${j.incoming_qty}` : ''), target: { type: 'product', id: j.id } }))
     }))
     jobs.push(safe(async () => {
       const ins = ok(await supabase.from('jewelry_intakes').select('id,jewelry_id,item_name,qty,intake_at').gte('intake_at', startTs(from)).lte('intake_at', endTs(to)))
       const jm = await nameMap('jewelry', ins.map(r => r.jewelry_id), 'id,code,name')
-      ins.forEach(r => ev.push({ date: dayOf(r.intake_at), src: 'jewelry', kind: 'intake', text: (label(jm[r.jewelry_id]) || r.item_name || 'Hàng') + (r.qty > 1 ? ` ×${r.qty}` : '') }))
+      ins.forEach(r => ev.push({ date: dayOf(r.intake_at), src: 'jewelry', kind: 'intake', text: (label(jm[r.jewelry_id]) || r.item_name || 'Hàng') + (r.qty > 1 ? ` ×${r.qty}` : ''),
+        target: r.jewelry_id ? { type: 'product', id: r.jewelry_id } : null }))   // sản phẩm đã xoá → chỉ mở tab
     }))
     jobs.push(safe(async () => {
       const ss = ok(await supabase.from('jewelry_sales').select('id,jewelry_id,item_name,customer_name,due_date,delivered').eq('delivered', false).gte('due_date', from).lte('due_date', to))
       const jm = await nameMap('jewelry', ss.map(r => r.jewelry_id), 'id,code,name')
-      ss.forEach(r => ev.push({ date: r.due_date, src: 'jewelry', kind: 'deliver', text: (label(jm[r.jewelry_id]) || r.item_name || 'Hàng') + (r.customer_name ? ' → ' + r.customer_name : '') }))
+      ss.forEach(r => ev.push({ date: r.due_date, src: 'jewelry', kind: 'deliver', text: (label(jm[r.jewelry_id]) || r.item_name || 'Hàng') + (r.customer_name ? ' → ' + r.customer_name : ''),
+        target: r.jewelry_id ? { type: 'product', id: r.jewelry_id } : { type: 'sale', id: r.id } }))   // hàng order không có sản phẩm → mở đơn
     }))
   }
   if (prefs.lab) {
     jobs.push(safe(async () => {
       const bs = ok(await supabase.from('lab_batches').select('id,name,formula_id,serving,created_at').gte('created_at', startTs(from)).lte('created_at', endTs(to)))
       const fm = await nameMap('formulas', bs.map(b => b.formula_id), 'id,name')
-      bs.forEach(b => ev.push({ date: dayOf(b.created_at), src: 'lab', kind: 'batch', text: (fm[b.formula_id]?.name || b.name || 'Lô') + (b.serving ? ` · ${b.serving} serving` : '') }))
+      bs.forEach(b => ev.push({ date: dayOf(b.created_at), src: 'lab', kind: 'batch', text: (fm[b.formula_id]?.name || b.name || 'Lô') + (b.serving ? ` · ${b.serving} serving` : ''), target: { type: 'batch', id: b.id } }))
     }))
     jobs.push(safe(async () => {
       const [o, a] = await Promise.all([
@@ -66,8 +68,8 @@ export async function loadLinks(from, to, prefs = DEFAULT_LINKS) {
       ])
       const rows = [...ok(o), ...ok(a)], im = await nameMap('ingredients', rows.map(r => r.ingredient_id), 'id,name')
       const t = r => (im[r.ingredient_id]?.name || 'Nguyên liệu') + (r.qty ? ` ${r.qty}${r.unit || ''}` : '')
-      ok(o).forEach(r => ev.push({ date: r.order_date, src: 'lab', kind: 'ing_order', text: t(r) }))
-      ok(a).forEach(r => ev.push({ date: r.arrived_date, src: 'lab', kind: 'ing_arrive', text: t(r) }))
+      ok(o).forEach(r => ev.push({ date: r.order_date, src: 'lab', kind: 'ing_order', text: t(r), target: r.ingredient_id ? { type: 'ingredient', id: r.ingredient_id } : null }))
+      ok(a).forEach(r => ev.push({ date: r.arrived_date, src: 'lab', kind: 'ing_arrive', text: t(r), target: r.ingredient_id ? { type: 'ingredient', id: r.ingredient_id } : null }))
     }))
   }
   await Promise.all(jobs)
@@ -93,6 +95,6 @@ export function linkMarks(events) {
 // Các nhóm của một ngày: [{ kind, icon, label, src, items: [text…] }], theo thứ tự KIND
 export function linkGroups(events, iso) {
   const day = events.filter(e => e.date === iso)
-  return Object.entries(KIND).map(([kind, k]) => ({ kind, ...k, items: day.filter(e => e.kind === kind).map(e => e.text) }))
+  return Object.entries(KIND).map(([kind, k]) => ({ kind, ...k, items: day.filter(e => e.kind === kind).map(e => e.text), events: day.filter(e => e.kind === kind) }))
     .filter(g => g.items.length)
 }
