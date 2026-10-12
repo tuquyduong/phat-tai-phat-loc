@@ -1,7 +1,7 @@
 // ============================================
 // EXPENSES API - v3
 // + payment_method: cash / transfer / credit
-// + type: income / expense / transfer / pay_credit
+// + type: income / expense / transfer / pay_credit (payment_method 'credit' = hoàn tiền về thẻ) / adjust
 // + Lũy kế TM, CK, Nợ TD
 // ============================================
 import { supabase } from './supabase'
@@ -167,8 +167,10 @@ export function foldRunning(groups) {
       r.total -= amt
     } else if (g.type === 'transfer') {                       // payment_method = nguồn chuyển ĐI
       if (m === 'cash') { r.cash -= amt; r.transfer += amt } else { r.transfer -= amt; r.cash += amt }
-    } else if (g.type === 'pay_credit') {                     // trả thẻ từ TM/CK: tiền giảm, nợ thẻ đó giảm
-      if (m === 'cash') r.cash -= amt; else r.transfer -= amt
+    } else if (g.type === 'pay_credit') {                     // trả thẻ: nợ thẻ đó giảm
+      if (m === 'cash') r.cash -= amt                         //   trả bằng tiền mặt
+      else if (m === 'transfer') r.transfer -= amt            //   trả bằng chuyển khoản
+      /* m === 'credit': HOÀN TIỀN từ chương trình thẻ — không ai bỏ tiền ra, chỉ giảm nợ thẻ */
       card(g.card_id, -amt)
     } else if (g.type === 'adjust') {                         // điều chỉnh đối soát (có thể âm)
       if (m === 'cash') r.cash += amt; else if (m === 'transfer') r.transfer += amt
@@ -303,7 +305,8 @@ export function affectedKeys(tx) {
   if (tx.type === 'income') return m === 'credit' ? [] : [m]
   if (tx.type === 'expense') return [accKey(m, tx.card_id)]
   if (tx.type === 'transfer') return ['cash', 'transfer']
-  if (tx.type === 'pay_credit') return [m === 'cash' ? 'cash' : 'transfer', accKey('credit', tx.card_id)]
+  if (tx.type === 'pay_credit') return m === 'credit' ? [accKey('credit', tx.card_id)]       // hoàn tiền: chỉ ảnh hưởng thẻ
+    : [m === 'cash' ? 'cash' : 'transfer', accKey('credit', tx.card_id)]
   return []                                                   // điều chỉnh không tính là ghi lùi
 }
 export async function getReconState() {

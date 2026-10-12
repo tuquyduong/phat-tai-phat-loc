@@ -107,16 +107,16 @@ export default function Expenses() {
   }), [initialBal, runningBal])
 
   const monthMoves = useMemo(() => {
-    let c2t=0, t2c=0, payCreditCash=0, payCreditTransfer=0, creditSpend=0, adjCash=0, adjTransfer=0, adjCredit=0
+    let c2t=0, t2c=0, payCreditCash=0, payCreditTransfer=0, refundCredit=0, creditSpend=0, adjCash=0, adjTransfer=0, adjCredit=0
     const cardMv = {}, card = (id, d) => { const k = id || 'none'; cardMv[k] = (cardMv[k] || 0) + d }
     transactions.forEach(t => {
       const amt = Number(t.amount), m = t.payment_method||'cash'
       if (t.type==='transfer') { if(m==='cash') c2t+=amt; else t2c+=amt }
-      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else payCreditTransfer+=amt; card(t.card_id, -amt) }
+      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else if(m==='transfer') payCreditTransfer+=amt; else refundCredit+=amt; card(t.card_id, -amt) }   // 'credit' = hoàn tiền về thẻ
       else if (t.type==='expense' && m==='credit') { creditSpend+=amt; card(t.card_id, amt) }
       else if (t.type==='adjust') { if(m==='cash') adjCash+=amt; else if(m==='transfer') adjTransfer+=amt; else if(m==='credit') { adjCredit+=amt; card(t.card_id, amt) } }
     })
-    return { c2t, t2c, payCreditCash, payCreditTransfer, creditSpend, adjCash, adjTransfer, adjCredit, cardMv }
+    return { c2t, t2c, payCreditCash, payCreditTransfer, refundCredit, creditSpend, adjCash, adjTransfer, adjCredit, cardMv }
   }, [transactions])
 
   const closeBal = useMemo(() => {
@@ -125,7 +125,7 @@ export default function Expenses() {
     return {
       cash: openBal.cash + m.cash.income - m.cash.expense - mv.c2t + mv.t2c - mv.payCreditCash + mv.adjCash,
       transfer: openBal.transfer + m.transfer.income - m.transfer.expense - mv.t2c + mv.c2t - mv.payCreditTransfer + mv.adjTransfer,
-      credit: openBal.credit + mv.creditSpend - mv.payCreditCash - mv.payCreditTransfer + mv.adjCredit,
+      credit: openBal.credit + mv.creditSpend - mv.payCreditCash - mv.payCreditTransfer - mv.refundCredit + mv.adjCredit,
       cards: Object.fromEntries([...new Set([...Object.keys(openBal.cards), ...Object.keys(mv.cardMv)])].map(k => [k, (openBal.cards[k] || 0) + (mv.cardMv[k] || 0)])),
       get total() { return this.cash + this.transfer - this.credit }
     }
@@ -186,7 +186,7 @@ export default function Expenses() {
   // TX display helpers
   const txIcon = (tx) => {
     if(tx.type==='transfer') return '🔄'
-    if(tx.type==='pay_credit') return '💳'
+    if(tx.type==='pay_credit') return tx.payment_method==='credit' ? '🎁' : '💳'
     if(tx.type==='adjust') return '⚖️'
     return tx.category?.icon||'📦'
   }
@@ -198,7 +198,7 @@ export default function Expenses() {
   }
   const txLabel = (tx) => {
     if(tx.type==='transfer') return `Chuyển ${(tx.payment_method||'cash')==='cash'?'TM → CK':'CK → TM'}`
-    if(tx.type==='pay_credit') return `Trả nợ TD từ ${(tx.payment_method||'cash')==='cash'?'TM':'CK'}`
+    if(tx.type==='pay_credit') return tx.payment_method==='credit' ? `Hoàn tiền về thẻ ${cardName(tx.card_id)||''}`.trim() : `Trả nợ TD từ ${(tx.payment_method||'cash')==='cash'?'TM':'CK'}`
     if(tx.type==='adjust') return `Điều chỉnh đối soát · ${tx.payment_method==='cash'?'TM':tx.payment_method==='transfer'?'CK':'thẻ '+(cardName(tx.card_id)||'chưa phân')}`
     return tx.note||tx.category?.name||'Giao dịch'
   }
@@ -630,7 +630,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
     if (busyRef.current) return
     { const ws = backdateWarnings({ type: 'pay_credit', payment_method: source, card_id: card ? card.id : null, date }, reconLast, cards); if (ws.length && !confirm(warnText(ws))) return }
     busyRef.current = true; setSaving(true)
-    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:source, date, note:note||`Trả thẻ ${card ? card.name : 'TD'} từ ${source==='cash'?'TM':'CK'}`, category_id:null, ...(card ? { card_id: card.id } : {}) }); toast.success('Đã trả nợ TD'); onClose(); onSaved() }
+    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:source, date, note:note||(source==='credit' ? `Hoàn tiền thẻ ${card ? card.name : 'TD'}` : `Trả thẻ ${card ? card.name : 'TD'} từ ${source==='cash'?'TM':'CK'}`), category_id:null, ...(card ? { card_id: card.id } : {}) }); toast.success('Đã trả nợ TD'); onClose(); onSaved() }
     catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
@@ -647,14 +647,16 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
 
         {creditDebt<=0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">App đang ghi nhận thẻ này không có nợ. Nếu bạn vừa trả thật, vẫn ghi bình thường — rồi dùng ⚖️ Đối soát để khớp với sao kê.</p>}
         {(<>
-          <div><label className="text-xs text-gray-500 mb-1.5 block">Trả từ</label>
+          <div><label className="text-xs text-gray-500 mb-1.5 block">Nguồn</label>
             <div className="flex gap-2">
               <button onClick={() => setSource('transfer')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='transfer'?'border-blue-400 bg-blue-50 text-blue-700':'border-gray-200 text-gray-500'}`}>🏦 CK ({formatMoney(closeBal?.transfer||0)})</button>
               <button onClick={() => setSource('cash')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='cash'?'border-amber-400 bg-amber-50 text-amber-700':'border-gray-200 text-gray-500'}`}>💵 TM ({formatMoney(closeBal?.cash||0)})</button>
             </div>
+            <button onClick={() => setSource('credit')} className={`w-full mt-2 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='credit'?'border-pink-400 bg-pink-50 text-pink-700':'border-gray-200 text-gray-500'}`}>🎁 Hoàn tiền từ chương trình thẻ</button>
+            {source==='credit' && <p className="text-[11px] text-pink-700 mt-1.5">Chỉ giảm nợ thẻ. Tiền mặt, CK và Thu Chi không đổi.</p>}
           </div>
 
-          <div><label className="text-xs text-gray-500 mb-1 block">Số tiền trả</label>
+          <div><label className="text-xs text-gray-500 mb-1 block">{source==='credit' ? 'Số tiền được hoàn' : 'Số tiền trả'}</label>
             <div className="relative"><input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''} onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" autoFocus className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div>
             {creditDebt > 0 && <button onClick={() => setAmount(String(creditDebt))} className="mt-1.5 text-xs text-purple-600 font-medium hover:underline">Trả hết ({moneyFull(creditDebt)})</button>}
             {creditDebt > 0 && Number(amount) > creditDebt && <p className="mt-1 text-xs text-amber-700">Số trả lớn hơn nợ app đang ghi — vẫn lưu được, nhớ đối soát sau.</p>}
@@ -665,14 +667,14 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
 
           {amount && Number(amount)>0 && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs space-y-0.5">
-              <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {moneyFull(closeBal?.[source]||0)} → {moneyFull((closeBal?.[source]||0)-Number(amount))}</p>
+              {source!=='credit' && <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {moneyFull(closeBal?.[source]||0)} → {moneyFull((closeBal?.[source]||0)-Number(amount))}</p>}
               <p className="text-purple-700 font-medium">💳 {card ? 'Nợ thẻ ' + card.name : 'Nợ TD'}: {moneyFull(creditDebt)} → {moneyFull(creditDebt-Number(amount))}</p>
             </div>
           )}
 
           <div className="flex gap-2 pt-2">
             <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
-            <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Trả nợ'}</button>
+            <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-purple-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':source==='credit'?'Ghi hoàn tiền':'Trả nợ'}</button>
           </div>
         </>)}
       </div>
