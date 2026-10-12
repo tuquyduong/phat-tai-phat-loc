@@ -11,7 +11,7 @@ import {
   loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick,
   saveProject, deleteProject, setProjectShared, projectProgress, projectGroups,
   addManual, deleteLog, quickSteps,
-  saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary, avgArrival,
+  saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary,
   addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
 } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
@@ -22,7 +22,8 @@ const WD = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
 const WD_FULL = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy']
 const AVA = { linh: 'bg-blue-100 text-blue-800', mai: 'bg-pink-100 text-pink-800' }
 const EMOJI = ['📿', '💻', '📖', '🀄', '🧪', '🧘', '🏃', '💪', '🍵', '📸', '💰', '🎯', '📚', '💧', '⭐']
-const COLORS = ['#7F77DD', '#378ADD', '#1D9E75', '#639922', '#EF9F27', '#D85A30', '#D4537E', '#888780']
+const COLORS = ['#7F77DD', '#378ADD', '#1D9E75', '#639922', '#EF9F27', '#D85A30', '#D4537E', '#888780',
+                '#3C3489', '#185FA5', '#0F6E56', '#5DCAA5', '#BA7517', '#E24B4A', '#993556', '#444441']
 const pdate = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
 const dm = s => { const d = pdate(s); return `${d.getDate()}/${d.getMonth() + 1}` }
 const du = m => m >= 60 ? Math.floor(m / 60) + 'g' + (m % 60 ? String(m % 60).padStart(2, '0') : '') : m + 'p'
@@ -79,7 +80,7 @@ function Ring({ pct, color, size = 44, label }) {
 
 // ── Khối giao diện nhỏ dùng chung (định nghĩa ở ngoài để React không dựng lại mỗi lần vẽ) ──
 function Chip({ on, onClick, children, cls = '' }) {
-  return <button onClick={onClick} className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap flex-shrink-0 ${on ? 'bg-purple-100 text-purple-800' : 'bg-gray-100 text-gray-600'} ${cls}`}>{children}</button>
+  return <button onClick={onClick} className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap flex-shrink-0 ${on ? 'bg-purple-600 text-white font-semibold shadow-sm' : 'bg-gray-100 text-gray-600'} ${cls}`}>{children}</button>
 }
 function Switch({ on, onClick, label }) {
   return <button onClick={onClick} aria-label={label} aria-pressed={on}
@@ -179,6 +180,7 @@ export default function Viec({ onNavigate }) {
   const [logFor, setLogFor] = useState(null)
   const [orderEdit, setOrderEdit] = useState(null)          // null | 'new' | đơn đang sửa
   const [dailyFrom, setDailyFrom] = useState('set')        // mở màn Daily từ đâu: 'set' | 'main'
+  const [searchOpen, setSearchOpen] = useState(false)
   const [taskEdit, setTaskEdit] = useState(null)            // { id, iso } việc đang mở chi tiết
   const [undo, setUndo] = useState(null)                    // { id, iso, title } vừa tick nhanh — cho phép hoàn tác
   const undoTimer = useRef(null)               // Daily đang mở bảng nhập tay
@@ -195,7 +197,7 @@ export default function Viec({ onNavigate }) {
       setData(d); setCfgState(c); loaded.current = true
     } catch (e) { toast.error('Lỗi tải dữ liệu: ' + e.message) }
     setLoading(false)
-  }, [who])
+  }, [who])                                                // eslint-disable-line react-hooks/exhaustive-deps -- toast cố định, chỉ tải lại khi đổi người
   useEffect(() => { load() }, [load])
   // Mốc từ Trang sức & Lab cho khung lịch đang xem (chỉ đọc)
   useEffect(() => { if (who) getLinkPrefs(who).then(setLinkPrefs).catch(() => {}) }, [who])
@@ -252,9 +254,9 @@ export default function Viec({ onNavigate }) {
     return () => clearInterval(t)
   }, [running])
   useEffect(() => {                                       // mở bảng chi tiết thì khoá cuộn nền
-    document.body.style.overflow = (sel || logFor || orderEdit || taskEdit) ? 'hidden' : ''
+    document.body.style.overflow = (sel || logFor || orderEdit || taskEdit || searchOpen) ? 'hidden' : ''
     return () => { document.body.style.overflow = '' }
-  }, [sel, logFor, orderEdit, taskEdit])
+  }, [sel, logFor, orderEdit, taskEdit, searchOpen])
 
   // ── thao tác dữ liệu: cập nhật tại chỗ, không tải lại cả trang ──
   const patch = (key, fn) => setData(d => ({ ...d, [key]: fn(d[key]) }))
@@ -367,6 +369,7 @@ export default function Viec({ onNavigate }) {
         <h2 className="text-lg font-bold text-gray-800 flex-1 truncate">📅 {PEOPLE[who]}</h2>
         <button onClick={() => { setMonth(today.slice(0, 7)); setSel(today) }}
           className="text-sm px-3 py-1.5 rounded-full bg-purple-50 text-purple-700 font-medium active:scale-95">Hôm nay</button>
+        <button onClick={() => setSearchOpen(true)} className="w-10 h-10 rounded-full text-lg bg-purple-50 active:bg-purple-100" aria-label="Tìm kiếm">🔍</button>
         <button onClick={() => setView('proj')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Dự án">📁</button>
         <button onClick={() => setView('set')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Cài đặt">⚙️</button>
       </div>
@@ -429,6 +432,10 @@ export default function Viec({ onNavigate }) {
         </div>
       </div>
 
+      {searchOpen && <SearchOverlay today={today} who={who} tasks={data.tasks} orders={data.orders} projects={data.projects} daily={data.daily}
+        onClose={() => setSearchOpen(false)} onOpenTask={openTask} onOpenOrder={o => setOrderEdit(o)}
+        onOpenProject={id => { setSearchOpen(false); setProjId(id); setView('projd') }}
+        onOpenDaily={d => { setSearchOpen(false); setEditDaily(d); setDailyFrom('main'); setView('daily') }}/>}
       {overlays}
       {orderEdit && <OrderSheet initial={orderEdit === 'new' ? null : orderEdit} who={who} today={today}
         onSave={saveO} onDelete={removeO} onClose={() => setOrderEdit(null)} onToggle={o => { toggleO(o); setOrderEdit(null) }}/>}
@@ -476,7 +483,7 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
           return (
             <button key={iso} onClick={() => onOpen(iso)}
               className={`relative rounded-xl flex flex-col items-center justify-center min-h-[50px] border-[1.5px] active:scale-95 transition-transform
-                ${trai ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-transparent'} ${out ? 'opacity-35' : ''}`}
+                ${isToday ? `border-purple-600 border-2 shadow-sm ${trai ? 'bg-emerald-50' : 'bg-purple-50'}` : trai ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-transparent'} ${out ? 'opacity-35' : ''}`}
               aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}${etaDays.has(iso) ? ', có hàng đặt đang về' : ''}`}>
               <span className={`text-base font-semibold leading-none ${isToday ? 'bg-purple-600 text-white w-7 h-7 rounded-full flex items-center justify-center' : d.getDay() === 0 ? 'text-red-500' : 'text-gray-900'}`}>{d.getDate()}</span>
               <span className={`text-[11px] leading-tight mt-0.5 ${trai ? 'text-emerald-700 font-semibold' : L.day === 1 || L.day === 15 ? 'text-orange-700 font-semibold' : 'text-orange-600/80'}`}>{lunarLabel(L)}</span>
@@ -586,7 +593,7 @@ function TimePicker({ value, onChange }) {
     <div className="flex flex-wrap gap-1.5 items-center">
       <Chip on={!value} onClick={() => onChange('')}>Cả ngày</Chip>
       <label className={`relative inline-flex items-center gap-1 rounded-full px-3 py-2 text-[13px] cursor-pointer border
-        ${custom ? 'bg-purple-100 text-purple-800 border-purple-300 font-semibold' : 'bg-white text-purple-700 border-purple-200'}`}>
+        ${custom ? 'bg-purple-600 text-white border-purple-600 font-semibold shadow-sm' : 'bg-white text-purple-700 border-purple-200'}`}>
         ⏰ {custom ? value : 'Chọn giờ…'}
         <input type="time" value={value || ''} onChange={e => onChange(e.target.value)} aria-label="Giờ tuỳ chỉnh"
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-base"/>
@@ -855,7 +862,7 @@ function ShareSeg({ shared, onChange, who, owner, noun = 'việc' }) {
       <div className={`flex gap-1 bg-gray-100 rounded-xl p-1 ${mine ? '' : 'opacity-60'}`}>
         {[[false, '🔒 Chỉ mình tôi'], [true, '👥 Cả hai']].map(([v, l]) => (
           <button key={l} disabled={!mine} onClick={() => onChange(v)} aria-pressed={!!shared === v}
-            className={`flex-1 text-center py-2.5 rounded-lg text-sm ${!!shared === v ? 'bg-white font-semibold text-gray-800 shadow-sm' : 'text-gray-500'}`}>{l}</button>))}
+            className={`flex-1 text-center py-2.5 rounded-lg text-sm ${!!shared === v ? 'bg-purple-600 font-semibold text-white shadow-sm' : 'text-gray-500'}`}>{l}</button>))}
       </div>
       <p className="text-xs text-gray-500 mt-1.5">{!mine ? `${noun[0].toUpperCase() + noun.slice(1)} của ${PEOPLE[owner]} — chỉ ${PEOPLE[owner]} thôi chia sẻ hoặc xoá được. Bạn vẫn sửa được.`
         : shared ? `${other} thấy ${noun} này trên lịch và được nhắc nếu có giờ.` : `Chỉ bạn thấy. Chọn "Cả hai" để ${other} cũng thấy.`}</p>
@@ -933,6 +940,111 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
   )
 }
 
+
+// ============================================
+// 🔍 TÌM KIẾM — việc, đơn hàng (cả mã vận đơn), dự án, Daily
+// Không cần dấu, không phân biệt hoa thường, gõ vài số cuối mã cũng ra.
+// ============================================
+const plainChar = c => c.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd')
+const plainStr = s => Array.from(String(s || '')).map(plainChar).join('')
+const compactStr = s => plainStr(s).replace(/[\s,.;·\-_/]/g, '')
+// Khớp khi MỌI từ gõ vào đều có trong nội dung; hoặc khi bỏ hết dấu cách/dấu chấm vẫn khớp (cho mã vận đơn)
+function searchMatch(text, q) {
+  const words = plainStr(q).split(/\s+/).filter(Boolean)
+  if (!words.length) return false
+  const t = plainStr(text)
+  return words.every(w => t.includes(w)) || (compactStr(q).length >= 3 && compactStr(text).includes(compactStr(q)))
+}
+// Tô vàng phần khớp — ánh xạ từng ký tự gốc sang dạng không dấu, nên không lệch kể cả chữ dán từ nơi khác
+function Hl({ text, q }) {
+  const chars = Array.from(String(text || ''))
+  const words = plainStr(q).split(/\s+/).filter(Boolean)
+  if (!words.length) return <>{text}</>
+  let p = '', owner = []                                         // owner[k] = chỉ số ký tự gốc của ký tự không dấu thứ k
+  chars.forEach((c, i) => { const x = plainChar(c); p += x; for (let k = 0; k < x.length; k++) owner.push(i) })
+  const mark = new Array(chars.length).fill(false)
+  for (const w of words) { for (let i = p.indexOf(w); i >= 0; i = p.indexOf(w, i + 1)) for (let k = i; k < i + w.length; k++) mark[owner[k]] = true }
+  chars.forEach((c, i) => { if (i && !plainChar(c)) mark[i] = mark[i - 1] })   // dấu tách rời đi cùng chữ cái đứng trước, không bị cắt khỏi chữ
+  const out = []; let buf = '', on = false
+  chars.forEach((c, i) => { if (mark[i] !== on) { if (buf) out.push(on ? <mark key={out.length} className="bg-amber-100 rounded px-px">{buf}</mark> : <span key={out.length}>{buf}</span>); buf = ''; on = mark[i] } buf += c })
+  if (buf) out.push(on ? <mark key={out.length} className="bg-amber-100 rounded px-px">{buf}</mark> : <span key={out.length}>{buf}</span>)
+  return <>{out}</>
+}
+const MAX_PER_GROUP = 30
+
+// Khối kết quả: khai báo ngoài để React không dựng lại mỗi lần gõ
+const SearchGroup = ({ label, items, render }) => items.length ? <>
+  <div className="text-xs text-gray-500 font-semibold mt-4 mb-1.5 px-1">{label} · {items.length}</div>
+  <div className="bg-white rounded-2xl overflow-hidden">{items.slice(0, MAX_PER_GROUP).map(render)}
+    {items.length > MAX_PER_GROUP && <p className="text-xs text-gray-400 px-3 py-2">… còn {items.length - MAX_PER_GROUP} kết quả — gõ thêm chữ để thu hẹp</p>}</div></> : null
+const SearchRow = ({ onClick, icon, title, sub, extra, status }) => (
+  <button onClick={onClick} className="w-full flex items-center gap-2.5 px-3 py-2.5 border-b border-gray-50 last:border-0 text-left active:bg-gray-50">
+    <span className="text-lg leading-none w-6 text-center flex-shrink-0">{icon}</span>
+    <span className="flex-1 min-w-0"><span className="block text-[14px] text-gray-800">{title}</span>
+      {sub && <span className="block text-xs text-gray-500 mt-0.5">{sub}</span>}{extra}</span>
+    {status}
+  </button>)
+
+function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, onOpenTask, onOpenOrder, onOpenProject, onOpenDaily }) {
+  const [q, setQ] = useState('')
+  const inputRef = useRef(null)
+  useEffect(() => { const t = setTimeout(() => inputRef.current?.focus(), 50); return () => clearTimeout(t) }, [])
+  const projName = id => { const p = projects.find(x => x.id === id); return p ? `${p.emoji} ${p.name}` : '' }
+  const r = useMemo(() => {
+    if (!q.trim()) return null
+    const tk = tasks.filter(t => searchMatch([t.title, t.note, projName(t.project_id), t.group_name].filter(Boolean).join(' '), q))
+    // chưa xong lên trước (gần nhất trước), đã xong sau (mới nhất trước)
+    const open = tk.filter(t => isSeries(t) || !t.done).sort((a, b) => String(a.due_date || '9999').localeCompare(String(b.due_date || '9999')))
+    const done = tk.filter(t => !isSeries(t) && t.done).sort((a, b) => String(b.due_date || '').localeCompare(String(a.due_date || '')))
+    const od = orders.filter(o => searchMatch(o.title + ' ' + (o.tracking || ''), q))
+      .sort((a, b) => (a.received_at ? 1 : 0) - (b.received_at ? 1 : 0) || b.order_date.localeCompare(a.order_date))
+    return { tasks: [...open, ...done], orders: od,
+      projects: projects.filter(p => searchMatch(p.name, q)), daily: daily.filter(d => searchMatch(d.name, q)) }
+  }, [q, tasks, orders, projects, daily])                       // eslint-disable-line react-hooks/exhaustive-deps
+  const n = r ? r.tasks.length + r.orders.length + r.projects.length + r.daily.length : 0
+  const pill = (text, cls) => <span className={`text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${cls}`}>{text}</span>
+  const taskStatus = t => {
+    if (isSeries(t)) { const nx = nextOccurrences(t, today, 1)[0]; return nx ? pill(nx === today ? 'Hôm nay' : 'Lần tới ' + dm(nx), 'bg-purple-50 text-purple-700') : pill('Đã hết lặp', 'bg-gray-100 text-gray-500') }
+    if (t.done) return pill('✓ Đã xong', 'bg-emerald-50 text-emerald-700')
+    if (!t.due_date) return pill('Chưa có ngày', 'bg-gray-100 text-gray-500')
+    if (t.due_date < today) return pill(`Quá ${daysBetween(today, t.due_date)} ngày`, 'bg-red-100 text-red-700')
+    return pill(t.due_date === today ? 'Hôm nay' : `Còn ${daysBetween(t.due_date, today)} ngày`, 'bg-gray-100 text-gray-600')
+  }
+  const orderStatus = o => o.received_at ? pill('✅ Về ' + dm(o.received_at), 'bg-emerald-50 text-emerald-700')
+    : o.eta && o.eta < today ? pill(`Quá hẹn ${daysBetween(today, o.eta)} ngày`, 'bg-red-100 text-red-700')
+    : pill(`Đang về · ${daysBetween(today, o.order_date)} ngày`, 'bg-amber-100 text-amber-800')
+  return (
+    <div className="fixed inset-0 z-[65] bg-gray-100 flex flex-col" role="dialog" aria-label="Tìm kiếm" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
+      <div className="bg-white border-b border-gray-200"><div className="max-w-2xl mx-auto flex items-center gap-2 px-3 py-2.5">
+        <span className="text-lg">🔍</span>
+        <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm việc, mã vận đơn, dự án…" aria-label="Nội dung tìm"
+          enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false} className="flex-1 min-w-0 text-base py-1.5 outline-none bg-transparent"/>
+        {q && <button onClick={() => { setQ(''); inputRef.current?.focus() }} className="w-7 h-7 rounded-full bg-gray-100 text-gray-500 text-xs" aria-label="Xoá chữ">✕</button>}
+        <button onClick={onClose} className="text-sm font-semibold text-purple-700 px-1">Đóng</button>
+      </div></div>
+      <div className="flex-1 overflow-y-auto" style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}><div className="max-w-2xl mx-auto px-3">
+        {!r && <div className="bg-white rounded-2xl p-3.5 mt-3 text-[13px] text-gray-600 leading-relaxed">
+          <b>Gõ bất kỳ phần nào:</b><br/>• tên việc, không cần dấu — "an co" vẫn ra "ăn cỗ"<br/>• vài số cuối mã vận đơn — "4982"<br/>• tên dự án, tên Daily</div>}
+        {r && n === 0 && <p className="text-center text-sm text-gray-400 mt-10">Không tìm thấy "{q}"<br/><span className="text-xs">Thử bỏ bớt từ, hoặc gõ vài số cuối của mã</span></p>}
+        {r && <>
+          <SearchGroup label="☑️ Việc" items={r.tasks} render={t => <SearchRow key={t.id} onClick={() => onOpenTask(t, isSeries(t) ? (nextOccurrences(t, today, 1)[0] || t.repeat_start) : t.due_date)}
+            icon={isSeries(t) ? '↻' : '☑️'} title={<Hl text={t.title} q={q}/>} status={taskStatus(t)}
+            sub={[t.due_date && !isSeries(t) && dm(t.due_date), t.due_time, isSeries(t) && describe(t), t.project_id && <Hl key="p" text={projName(t.project_id)} q={q}/>,
+              t.shared && (t.owner === who ? '👥' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).reduce((a, x, i) => i ? [...a, ' · ', x] : [x], [])}/>}/>
+          <SearchGroup label="📦 Đơn hàng" items={r.orders} render={o => { const hit = trackingCodes(o.tracking).find(c => compactStr(c).includes(compactStr(q)) && compactStr(q).length >= 3)
+            return <SearchRow key={o.id} onClick={() => onOpenOrder(o)} icon={o.received_at ? '✅' : '📦'} title={<Hl text={o.title} q={q}/>} status={orderStatus(o)}
+              sub={`Đặt ${dm(o.order_date)}${o.received_at ? ` → về ${dm(o.received_at)} (sau ${daysBetween(o.received_at, o.order_date)} ngày)` : ''}`}
+              extra={hit && <span className="block text-xs text-purple-800 font-mono mt-0.5">🔎 <Hl text={hit} q={q}/></span>}/> }}/>
+          <SearchGroup label="📁 Dự án" items={r.projects} render={p => <SearchRow key={p.id} onClick={() => onOpenProject(p.id)} icon={p.emoji} title={<Hl text={p.name} q={q}/>}
+            sub={(g => `${g.done}/${g.total} việc xong${p.archived ? ' · đã lưu trữ' : ''}`)(projectProgress(p.id, tasks, today))}/>}/>
+          <SearchGroup label="◎ Daily" items={r.daily} render={d => <SearchRow key={d.id} onClick={() => onOpenDaily(d)} icon={d.emoji} title={<Hl text={d.name} q={q}/>}
+            sub={`Daily · ${d.kind === 'tick' ? 'đánh dấu' : dval(d, d.target_min)}${d.archived ? ' · đã lưu trữ' : ''}`}/>}/>
+        </>}
+      </div></div>
+    </div>
+  )
+}
+
 // ── BẢNG CHI TIẾT NGÀY ──
 function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
@@ -992,7 +1104,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
         <div className="flex flex-wrap gap-1.5 pt-1.5">
           <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
           <button onClick={() => setTrack(!track)} aria-pressed={track}
-            className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap border-[1.5px] ${track ? 'bg-purple-100 text-purple-800 border-purple-300 font-semibold' : 'bg-white text-purple-700 border-purple-300 border-dashed'}`}>📦 Theo dõi hàng</button>
+            className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap border-[1.5px] ${track ? 'bg-purple-600 text-white border-purple-600 font-semibold shadow-sm' : 'bg-white text-purple-700 border-purple-300 border-dashed'}`}>📦 Theo dõi hàng</button>
         </div>
         {!track && <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>}
         {!track && projects.some(p => !p.archived) && <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
@@ -1058,15 +1170,15 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
 const P_EMOJI = ['📁', '🧪', '💎', '✈️', '🏠', '📚', '💻', '🍵', '🎯', '🛠️', '🌿', '⭐']
 function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
   const [f, setF] = useState(initial ? { ...initial } : { name: '', emoji: '📁', color: '#7F77DD', shared: false })
-  const [confirm, setConfirm] = useState(false)
   const canShare = !initial || initial.owner === who
+  const [confirm, setConfirm] = useState(false)
   return (
     <div className="bg-white rounded-2xl p-4 flex flex-col gap-3">
       <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên dự án, ví dụ: Bạch Mẫu Đơn V2"
         className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base" autoFocus={!initial}/>
       <div className="flex flex-wrap gap-1.5">{P_EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => setF({ ...f, emoji: e })} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div>
       <div className="flex flex-wrap gap-2.5">{COLORS.map(c => <button key={c} onClick={() => setF({ ...f, color: c })} aria-label={'Màu ' + c}
-        className="w-8 h-8 rounded-full" style={{ background: c, outline: f.color === c ? '2px solid #1F2937' : 'none', outlineOffset: 2 }}/>)}</div>
+        aria-pressed={f.color === c} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div>
       <div><span className="text-xs text-gray-500 font-semibold mb-1.5 block">Ai thấy</span>
         <ShareSeg shared={f.shared} onChange={x => setF({ ...f, shared: x })} who={who} owner={initial?.owner || who} noun="dự án"/></div>
       <div className="flex gap-2">
@@ -1371,7 +1483,6 @@ function DailyForm({ initial, who, onSave, onBack, onStart, onManual }) {
       unit: kind === 'count' ? ((unit || '').trim() || null) : null,
       start_time: start_time || null, weekdays, remind: !!(remind && start_time), shared: !!shared, archived: !!archived })
   }
-  const canShare = !initial || initial.owner === who
   return (
     <div className="pb-6">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30"><div className="max-w-2xl mx-auto px-2 py-2 flex items-center">
@@ -1387,7 +1498,7 @@ function DailyForm({ initial, who, onSave, onBack, onStart, onManual }) {
           <input value={f.name} onChange={e => set('name', e.target.value)} placeholder="Ví dụ: Học tiếng Trung" className="w-full mt-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/></label>
         <div><span className="text-xs text-gray-500">Biểu tượng</span><div className="flex flex-wrap gap-1.5 mt-1">{EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => set('emoji', e)} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div></div>
         <div><span className="text-xs text-gray-500">Màu</span><div className="flex flex-wrap gap-2.5 mt-1">{COLORS.map(c =>
-          <button key={c} onClick={() => set('color', c)} aria-label={'Màu ' + c} className="w-8 h-8 rounded-full" style={{ background: c, outline: f.color === c ? '2px solid #1F2937' : 'none', outlineOffset: 2 }}/>)}</div></div>
+          <button key={c} onClick={() => set('color', c)} aria-label={'Màu ' + c} aria-pressed={f.color === c} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div></div>
         <div><span className="text-xs text-gray-500">Cách theo dõi</span><div className="flex flex-wrap gap-1.5 mt-1">
           <Chip on={f.kind === 'time'} onClick={() => setF(x => ({ ...x, kind: 'time', target_min: x.kind === 'time' ? x.target_min : 30 }))}>⏱ Bấm giờ</Chip>
           <Chip on={f.kind === 'count'} onClick={() => setF(x => ({ ...x, kind: 'count', target_min: x.kind === 'count' ? x.target_min : 100, unit: x.unit || 'cái' }))}>🔢 Đếm số lượng</Chip>
@@ -1410,7 +1521,7 @@ function DailyForm({ initial, who, onSave, onBack, onStart, onManual }) {
           <div className="flex gap-2 mt-1 items-center">
             <Chip on={!f.start_time} onClick={() => setF(x => ({ ...x, start_time: '', remind: false }))}>Lúc nào cũng được</Chip>
             <label className={`relative flex-1 min-w-0 flex items-center justify-center rounded-xl px-3 py-2.5 text-[15px] cursor-pointer border
-              ${f.start_time ? 'bg-purple-100 text-purple-800 border-purple-300 font-semibold' : 'bg-white text-purple-700 border-purple-200'}`}>
+              ${f.start_time ? 'bg-purple-600 text-white border-purple-600 font-semibold shadow-sm' : 'bg-white text-purple-700 border-purple-200'}`}>
               ⏰ {f.start_time || 'Chọn giờ…'}
               <input type="time" value={f.start_time || ''} aria-label="Giờ bắt đầu"
                 onChange={e => setF(x => ({ ...x, start_time: e.target.value, remind: e.target.value ? (x.start_time ? x.remind : true) : false }))}
