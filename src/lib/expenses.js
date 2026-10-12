@@ -359,7 +359,7 @@ export async function keepAsExpense(ids) {
 // Kỳ sao kê gần nhất của thẻ (ngày sao kê đã qua gần nhất)
 export function lastStatementDate(statementDay, today) {
   if (!statementDay) return null
-  const [y, m, d] = today.split('-').map(Number)
+  const [y, m] = today.split('-').map(Number)
   const mk = (yy, mm) => { const last = new Date(yy, mm, 0).getDate(); return getLocalDateString(new Date(yy, mm - 1, Math.min(statementDay, last))) }
   const thisMonth = mk(y, m)
   return thisMonth <= today ? thisMonth : mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1)

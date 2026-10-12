@@ -237,11 +237,14 @@ export default function Expenses() {
 
         {/* Balance bar */}
         <div className="bg-gradient-to-r from-gray-700 to-gray-800 rounded-xl p-3 mb-3 text-white">
-          <div className="flex items-center justify-between text-xs mb-2">
-            <div><p className="text-gray-400">Đầu kỳ</p><p className={`text-sm font-bold ${openBal.total>=0?'text-white':'text-red-300'}`}>{moneyFull(openBal.total)}</p></div>
-            <div className="text-gray-500">──→</div>
-            <div className="text-right"><p className="text-gray-400">Cuối kỳ</p><p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{moneyFull(closeBal.total)}</p></div>
+          {/* Tiền đang có = tiền mặt + chuyển khoản (chưa trừ nợ thẻ) */}
+          <div className="flex items-end justify-between gap-3 mb-2">
+            <div className="min-w-0"><p className="text-[11px] text-gray-300">💰 {isCurMonth ? 'Tiền đang có' : 'Tiền có cuối tháng'} · TM + CK</p>
+              <p className={`text-2xl font-bold leading-tight ${closeBal.cash + closeBal.transfer >= 0 ? 'text-white' : 'text-red-300'}`}>{moneyFull(closeBal.cash + closeBal.transfer)}</p></div>
+            <div className="text-right flex-shrink-0"><p className="text-[11px] text-gray-400">Trừ nợ thẻ còn</p>
+              <p className={`text-sm font-bold ${closeBal.total>=0?'text-green-300':'text-red-300'}`}>{moneyFull(closeBal.total)}</p></div>
           </div>
+          <p className="text-[11px] text-gray-400 mb-2">Ròng đầu tháng {moneyFull(openBal.total)} → cuối tháng {moneyFull(closeBal.total)}</p>
           <div className="flex gap-1.5">
             <button onClick={() => setRecon({ kind: 'cash' })} aria-label="Đối soát tiền mặt" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
               <p className="text-[9px] text-gray-400">💵 TM ⚖️</p>
@@ -479,7 +482,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
     }
   }, [isOpen, editingTx, type])
 
-  useEffect(() => { if(!isOpen||editingTx) return; if(filteredCats.length===1) setCategoryId(filteredCats[0].id) }, [isOpen, formType, filteredCats.length])
+  useEffect(() => { if(!isOpen||editingTx) return; if(filteredCats.length===1) setCategoryId(filteredCats[0].id) }, [isOpen, formType, filteredCats.length])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ tự chọn danh mục khi mở hoặc đổi loại
 
   const handleSubmit = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
@@ -509,7 +512,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
     <Modal isOpen={isOpen} onClose={onClose} title={editingTx?'Sửa giao dịch':(formType==='income'?'💰 Thêm thu':'💸 Thêm chi')}>
       <div className="space-y-4 p-5">
         <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-          <button onClick={() => { setFormType('expense'); if(pm==='credit'&&false) setPm('cash') }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${formType==='expense'?'bg-red-500 text-white shadow':'text-gray-500'}`}>💸 Chi</button>
+          <button onClick={() => { setFormType('expense'); /* chi được trả bằng TM, CK hoặc thẻ — giữ nguyên nguồn đang chọn */ }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${formType==='expense'?'bg-red-500 text-white shadow':'text-gray-500'}`}>💸 Chi</button>
           <button onClick={() => { setFormType('income'); if(pm==='credit') setPm('cash') }} className={`flex-1 py-2.5 rounded-lg text-sm font-bold ${formType==='income'?'bg-green-500 text-white shadow':'text-gray-500'}`}>💰 Thu</button>
         </div>
 
@@ -619,7 +622,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
   const [amount, setAmount] = useState(''); const [source, setSource] = useState('transfer')
   const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
   const [cardId, setCardId] = useState('')
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()); setCardId(cards.length === 1 ? cards[0].id : '') } }, [isOpen])
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()); setCardId(cards.length === 1 ? cards[0].id : '') } }, [isOpen])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đặt lại khi MỞ form
 
   const card = cards.find(c => c.id === cardId)
   const creditDebt = cards.length ? Math.round((closeBal?.cards||{})[cardId || 'none'] || 0) : (closeBal?.credit||0)
@@ -1019,7 +1022,7 @@ function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onRecon
 // ============================================
 function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReconcile, onOpenCards }) {
   const [h, setH] = useState(null), [showMis, setShowMis] = useState(false), [pick, setPick] = useState({}), [busy, setBusy] = useState(false)
-  const load = useCallback(() => { getHealth(cards).then(setH).catch(e => toast.error('Lỗi: ' + e.message)) }, [cards])
+  const load = useCallback(() => { getHealth(cards).then(setH).catch(e => toast.error('Lỗi: ' + e.message)) }, [cards])   // eslint-disable-line react-hooks/exhaustive-deps -- toast cố định; thêm vào có thể gây tải lặp
   useEffect(() => { if (isOpen) { setH(null); setShowMis(false); setPick({}) } }, [isOpen])   // chỉ gập lại khi MỞ màn này
   useEffect(() => { if (isOpen) load() }, [isOpen, load])                         // tải lại số liệu, giữ nguyên chỗ đang xem
   const dmy = s => s ? s.split('-').reverse().join('/') : ''
