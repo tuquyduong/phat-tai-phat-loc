@@ -13,7 +13,7 @@ import {
   addManual, deleteLog, quickSteps,
   saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary,
   addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
-} from '../lib/viec'
+  parseLines, parseGroupLines, groupsToText, planGroups, planPace, nextPlanTask, planFlags, groupRenames, renameGroupTasks } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
@@ -91,10 +91,11 @@ function SetRow({ title, sub, children }) {
   return <div className="flex items-center gap-3 py-3 border-b border-gray-100 last:border-0">
     <div className="flex-1"><div className="text-[15px] font-medium text-gray-800">{title}</div>{sub && <div className="text-xs text-gray-500">{sub}</div>}</div>{children}</div>
 }
-function UpRow({ t, date, tag, cls, onOpen }) {
+function UpRow({ t, date, tag, cls, onOpen, plan }) {
   return <button onClick={() => onOpen(t, date)} className="w-full flex items-center gap-2.5 py-3 border-b border-gray-100 last:border-0 text-left active:bg-gray-50">
     <span className={`text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap min-w-[72px] text-center ${cls}`}>{tag}</span>
-    <span className="flex-1 text-sm text-gray-800">{t.title}{isSeries(t) && ' ↻'}{t.shared && ' 👥'}</span>
+    <span className="flex-1 min-w-0 text-sm text-gray-800">{t.title}{isSeries(t) && ' ↻'}{t.shared && ' 👥'}
+      {plan && <span className="block text-[11px] font-semibold truncate" style={{ color: plan.color }}>{plan.emoji} {plan.name}</span>}</span>
     {t.due_time && <span className="text-xs text-gray-500">{t.due_time}</span>}
   </button>
 }
@@ -264,14 +265,29 @@ export default function Viec({ onNavigate }) {
   // Chống bấm hai lần khi mạng chậm: đang ghi thì bỏ qua lần bấm sau
   const busy = useRef(false)
   const run = async (fn, okMsg) => {
-    if (busy.current) return
+    if (busy.current) { toast.info('Đang lưu thao tác trước — bấm lại sau giây lát'); return }   // không chặn im lặng
     busy.current = true
     try { await fn(); if (okMsg) toast.success(okMsg) }
-    catch (e) { toast.error('Lỗi: ' + e.message) }
+    catch (e) {
+      const msg = String(e?.message || e)
+      // Cột của bản cập nhật Kế hoạch chưa có → nói rõ cần chạy file SQL nào
+      if (/goal|deadline|start_date|groups|project_id/.test(msg) && /column|schema cache/i.test(msg)) toast.error('Cần chạy migration_viec_6.sql trên Supabase để dùng Kế hoạch')
+      else toast.error('Lỗi: ' + msg)
+    }
     finally { busy.current = false }
   }
 
   const addTask = (fields) => run(async () => { const t = await createTask({ owner: who, ...fields }); patch('tasks', ts => [...ts, t]) })
+  // Thêm nhiều việc: MỘT lệnh, lưu lần lượt — gửi nhiều lệnh cùng lúc sẽ bị cơ chế chống bấm đúp chặn mất
+  // Trả về các việc CHƯA lưu được (mạng lỗi giữa chừng) để người dùng thêm lại đúng phần còn thiếu, không bị trùng
+  const addTasks = async (list) => {
+    let saved = 0
+    await run(async () => {
+      try { for (const fields of list) { const t = await createTask({ owner: who, ...fields }); patch('tasks', ts => [...ts, t]); saved++ } }
+      catch (e) { throw new Error(`Đã thêm ${saved}/${list.length} việc, phần còn lại chưa lưu được (${e?.message || e}) — bấm Thêm lại`) }
+    }, list.length > 1 ? `Đã thêm ${list.length} việc` : undefined)
+    return list.slice(saved)
+  }
   const editTask = (id, fields) => run(async () => { const t = await updateTask(id, fields); patch('tasks', ts => ts.map(x => x.id === id ? t : x)) })
   const removeTask = (id) => run(async () => { await deleteTask(id); patch('tasks', ts => ts.filter(x => x.id !== id)) }, 'Đã xoá')
   const tick = (task, iso) => run(async () => {
@@ -292,6 +308,11 @@ export default function Viec({ onNavigate }) {
     if (t && isDoneOn(t, undo.iso || t.due_date)) tick(t, undo.iso)
   }
   const openTask = (t, iso) => setTaskEdit({ id: t.id, iso: iso || t.due_date || null })
+  const pullToday = t => run(async () => {                    // ＋ Hôm nay: đặt ngày cho CHÍNH việc đó — không tạo bản sao
+    const u = await updateTask(t.id, { due_date: today })
+    patch('tasks', ts => ts.map(x => x.id === t.id ? u : x))
+  }, 'Đã đưa vào hôm nay')
+  const openPlan = id => { setSel(null); setSearchOpen(false); setProjId(id); setView('projd') }
   const markMissed = (t, dates) => run(async () => {          // đánh dấu nhiều lần lặp bị lỡ trong MỘT lần lưu
     const u = await updateTask(t.id, { done_dates: [...new Set([...(t.done_dates || []), ...dates])].sort() })
     patch('tasks', ts => ts.map(x => x.id === t.id ? u : x))
@@ -345,16 +366,24 @@ export default function Viec({ onNavigate }) {
       const byId = Object.fromEntries(changed.map(t => [t.id, t]))
       patch('tasks', ts => ts.map(t => byId[t.id] || t))
     }
+    if (before && Array.isArray(fields.groups)) {                // đổi tên hạng mục → các việc chuyển theo tên mới
+      for (const r of groupRenames(before.groups || [], fields.groups)) {
+        await renameGroupTasks(p.id, r.from, r.to)
+        // cập nhật màn hình theo đúng điều kiện đã đổi trong cơ sở dữ liệu (không phụ thuộc dữ liệu trả về)
+        patch('tasks', ts => ts.map(t => t.project_id === p.id && t.group_name === r.from ? { ...t, group_name: r.to } : t))
+      }
+    }
   })
   const removeP = (id) => run(async () => {
     await deleteProject(id)
     patch('projects', ps => ps.filter(x => x.id !== id))
     patch('tasks', ts => ts.map(t => t.project_id === id ? { ...t, project_id: null } : t))   // việc vẫn giữ
     setView('proj'); setProjId(null)
-  }, 'Đã xoá dự án, việc vẫn giữ')
+  }, 'Đã xoá kế hoạch, việc vẫn giữ')
 
   // Quá hạn / sắp tới: chỉ tính lại khi danh sách việc hoặc ngày đổi (không tính lại mỗi 15 giây khi đồng hồ chạy)
   const U0 = useMemo(() => upcoming(data.tasks, today), [data.tasks, today])
+  const flags = useMemo(() => planFlags(data.projects), [data.projects])   // 🏁 hạn kế hoạch / hạng mục trên lịch
 
   if (!who) return <PinGate onDone={w => setWhoState(w)}/>
 
@@ -383,7 +412,7 @@ export default function Viec({ onNavigate }) {
         <button onClick={() => { setMonth(today.slice(0, 7)); setSel(today) }}
           className="text-sm px-3 py-1.5 rounded-full bg-purple-50 text-purple-700 font-medium active:scale-95">Hôm nay</button>
         <button onClick={() => setSearchOpen(true)} className="w-10 h-10 rounded-full text-lg bg-purple-50 active:bg-purple-100" aria-label="Tìm kiếm">🔍</button>
-        <button onClick={() => setView('proj')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Dự án">📁</button>
+        <button onClick={() => setView('proj')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Kế hoạch">🎯</button>
         <button onClick={() => setView('set')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Cài đặt">⚙️</button>
       </div>
     </header>
@@ -406,9 +435,10 @@ export default function Viec({ onNavigate }) {
   if (view === 'projd' && curProj) return <><ProjectDetail who={who} project={curProj} projects={data.projects} tasks={data.tasks} today={today}
     onSaveProject={saveP} onDeleteProject={removeP} onAdd={addTask} onEdit={editTask} onDelete={removeTask}
     onTick={t => quickTick(t, t.due_date)} onOpenDay={iso => { setView('main'); setMonth(iso.slice(0, 7)); setSel(iso) }} onOpenTask={openTask}
+    daily={data.daily} logs={data.logs} onPull={pullToday} onAddMany={addTasks}
     onBack={() => setView('proj')}/>{overlays}</>
   if (view === 'stat') return <StatsPage daily={daily} logs={data.logs} today={today} now={now} onBack={() => setView('main')}/>
-  if (view === 'daily') return <DailyForm initial={editDaily} who={who} onSave={saveD} onBack={() => { setView(dailyFrom); setEditDaily(null) }}
+  if (view === 'daily') return <DailyForm initial={editDaily} who={who} projects={data.projects} onSave={saveD} onBack={() => { setView(dailyFrom); setEditDaily(null) }}
     onStart={d => { setView('main'); setEditDaily(null); start(d) }} onManual={d => { setView('main'); setEditDaily(null); setLogFor(d.id) }}/>
   if (view === 'set') return <SettingsPage who={who} cfg={cfg} onCfg={updCfg} daily={data.daily}
     linkPrefs={linkPrefs} onLinkPrefs={p => { setLinkPrefs(p); saveLinkPrefs(who, p).catch(e => toast.error('Lỗi: ' + e.message)) }}
@@ -421,7 +451,8 @@ export default function Viec({ onNavigate }) {
       {header}
       <div className="max-w-2xl mx-auto px-3 pt-2">
         {pushLost && <button onClick={() => setView('set')} className="w-full mb-2 text-left text-sm bg-amber-50 text-amber-800 rounded-xl px-3 py-2.5">🔕 Thông báo đang tắt trên máy này — bấm để bật lại</button>}
-        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel} marks={marks} showHair={linkPrefs.hair !== false} etaDays={etaDays}/>
+        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel} marks={marks} showHair={linkPrefs.hair !== false} etaDays={etaDays} flags={flags}/>
+        {!loading && <FocusCard projects={data.projects} tasks={data.tasks} today={today} onPull={pullToday} onOpenPlan={openPlan}/>}
 
         <div className="flex gap-1.5 mt-3 mb-2 bg-gray-200/70 rounded-2xl p-1">
           <button onClick={() => setTab('up')} className={`flex-1 py-2.5 rounded-xl text-sm whitespace-nowrap flex items-center justify-center gap-1.5 ${tab === 'up' ? 'bg-white font-semibold text-gray-800 shadow-sm' : 'text-gray-500'}`}>
@@ -438,8 +469,8 @@ export default function Viec({ onNavigate }) {
         <div className="bg-white rounded-2xl px-3 py-1.5">
           {loading ? <p className="text-center text-sm text-gray-400 py-6">Đang tải…</p>
             : tab === 'ord' ? <OrdersPanel orders={data.orders} today={today} who={who} onToggle={toggleO} onEdit={o => setOrderEdit(o)} onNew={() => setOrderEdit('new')}/>
-            : tab === 'up' ? <Upcoming U={U} today={today} cfg={cfg} onOpen={openItem} onOpenDay={setSel} onReview={() => setReviewOpen(true)}/>
-            : <DailyPanel list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now}
+            : tab === 'up' ? <Upcoming U={U} today={today} cfg={cfg} onOpen={openItem} onOpenDay={setSel} onReview={() => setReviewOpen(true)} projects={data.projects}/>
+            : <DailyPanel list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now} projects={data.projects}
                 onStart={start} onStop={stop} onTick={tickD} onCount={(d, n) => logValue(d, n, today, false)} onManual={d => setLogFor(d.id)} onStats={() => setView('stat')}
                 onAdd={() => { setEditDaily(null); setDailyFrom('main'); setView('daily') }} onEdit={d => { setEditDaily(d); setDailyFrom('main'); setView('daily') }}/>}
         </div>
@@ -459,7 +490,7 @@ export default function Viec({ onNavigate }) {
       {logFor && data.daily.find(x => x.id === logFor) && <LogSheet daily={data.daily.find(x => x.id === logFor)} logs={data.logs} today={today}
         onSave={(n, day) => logValue(data.daily.find(x => x.id === logFor), n, day)} onDelete={delLog} onClose={() => setLogFor(null)}/>}
       {sel && <DaySheet iso={sel} today={today} who={who} cfg={cfg} showHair={linkPrefs.hair !== false} tasks={data.tasks} orders={data.orders}
-        onAddOrder={f => saveO(f)} onToggleOrder={toggleO} onEditOrder={o => setOrderEdit(o)} onOpenTask={openTask} projects={data.projects} daily={daily} logs={data.logs} now={now}
+        onAddOrder={f => saveO(f)} onToggleOrder={toggleO} onEditOrder={o => setOrderEdit(o)} onOpenTask={openTask} flags={flags[sel] || []} onOpenPlan={openPlan} projects={data.projects} daily={daily} logs={data.logs} now={now}
         links={linkGroups(links, sel)} onNavigate={(tab, target) => { setSel(null); onNavigate?.(tab, target) }}
         onClose={() => setSel(null)} onAdd={addTask} onEdit={editTask} onDelete={removeTask} onTick={quickTick}
         onMove={iso => setSel(iso)}/>}
@@ -468,7 +499,7 @@ export default function Viec({ onNavigate }) {
 }
 
 // ── LỊCH THÁNG ──
-function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, showHair = true, etaDays = new Set() }) {
+function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, showHair = true, etaDays = new Set(), flags = {} }) {
   const [y, m] = month.split('-').map(Number)
   const cells = gridRange(month)
   const from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
@@ -501,12 +532,13 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
             <button key={iso} onClick={() => onOpen(iso)}
               className={`relative rounded-xl flex flex-col items-center justify-center min-h-[50px] border-[1.5px] active:scale-95 transition-transform
                 ${isToday ? `border-purple-600 border-2 shadow-sm ${trai ? 'bg-emerald-50' : 'bg-purple-50'}` : trai ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-transparent'} ${out ? 'opacity-35' : ''}`}
-              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}${etaDays.has(iso) ? ', có hàng đặt đang về' : ''}`}>
+              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}${etaDays.has(iso) ? ', có hàng đặt đang về' : ''}${flags[iso] ? ', có hạn kế hoạch' : ''}`}>
               <span className={`text-base font-semibold leading-none ${isToday ? 'bg-purple-600 text-white w-7 h-7 rounded-full flex items-center justify-center' : d.getDay() === 0 ? 'text-red-500' : 'text-gray-900'}`}>{d.getDate()}</span>
               <span className={`text-[11px] leading-tight mt-0.5 ${trai ? 'text-emerald-700 font-semibold' : L.day === 1 || L.day === 15 ? 'text-orange-700 font-semibold' : 'text-orange-600/80'}`}>{lunarLabel(L)}</span>
               {showHair && hairOf(iso)?.good && <span className="absolute bottom-0.5 right-1 text-[10px] leading-none font-bold text-red-600" aria-hidden="true">✂</span>}
               {(marks[iso]?.jewelry || marks[iso]?.lab) && <span className="absolute top-0.5 left-1 text-[9px] leading-none" aria-hidden="true">{marks[iso].jewelry ? '💎' : ''}{marks[iso].lab ? '🧪' : ''}</span>}
               {etaDays.has(iso) && <span className="absolute top-0.5 right-1 text-[10px] leading-none" aria-hidden="true">📦</span>}
+              {flags[iso] && <span className="absolute bottom-0.5 left-1 text-[10px] leading-none" aria-hidden="true">🏁</span>}
               {mark && <i className={`absolute top-1 ${etaDays.has(iso) ? 'right-4' : 'right-1'} ${open > 1 ? 'min-w-[15px] h-[15px] px-0.5 text-[9px] leading-[15px] text-white not-italic' : 'w-2 h-2'} rounded-full ${mark}`}>{open > 1 ? open : ''}</i>}
             </button>
           )
@@ -518,6 +550,7 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
         <span className="flex items-center gap-1 whitespace-nowrap"><i className="w-2 h-2 rounded-full bg-red-500"/>sót</span>
         <span className="whitespace-nowrap">📦 hàng đặt</span>
         <span className="whitespace-nowrap">💎🧪 mốc</span>
+        {Object.keys(flags).length > 0 && <span className="whitespace-nowrap">🏁 hạn kế hoạch</span>}
         {showHair && <span className="whitespace-nowrap"><b className="text-red-600">✂</b> tốt cắt tóc</span>}
       </div>
       {showHair && (() => {                                  // ngày tốt cắt tóc trong tháng đang xem
@@ -533,7 +566,8 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
 }
 
 // ── THẺ SẮP TỚI ──
-function Upcoming({ U, today, cfg, onOpen, onOpenDay, onReview }) {
+function Upcoming({ U, today, cfg, onOpen, onOpenDay, onReview, projects = [] }) {
+  const planOf = t => t.project_id ? projects.find(p => p.id === t.project_id) : null
   const lateN = { tasks: U.late.filter(x => !x.t.order).length, orders: U.late.filter(x => x.t.order).length }
   let nextTrai = null
   for (let i = 0; i < 31; i++) { const s = addDays(today, i); if (isTraiDay(s, cfg)) { nextTrai = [i, s]; break } }
@@ -543,15 +577,15 @@ function Upcoming({ U, today, cfg, onOpen, onOpenDay, onReview }) {
         🌿 {nextTrai[0] === 0 ? 'Hôm nay ngày trai — ăn chay' : nextTrai[0] === 1 ? 'Mai là ngày trai' : `Ngày trai tới: ${dm(nextTrai[1])} (${nextTrai[0]} ngày nữa)`}</div>}
       {U.late.length > 0 && <button onClick={onReview} className="w-full flex items-center justify-between gap-2 bg-red-50 border border-red-200 text-red-800 rounded-xl px-3 py-2.5 my-1.5 text-left">
         <span className="text-[14px] font-semibold">⚠️ {[lateN.tasks && `${lateN.tasks} việc quá hạn`, lateN.orders && `${lateN.orders} đơn quá hẹn`].filter(Boolean).join(' · ')}</span><span className="text-[13px] font-semibold whitespace-nowrap">Rà soát ›</span></button>}
-      {U.today.map(({ t, date }) => <UpRow key={t.id + date} t={t} date={date} onOpen={onOpen} tag="Hôm nay" cls="bg-purple-100 text-purple-700"/>)}
-      {U.soon.map(({ t, date }) => { const n = daysBetween(date, today); return <UpRow key={t.id + date} t={t} date={date} onOpen={onOpen} tag={n === 1 ? 'Ngày mai' : `Còn ${n} ngày`} cls={n <= 2 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}/> })}
+      {U.today.map(({ t, date }) => <UpRow key={t.id + date} t={t} date={date} plan={planOf(t)} onOpen={onOpen} tag="Hôm nay" cls="bg-purple-100 text-purple-700"/>)}
+      {U.soon.map(({ t, date }) => { const n = daysBetween(date, today); return <UpRow key={t.id + date} t={t} date={date} plan={planOf(t)} onOpen={onOpen} tag={n === 1 ? 'Ngày mai' : `Còn ${n} ngày`} cls={n <= 2 ? 'bg-amber-100 text-amber-800' : 'bg-gray-100 text-gray-600'}/> })}
       {!U.late.length && !U.today.length && !U.soon.length && <p className="text-center text-sm text-gray-400 py-5">Không có việc nào trong 7 ngày tới · bấm vào một ngày để thêm</p>}
     </div>
   )
 }
 
 // ── THẺ DAILY ──
-function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit }) {
+function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit, projects = [] }) {
   const totalMin = list.filter(d => d.kind === 'time').reduce((a, d) => a + prog(d).minutes, 0)
   const forgot = running && runD && looksForgotten(running, runD, now)
   const reachedNow = running && runD && prog(runD).minutes >= runD.target_min
@@ -581,7 +615,8 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
               <button onClick={() => onEdit?.(d)} aria-label={'Chi tiết ' + d.name} className="flex items-center gap-2 min-w-0 text-left">
                 <div className="relative"><Ring pct={p.pct} color={d.color}/><span className="absolute inset-0 flex items-center justify-center text-base">{d.emoji}</span></div>
                 <div className="min-w-0"><div className="text-[13px] font-semibold text-gray-800 truncate">{d.name}{d.shared && ' 👥'}</div>
-                  <div className="text-xs text-gray-500">{d.kind === 'tick' ? (p.done ? 'Đã xong' : 'Chưa') : `${d.kind === 'count' ? Number(p.minutes).toLocaleString('vi-VN') : du(p.minutes)} / ${dval(d, d.target_min)}`}</div></div>
+                  <div className="text-xs text-gray-500">{d.kind === 'tick' ? (p.done ? 'Đã xong' : 'Chưa') : `${d.kind === 'count' ? Number(p.minutes).toLocaleString('vi-VN') : du(p.minutes)} / ${dval(d, d.target_min)}`}</div>
+                  {(pl => pl && <div className="text-[11px] font-semibold truncate" style={{ color: pl.color }}>🎯 {pl.name}</div>)(d.project_id && projects.find(x => x.id === d.project_id))}</div>
               </button>
               {d.kind === 'count'
                 ? <div className="flex gap-1">{quickSteps(d).map(n => <button key={n} onClick={() => onCount(d, n)}
@@ -906,7 +941,7 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
     const base = { title: f.title.trim(), due_time: f.due_time || null, shared: mine ? (f.shared || !!proj?.shared) : t.shared,   // vào dự án chung → việc thành chung
       project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null }
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
-    if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc dự án cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
+    if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc kế hoạch cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
     onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date || null, ...repeatFields(rep) })
   }
   const lbl = 'text-xs text-gray-500 font-semibold mt-4 mb-1.5 block'
@@ -936,10 +971,10 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
         <div className="mt-2"><RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/></div>
         {series && <p className="text-xs text-gray-500 mt-1.5">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
 
-        {projects.length > 0 && <><span className={lbl}>Thuộc dự án</span>
+        {projects.length > 0 && <><span className={lbl}>Thuộc kế hoạch</span>
           <div className="flex gap-2">
-            <select value={f.project_id} onChange={e => setF({ ...f, project_id: e.target.value })} aria-label="Dự án" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white">
-              <option value="">Không thuộc dự án</option>
+            <select value={f.project_id} onChange={e => setF({ ...f, project_id: e.target.value })} aria-label="Kế hoạch" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white">
+              <option value="">Không thuộc kế hoạch</option>
               {projects.filter(p => !p.archived || p.id === f.project_id).map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
             </select>
             {f.project_id && <input value={f.group_name} onChange={e => setF({ ...f, group_name: e.target.value })} placeholder="Nhóm" list={'g-' + f.project_id}
@@ -1036,14 +1071,14 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
     <div className="fixed inset-0 z-[65] bg-gray-100 flex flex-col" role="dialog" aria-label="Tìm kiếm" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       <div className="bg-white border-b border-gray-200"><div className="max-w-2xl mx-auto flex items-center gap-2 px-3 py-2.5">
         <span className="text-lg">🔍</span>
-        <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm việc, mã vận đơn, dự án…" aria-label="Nội dung tìm"
+        <input ref={inputRef} value={q} onChange={e => setQ(e.target.value)} placeholder="Tìm việc, mã vận đơn, kế hoạch…" aria-label="Nội dung tìm"
           enterKeyHint="search" autoComplete="off" autoCorrect="off" spellCheck={false} className="flex-1 min-w-0 text-base py-1.5 outline-none bg-transparent"/>
         {q && <button onClick={() => { setQ(''); inputRef.current?.focus() }} className="w-7 h-7 rounded-full bg-gray-100 text-gray-500 text-xs" aria-label="Xoá chữ">✕</button>}
         <button onClick={onClose} className="text-sm font-semibold text-purple-700 px-1">Đóng</button>
       </div></div>
       <div className="flex-1 overflow-y-auto" style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}><div className="max-w-2xl mx-auto px-3">
         {!r && <div className="bg-white rounded-2xl p-3.5 mt-3 text-[13px] text-gray-600 leading-relaxed">
-          <b>Gõ bất kỳ phần nào:</b><br/>• tên việc, không cần dấu — "an co" vẫn ra "ăn cỗ"<br/>• vài số cuối mã vận đơn — "4982"<br/>• tên dự án, tên Daily</div>}
+          <b>Gõ bất kỳ phần nào:</b><br/>• tên việc, không cần dấu — "an co" vẫn ra "ăn cỗ"<br/>• vài số cuối mã vận đơn — "4982"<br/>• tên kế hoạch, tên Daily</div>}
         {r && n === 0 && <p className="text-center text-sm text-gray-400 mt-10">Không tìm thấy "{q}"<br/><span className="text-xs">Thử bỏ bớt từ, hoặc gõ vài số cuối của mã</span></p>}
         {r && <>
           <SearchGroup label="☑️ Việc" items={r.tasks} render={t => <SearchRow key={t.id} onClick={() => onOpenTask(t, isSeries(t) ? (nextOccurrences(t, today, 1)[0] || t.repeat_start) : t.due_date)}
@@ -1054,7 +1089,7 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
             return <SearchRow key={o.id} onClick={() => onOpenOrder(o)} icon={o.received_at ? '✅' : '📦'} title={<Hl text={o.title} q={q}/>} status={orderStatus(o)}
               sub={`Đặt ${dm(o.order_date)}${o.received_at ? ` → về ${dm(o.received_at)} (sau ${daysBetween(o.received_at, o.order_date)} ngày)` : ''}`}
               extra={hit && <span className="block text-xs text-purple-800 font-mono mt-0.5">🔎 <Hl text={hit} q={q}/></span>}/> }}/>
-          <SearchGroup label="📁 Dự án" items={r.projects} render={p => <SearchRow key={p.id} onClick={() => onOpenProject(p.id)} icon={p.emoji} title={<Hl text={p.name} q={q}/>}
+          <SearchGroup label="🎯 Kế hoạch" items={r.projects} render={p => <SearchRow key={p.id} onClick={() => onOpenProject(p.id)} icon={p.emoji} title={<Hl text={p.name} q={q}/>}
             sub={(g => `${g.done}/${g.total} việc xong${p.archived ? ' · đã lưu trữ' : ''}`)(projectProgress(p.id, tasks, today))}/>}/>
           <SearchGroup label="◎ Daily" items={r.daily} render={d => <SearchRow key={d.id} onClick={() => onOpenDaily(d)} icon={d.emoji} title={<Hl text={d.name} q={q}/>}
             sub={`Daily · ${d.kind === 'tick' ? 'đánh dấu' : dval(d, d.target_min)}${d.archived ? ' · đã lưu trữ' : ''}`}/>}/>
@@ -1132,8 +1167,80 @@ function ReviewSheet({ late, lateOrders = [], today, who, onDone, onMove, onDele
   )
 }
 
+
+// ============================================
+// 🎯 KẾ HOẠCH — dự án có mục tiêu + hạn chót
+// ============================================
+const PLAN_STATUS = {
+  ontrack:    s => ['bg-emerald-50 text-emerald-700', '🟢 Đúng tiến độ'],
+  slow:       s => ['bg-amber-50 text-amber-800', `🟠 Hơi chậm ~${s.late} ngày`],
+  behind:     s => ['bg-red-50 text-red-700', `🔴 Chậm ~${s.late} ngày`],
+  notstarted: () => ['bg-red-50 text-red-700', '🔴 Chưa bắt đầu'],
+  overdue:    s => ['bg-red-50 text-red-700', `🔴 Quá hạn ${-s.daysLeft} ngày`],
+  done:       () => ['bg-emerald-50 text-emerald-700', '✅ Hoàn thành'],
+}
+function PlanStatus({ s }) {
+  const f = PLAN_STATUS[s.status]; if (!f) return null
+  const [cls, text] = f(s)
+  return <span className={`inline-block text-xs font-semibold rounded-lg px-2 py-0.5 ${cls}`}>{text}</span>
+}
+
+// Thẻ "Trọng tâm hôm nay": mỗi kế hoạch (có hạn chót, đang chạy) gợi ý MỘT việc nên làm tiếp
+function FocusCard({ projects, tasks, today, onPull, onOpenPlan }) {
+  const rows = projects.filter(p => !p.archived && p.deadline).map(p => ({ p, n: nextPlanTask(p, tasks) })).filter(x => x.n)
+    .sort((a, b) => (a.n.group.due || a.p.deadline).localeCompare(b.n.group.due || b.p.deadline)).slice(0, 3)
+  if (!rows.length) return null
+  return (
+    <div className="bg-white rounded-2xl border-2 border-purple-600 px-3 pt-2.5 pb-1 mt-3" aria-label="Trọng tâm hôm nay">
+      <div className="text-[15px] font-bold text-gray-900">🎯 Trọng tâm hôm nay</div>
+      {rows.map(({ p, n }) => {
+        const gDue = n.group.due, gLate = gDue && gDue < today, gSoon = gDue && !gLate && daysBetween(gDue, today) <= 14
+        return (
+          <div key={p.id} className="flex items-center gap-2.5 py-2 border-t border-gray-100 first:border-0">
+            <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: p.color }}/>
+            <button onClick={() => onOpenPlan(p.id)} className="flex-1 min-w-0 text-left">
+              <span className="block text-[14px] text-gray-800 truncate">{n.t.title}</span>
+              <span className="block text-xs text-gray-500 truncate">{p.emoji} {p.name} · {n.group.name}
+                {gLate ? <b className="text-red-600 font-normal"> · hạng mục quá hạn</b> : gSoon ? <b className="text-amber-700 font-normal"> · hạn {dm(gDue)}</b> : null}</span>
+            </button>
+            <button onClick={() => onPull(n.t)} className="bg-purple-600 text-white text-xs font-semibold rounded-xl px-3 py-2 whitespace-nowrap">＋ Hôm nay</button>
+          </div>)
+      })}
+    </div>
+  )
+}
+
+// Phần đầu màn kế hoạch: mục tiêu, vòng %, nhịp độ, hai thanh, Daily gắn kèm, việc tiếp theo
+function PlanHeader({ p, tasks, today, daily = [], logs = [], onPull }) {
+  const s = planPace(p, tasks, today), n = nextPlanTask(p, tasks)
+  const linked = daily.filter(d => d.project_id === p.id && !d.archived)
+  return (
+    <div className="bg-white rounded-2xl p-3.5 flex flex-col gap-3">
+      {p.goal && <div className="text-[14px] font-semibold bg-gray-50 rounded-xl px-3 py-2">🎯 {p.goal}</div>}
+      <div className="flex items-center gap-3">
+        <Ring pct={s.pct} color={p.color} size={62} label={s.pct + '%'}/>
+        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+          <PlanStatus s={s}/>
+          {p.deadline ? <span className="text-xs text-gray-600">Hạn <b>{dm(p.deadline)}</b>{s.daysLeft >= 0 && ` · còn ${s.daysLeft} ngày`}{s.finish && s.left > 0 && <> · dự kiến xong <b>{dm(s.finish)}</b></>}</span>
+            : <span className="text-xs text-gray-500">Chưa đặt hạn chót — bấm ✏️ để thêm</span>}
+          <span className="text-xs text-gray-600">{s.done}/{s.N} việc xong{p.deadline && s.left > 0 && s.daysLeft > 0 && <> · cần <b>~{s.perWeek} việc/tuần</b></>}</span>
+        </div>
+      </div>
+      {s.timePct !== null && <div className="flex flex-col gap-1.5">
+        {[[`Công việc ${s.pct}%`, s.pct, p.color], [`Thời gian đã trôi ${s.timePct}%`, s.timePct, '#B4B2A9']].map(([l, v, c]) =>
+          <div key={l}><span className="text-[11px] text-gray-500">{l}</span><div className="h-1.5 bg-gray-100 rounded-full overflow-hidden"><div className="h-full rounded-full" style={{ width: v + '%', background: c }}/></div></div>)}
+      </div>}
+      {linked.map(d => { const st = periodStats([d], logs, addDays(today, -13), today)[0]
+        return <div key={d.id} className="text-xs text-blue-800 bg-blue-50 rounded-lg px-2.5 py-1.5">◎ Daily gắn kèm: <b>{d.emoji} {d.name}</b> · giữ được {st.hit}/{st.planned} ngày gần nhất</div> })}
+      {n && <div className="flex items-center gap-2 bg-purple-50 rounded-xl px-3 py-2 text-[13px]">
+        <span className="flex-1 min-w-0">Việc tiếp theo: <b>{n.t.title}</b></span>
+        <button onClick={() => onPull(n.t)} className="bg-purple-600 text-white text-xs font-semibold rounded-xl px-3 py-2 whitespace-nowrap">＋ Hôm nay</button></div>}
+    </div>
+  )
+}
+
 // ── BẢNG CHI TIẾT NGÀY ──
-function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
+function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], flags = [], onOpenPlan, onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
   const [opt, setOpt] = useState({ due_time: '', shared: false, project_id: '' })
   const [track, setTrack] = useState(false), [trk, setTrk] = useState(''), [etaN, setEtaN] = useState('')   // 📦 Theo dõi hàng
@@ -1175,6 +1282,10 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
               {hair.good ? 'Ngày tốt' : 'Không nên'}{!hair.good && nextGood && ` · ngày tốt gần nhất ${dm(nextGood)}: ${hairOf(nextGood).text}`}</div>
           </div>
         )}
+        {flags.map((f, i) => (
+          <button key={i} onClick={() => onOpenPlan?.(f.p.id)} className="mt-2 w-full flex items-center gap-2 rounded-xl px-3 py-2.5 bg-amber-50 text-amber-900 text-[13px] text-left">
+            <span>🏁</span><span className="flex-1 min-w-0"><b>{f.label}</b> · {f.p.emoji} {f.p.name}</span><span className="text-purple-700 font-semibold whitespace-nowrap">Mở ›</span>
+          </button>))}
 
         <div className="flex gap-2 mt-3">
           <input value={text} onChange={e => setText(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()}
@@ -1195,7 +1306,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
         </div>
         {!track && <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>}
         {!track && projects.some(p => !p.archived) && <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
-          <Chip on={!opt.project_id} onClick={() => setOpt(o => ({ ...o, project_id: '' }))}>Không thuộc dự án</Chip>
+          <Chip on={!opt.project_id} onClick={() => setOpt(o => ({ ...o, project_id: '' }))}>Không thuộc kế hoạch</Chip>
           {projects.filter(p => !p.archived).map(p => <Chip key={p.id} on={opt.project_id === p.id} onClick={() => setOpt(o => ({ ...o, project_id: p.id, shared: o.shared || p.shared }))}>{p.emoji} {p.name}</Chip>)}
         </div>}
 
@@ -1255,24 +1366,35 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
 
 // ── DỰ ÁN ──
 const P_EMOJI = ['📁', '🧪', '💎', '✈️', '🏠', '📚', '💻', '🍵', '🎯', '🛠️', '🌿', '⭐']
-function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
-  const [f, setF] = useState(initial ? { ...initial } : { name: '', emoji: '📁', color: '#7F77DD', shared: false })
+function ProjectForm({ initial, who, today, onSave, onCancel, onDelete }) {
+  const [f, setF] = useState(initial ? { ...initial, goal: initial.goal || '', deadline: initial.deadline || '', groupsText: groupsToText(initial.groups) }
+    : { name: '', emoji: '🎯', color: '#7F77DD', shared: false, goal: '', deadline: '', groupsText: '' })
+  const save = () => { if (!f.name.trim()) return
+    const { groupsText, ...rest } = f
+    onSave({ ...rest, name: f.name.trim(), goal: f.goal.trim() || null, deadline: f.deadline || null, groups: parseGroupLines(groupsText, today) }) }
   const canShare = !initial || initial.owner === who
   const [confirm, setConfirm] = useState(false)
   return (
     <div className="bg-white rounded-2xl p-4 flex flex-col gap-3">
-      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên dự án, ví dụ: Bạch Mẫu Đơn V2"
-        className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base" autoFocus={!initial}/>
+      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên kế hoạch, ví dụ: Khai trương Tứ Quý Đường"
+        aria-label="Tên kế hoạch" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base" autoFocus={!initial}/>
+      <label className="text-xs text-gray-500 font-semibold">🎯 Mục tiêu — một câu đo được
+        <input value={f.goal} onChange={e => setF({ ...f, goal: e.target.value })} placeholder="Ví dụ: 30 khách trong tuần đầu khai trương" aria-label="Mục tiêu" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base mt-1 font-normal"/></label>
+      <label className="text-xs text-gray-500 font-semibold">Hạn chót
+        <input type="date" value={f.deadline} onChange={e => setF({ ...f, deadline: e.target.value })} aria-label="Hạn chót" className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base mt-1 block appearance-none min-w-0 bg-white font-normal"/></label>
+      <label className="text-xs text-gray-500 font-semibold">Hạng mục — mỗi dòng một hạng mục, thêm "| ngày" nếu có hạn riêng
+        <textarea value={f.groupsText} onChange={e => setF({ ...f, groupsText: e.target.value })} rows={4} aria-label="Hạng mục"
+          placeholder={'Pháp lý | 31/10\nMặt bằng & quầy | 10/11\nMarketing'} className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base mt-1 font-normal"/></label>
       <div className="flex flex-wrap gap-1.5">{P_EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => setF({ ...f, emoji: e })} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div>
       <div className="flex flex-wrap gap-2.5">{COLORS.map(c => <button key={c} onClick={() => setF({ ...f, color: c })} aria-label={'Màu ' + c}
         aria-pressed={f.color === c} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div>
       <div><span className="text-xs text-gray-500 font-semibold mb-1.5 block">Ai thấy</span>
-        <ShareSeg shared={f.shared} onChange={x => setF({ ...f, shared: x })} who={who} owner={initial?.owner || who} noun="dự án"/></div>
+        <ShareSeg shared={f.shared} onChange={x => setF({ ...f, shared: x })} who={who} owner={initial?.owner || who} noun="kế hoạch"/></div>
       <div className="flex gap-2">
         {initial && canShare && <button onClick={() => confirm ? onDelete() : setConfirm(true)}
           className={`flex-1 py-2.5 rounded-xl text-sm ${confirm ? 'bg-red-600 text-white' : 'bg-gray-100 text-red-600'}`}>{confirm ? 'Xoá? Việc vẫn giữ' : 'Xoá'}</button>}
         <button onClick={onCancel} className="flex-1 py-2.5 rounded-xl bg-gray-100 text-gray-600 text-sm">Huỷ</button>
-        <button onClick={() => f.name.trim() && onSave({ ...f, name: f.name.trim() })} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">Lưu</button>
+        <button onClick={save} className="flex-1 py-2.5 rounded-xl bg-purple-600 text-white text-sm font-semibold">{initial ? 'Lưu' : 'Tạo kế hoạch'}</button>
       </div>
     </div>
   )
@@ -1280,6 +1402,17 @@ function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
 
 function ProjectCard({ p, tasks, today, onOpen }) {
   const g = projectProgress(p.id, tasks, today)
+  if (p.deadline) { const s = planPace(p, tasks, today)
+    return (
+      <button onClick={() => onOpen(p.id)} className="w-full bg-white rounded-2xl p-3.5 text-left active:scale-[0.99] flex items-center gap-3">
+        <Ring pct={s.pct} color={p.color} size={48} label={s.pct + '%'}/>
+        <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+          <span className="text-[15px] font-semibold text-gray-800 truncate">{p.emoji} {p.name}{p.shared && ' 👥'}</span>
+          <span className="text-xs text-gray-500">Hạn {dm(p.deadline)}{s.daysLeft >= 0 ? ` · còn ${s.daysLeft} ngày` : ''} · {s.done}/{s.N} việc</span>
+          <PlanStatus s={s}/>
+        </div>
+        <span className="text-gray-300 text-xl">›</span>
+      </button>) }
   return (
       <button onClick={() => onOpen(p.id)} className="w-full bg-white rounded-2xl p-3.5 text-left active:scale-[0.99]">
         <div className="flex items-center gap-3">
@@ -1306,13 +1439,13 @@ function ProjectsPage({ who, projects, tasks, today, onOpen, onSave, onBack }) {
     <div className="pb-6">
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30"><div className="max-w-2xl mx-auto px-2 py-2 flex items-center">
         <button onClick={onBack} className="w-11 h-11 text-2xl text-gray-500" aria-label="Quay lại">‹</button>
-        <h2 className="flex-1 text-center text-lg font-bold text-gray-800">Dự án</h2>
-        <button onClick={() => setAdding(true)} className="w-11 h-11 text-2xl text-purple-600" aria-label="Thêm dự án">+</button></div></header>
+        <h2 className="flex-1 text-center text-lg font-bold text-gray-800">Kế hoạch</h2>
+        <button onClick={() => setAdding(true)} className="w-11 h-11 text-2xl text-purple-600" aria-label="Thêm kế hoạch">+</button></div></header>
       <div className="max-w-2xl mx-auto px-3 pt-3 flex flex-col gap-2.5">
-        {adding && <ProjectForm who={who} onCancel={() => setAdding(false)} onSave={f => { onSave({ owner: who, ...f }); setAdding(false) }}/>}
+        {adding && <ProjectForm who={who} today={today} onCancel={() => setAdding(false)} onSave={f => { onSave({ owner: who, start_date: today, ...f }); setAdding(false) }}/>}
         {active.map(p => <ProjectCard key={p.id} p={p} tasks={tasks} today={today} onOpen={onOpen}/>)}
         {!active.length && !adding && <button onClick={() => setAdding(true)} className="bg-white rounded-2xl p-6 text-center text-sm text-gray-500 border-2 border-dashed border-gray-200">
-          Chưa có dự án nào · bấm để tạo dự án đầu tiên</button>}
+          Chưa có kế hoạch nào · bấm để tạo kế hoạch đầu tiên</button>}
         {arch.length > 0 && <button onClick={() => setShowArch(!showArch)} className="text-xs text-gray-400 py-2">{showArch ? '▾' : '▸'} Đã lưu trữ · {arch.length}</button>}
         {showArch && arch.map(p => <div key={p.id} className="opacity-60"><ProjectCard p={p} tasks={tasks} today={today} onOpen={onOpen}/></div>)}
       </div>
@@ -1320,15 +1453,21 @@ function ProjectsPage({ who, projects, tasks, today, onOpen, onSave, onBack }) {
   )
 }
 
-function ProjectDetail({ who, project: p, projects, tasks, today, onSaveProject, onDeleteProject, onAdd, onEdit, onDelete, onTick, onOpenDay, onOpenTask, onBack }) {
+function ProjectDetail({ who, project: p, projects, tasks, today, daily = [], logs = [], onSaveProject, onDeleteProject, onAdd, onAddMany, onEdit, onDelete, onTick, onOpenDay, onOpenTask, onPull, onBack }) {
   const [editP, setEditP] = useState(false)
-  const [title, setTitle] = useState(''), [group, setGroup] = useState(''), [newGroup, setNewGroup] = useState(''), [date, setDate] = useState('')
+  const [title, setTitle] = useState(''), [group, setGroup] = useState(''), [newGroup, setNewGroup] = useState(''), [date, setDate] = useState(''), [many, setMany] = useState(false)
   const ts = tasks.filter(t => t.project_id === p.id)
-  const groups = projectGroups(p.id, tasks), g = projectProgress(p.id, tasks, today)
+  const pg = planGroups(p, tasks), groups = pg.map(x => x.name), g = projectProgress(p.id, tasks, today)
   const grp = group === '__new' ? newGroup.trim() : group
-  const add = () => { const t = title.trim(); if (!t) return
-    onAdd({ title: t, project_id: p.id, group_name: grp || null, due_date: date || null, shared: p.shared, repeat_unit: '', repeat_every: 1 })
-    setTitle(''); if (group === '__new' && grp) setGroup(grp) }
+  const add = async () => {
+    const lines = many ? parseLines(title) : [title.trim()].filter(Boolean)
+    if (!lines.length) return
+    const fields = lines.map(t => ({ title: t, project_id: p.id, group_name: grp || null, due_date: date || null, shared: p.shared, repeat_unit: '', repeat_every: 1 }))
+    if (onAddMany && many) {
+      const left = await onAddMany(fields)                     // còn việc chưa lưu → giữ lại trong ô để thêm lại
+      if (left?.length) { setTitle(left.map(f => f.title).join('\n')); return }
+    } else fields.forEach(f => onAdd(f))
+    setTitle(''); if (many) setMany(false); if (group === '__new' && grp) setGroup(grp) }
   const order = t => [t.done ? 1 : 0, t.due_date || '9999', t.title]
   const sortT = (a, b) => { const x = order(a), y = order(b); return x[0] - y[0] || x[1].localeCompare(y[1]) || x[2].localeCompare(y[2]) }
   return (
@@ -1336,39 +1475,52 @@ function ProjectDetail({ who, project: p, projects, tasks, today, onSaveProject,
       <header className="bg-white border-b border-gray-200 sticky top-0 z-30"><div className="max-w-2xl mx-auto px-2 py-2 flex items-center">
         <button onClick={onBack} className="w-11 h-11 text-2xl text-gray-500" aria-label="Quay lại">‹</button>
         <h2 className="flex-1 text-center text-lg font-bold text-gray-800 truncate">{p.emoji} {p.name}</h2>
-        <button onClick={() => setEditP(!editP)} className="w-11 h-11 text-lg" aria-label="Sửa dự án">✏️</button></div></header>
+        <button onClick={() => setEditP(!editP)} className="w-11 h-11 text-lg" aria-label="Sửa kế hoạch">✏️</button></div></header>
       <div className="max-w-2xl mx-auto px-3 pt-3 flex flex-col gap-3">
-        {editP ? <ProjectForm initial={p} who={who} onCancel={() => setEditP(false)} onDelete={() => onDeleteProject(p.id)}
-            onSave={f => { onSaveProject({ id: p.id, name: f.name, emoji: f.emoji, color: f.color, shared: f.shared }); setEditP(false) }}/>
+        {editP ? <ProjectForm initial={p} who={who} today={today} onCancel={() => setEditP(false)} onDelete={() => onDeleteProject(p.id)}
+            onSave={f => { onSaveProject({ id: p.id, name: f.name, emoji: f.emoji, color: f.color, shared: f.shared, goal: f.goal, deadline: f.deadline, groups: f.groups }); setEditP(false) }}/>
+          : (p.deadline || p.goal) ? <>
+              <PlanHeader p={p} tasks={tasks} today={today} daily={daily} logs={logs} onPull={onPull}/>
+              {(p.owner === who || p.shared) && <button onClick={() => onSaveProject({ id: p.id, archived: !p.archived })} className="text-xs text-gray-400 -mt-1 text-left px-1">{p.archived ? 'Bỏ lưu trữ' : 'Xong kế hoạch · lưu trữ'}</button>}
+            </>
           : <div className="bg-white rounded-2xl p-3.5">
               <div className="flex items-baseline justify-between"><span className="text-sm text-gray-600">{g.done}/{g.total} việc xong{g.late ? <span className="text-red-600"> · {g.late} quá hạn</span> : ''}</span>
                 <span className="text-xl font-bold" style={{ color: p.color }}>{g.pct}%</span></div>
               <div className="h-2 bg-gray-100 rounded-full mt-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: g.pct + '%', background: p.color }}/></div>
-              {(p.owner === who || p.shared) && <button onClick={() => onSaveProject({ id: p.id, archived: !p.archived })} className="text-xs text-gray-400 mt-2">{p.archived ? 'Bỏ lưu trữ' : 'Xong dự án · lưu trữ'}</button>}
+              {(p.owner === who || p.shared) && <button onClick={() => onSaveProject({ id: p.id, archived: !p.archived })} className="text-xs text-gray-400 mt-2">{p.archived ? 'Bỏ lưu trữ' : 'Xong · lưu trữ'}</button>}
             </div>}
 
         <div className="bg-white rounded-2xl p-3 flex flex-col gap-2">
           <div className="flex gap-2">
-            <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="+ Thêm việc vào dự án…"
-              className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+            {many ? <textarea value={title} onChange={e => setTitle(e.target.value)} rows={5} aria-label="Nhiều việc" autoFocus
+                placeholder={'Mỗi dòng một việc — dán từ ghi chú cũng được\nĐặt làm quầy bar\nLắp điện nước'} className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+              : <input value={title} onChange={e => setTitle(e.target.value)} onKeyDown={e => e.key === 'Enter' && add()} placeholder="+ Thêm việc…"
+              className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>}
             <button onClick={add} className="bg-purple-600 text-white rounded-xl px-4 font-semibold">Thêm</button>
           </div>
           <div className="flex gap-2">
             <select value={group} onChange={e => setGroup(e.target.value)} aria-label="Nhóm" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-2 py-2 text-base bg-white">
-              <option value="">Nhóm: Chung</option>
-              {groups.filter(x => x !== 'Chung').map(x => <option key={x} value={x}>Nhóm: {x}</option>)}
-              <option value="__new">+ Nhóm mới…</option>
+              <option value="">Hạng mục: Chung</option>
+              {groups.filter(x => x !== 'Chung').map(x => <option key={x} value={x}>Hạng mục: {x}</option>)}
+              <option value="__new">+ Hạng mục mới…</option>
             </select>
             <input type="date" value={date} onChange={e => setDate(e.target.value)} aria-label="Ngày" className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-xl px-2 py-2 text-base bg-white"/>
           </div>
-          {group === '__new' && <input value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Tên nhóm mới, ví dụ: Đóng gói" className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>}
-          <p className="text-xs text-gray-400">{date ? `Việc sẽ hiện trên lịch ngày ${dm(date)}` : 'Không chọn ngày: việc chỉ nằm trong dự án, đặt ngày sau cũng được'}</p>
+          {group === '__new' && <input value={newGroup} onChange={e => setNewGroup(e.target.value)} placeholder="Tên hạng mục mới, ví dụ: Đóng gói" className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>}
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs text-gray-400">{date ? `Việc sẽ hiện trên lịch ngày ${dm(date)}` : 'Không chọn ngày: việc nằm trong kế hoạch, đưa vào hôm nay sau'}</p>
+            <button onClick={() => setMany(!many)} className="text-xs text-purple-700 font-semibold whitespace-nowrap">{many ? 'Một việc' : '＋ Nhiều việc'}</button>
+          </div>
+          {many && title && <p className="text-xs text-gray-500">Sẽ thêm {parseLines(title).length} việc{grp ? ` vào "${grp}"` : ''}</p>}
         </div>
 
-        {groups.map(gn => { const list = ts.filter(t => (t.group_name || 'Chung') === gn).sort(sortT)
+        {pg.map(({ name: gn, due }) => { const list = ts.filter(t => (t.group_name || 'Chung') === gn).sort(sortT)
+          const nDone = list.filter(t => !t.repeat_unit && t.done).length, nAll = list.filter(t => !t.repeat_unit).length
+          const gLate = due && nDone < nAll && due < today, gSoon = due && nDone < nAll && !gLate && daysBetween(due, today) <= 14
           return (
             <div key={gn}>
-              <div className="flex justify-between text-xs text-gray-400 px-1 mb-1"><span>{gn}</span><span>{list.filter(t => !t.repeat_unit && t.done).length}/{list.filter(t => !t.repeat_unit).length}</span></div>
+              <div className="flex justify-between items-baseline text-xs px-1 mb-1"><span className="text-[13px] font-semibold text-gray-700">{gn}</span>
+                <span className={gLate ? 'text-red-600 font-semibold' : gSoon ? 'text-amber-700' : 'text-gray-400'}>{nDone}/{nAll}{due && ` · hạn ${dm(due)}`}{gLate ? ' · quá hạn' : ''}</span></div>
               <div className="bg-white rounded-2xl px-3">
                 {list.map(t => {
                   const series = isSeries(t), late = !series && !t.done && t.due_date && t.due_date < today
@@ -1385,14 +1537,16 @@ function ProjectDetail({ who, project: p, projects, tasks, today, onSaveProject,
                           {series ? `↻ ${describe(t)}${nextD ? ' · lần tới ' + dm(nextD) : ''}` : t.due_date ? (late ? 'Quá hạn · ' : '') + dm(t.due_date) + (t.due_time ? ' · ' + t.due_time : '') : 'Chưa có ngày · bấm để đặt'}
                         </div>
                       </button>
-                      <span className="text-gray-300 text-lg">›</span>
+                      {!series && !t.done && !t.due_date && onPull
+                        ? <button onClick={() => onPull(t)} className="text-[11px] bg-purple-50 text-purple-800 font-semibold rounded-lg px-2 py-1.5 whitespace-nowrap">＋ Hôm nay</button>
+                        : <span className="text-gray-300 text-lg">›</span>}
                     </div>
                   )
                 })}
               </div>
             </div>
           ) })}
-        {!ts.length && <p className="text-center text-sm text-gray-400 py-6">Chưa có việc nào — thêm ở ô phía trên</p>}
+        {!ts.length && <p className="text-center text-sm text-gray-400 py-6">Chưa có việc nào — thêm ở ô phía trên, bấm "＋ Nhiều việc" để dán cả danh sách</p>}
       </div>
     </div>
   )
@@ -1558,17 +1712,18 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
 }
 
 // ── THÊM / SỬA DAILY ──
-function DailyForm({ initial, who, onSave, onBack, onStart, onManual }) {
+function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onManual }) {
   const [f, setF] = useState(initial ? { ...initial } : { name: '', emoji: '⭐', color: '#7F77DD', kind: 'time', target_min: 30, start_time: '', weekdays: '1234567', remind: false, shared: false })
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
   const toggleDay = n => set('weekdays', f.weekdays.includes(n) ? f.weekdays.replace(n, '') : [...f.weekdays + n].sort().join(''))
   const save = () => {
     if (!f.name.trim()) return
     if (!f.weekdays) return
-    const { id, name, emoji, color, kind, target_min, start_time, weekdays, remind, shared, archived, unit } = f
+    const { id, name, emoji, color, kind, target_min, start_time, weekdays, remind, shared, archived, unit, project_id } = f
     onSave({ ...(id ? { id } : {}), name: name.trim(), emoji, color, kind, target_min: kind === 'tick' ? 1 : Math.max(1, Math.round(Number(target_min) || 1)),
       unit: kind === 'count' ? ((unit || '').trim() || null) : null,
-      start_time: start_time || null, weekdays, remind: !!(remind && start_time), shared: !!shared, archived: !!archived })
+      start_time: start_time || null, weekdays, remind: !!(remind && start_time), shared: !!shared, archived: !!archived,
+      ...(project_id !== undefined ? { project_id: project_id || null } : {}) })   // chỉ gửi khi cột đã có hoặc vừa chọn
   }
   return (
     <div className="pb-6">
@@ -1620,6 +1775,12 @@ function DailyForm({ initial, who, onSave, onBack, onStart, onManual }) {
             <Switch on={!!f.remind} onClick={() => set('remind', !f.remind)} label="Nhắc khi tới giờ"/>
           </div>}
         </div>
+        {projects.some(p => !p.archived) && <label className="text-xs text-gray-500">Thuộc kế hoạch
+          <select value={f.project_id || ''} onChange={e => set('project_id', e.target.value)} aria-label="Thuộc kế hoạch"
+            className="mt-1 w-full border border-gray-200 rounded-xl px-2 py-2.5 text-base bg-white text-gray-800">
+            <option value="">Không thuộc kế hoạch nào</option>
+            {projects.filter(p => !p.archived || p.id === f.project_id).map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
+          </select></label>}
         <div><span className="text-xs text-gray-500">Ai thấy</span><div className="mt-1">
           <ShareSeg shared={f.shared} onChange={x => set('shared', x)} who={who} owner={initial?.owner || who} noun="Daily"/></div></div>
       </div>

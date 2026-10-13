@@ -140,6 +140,101 @@ export function projectGroups(projectId, tasks) {
 }
 
 
+// ── Kế hoạch (dự án có mục tiêu + hạn chót) ──
+// Ngày theo giờ máy (Việt Nam) của một mốc thời gian, vd done_at
+const localDay = ts => { if (!ts) return null; if (/^\d{4}-\d{2}-\d{2}$/.test(ts)) return ts
+  const d = new Date(ts); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+// Mỗi dòng một việc; bỏ gạch đầu dòng, số thứ tự, ô tick khi dán từ ghi chú; bỏ dòng trùng
+export function parseLines(text) {
+  const seen = new Set(), out = []
+  for (const raw of String(text || '').split(/\r?\n/)) {
+    const t = raw.replace(/^\s*(?:[-–—•*+]|\[[ xX]?\]|\d+[.)]|[a-zA-Z][.)](?=\s))\s*/, '').trim()
+    if (t && !seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); out.push(t) }
+  }
+  return out
+}
+// Hạng mục: "Tên | 15/11" hoặc "Tên | 15/11/2027". Không ghi năm → lấy lần gần nhất từ refDay trở đi.
+export function parseGroupLines(text, refDay) {
+  return parseLines(text).map(line => {
+    const [name, d] = line.split('|').map(x => x.trim())
+    const m = d && d.match(/^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?$/)
+    let due = null
+    if (m) {
+      const dd = +m[1], mm = +m[2]; let yy = m[3] ? +m[3] : +refDay.slice(0, 4); if (yy < 100) yy += 2000
+      const ok = mm >= 1 && mm <= 12 && dd >= 1 && dd <= new Date(yy, mm, 0).getDate()
+      if (ok) { due = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; if (!m[3] && due < refDay) due = `${yy + 1}${due.slice(4)}` }
+    }
+    return { name, due }
+  }).filter(g => g.name)
+}
+export const groupsToText = groups => (groups || []).map(g => g.due ? `${g.name} | ${+g.due.slice(8)}/${+g.due.slice(5, 7)}/${g.due.slice(0, 4)}` : g.name).join('\n')
+// Hạng mục của kế hoạch: theo thứ tự đã khai báo, cộng các nhóm có trong việc mà chưa khai báo
+export function planGroups(p, tasks) {
+  const list = (p.groups || []).map(g => ({ name: g.name, due: g.due || null }))
+  for (const name of projectGroups(p.id, tasks)) if (!list.some(g => g.name === name)) list.push({ name, due: null })
+  return list
+}
+// Nhịp độ: so tốc độ làm thật với thời gian còn lại.
+// Tốc độ = nhanh hơn giữa "2 tuần gần nhất" và "trung bình từ khi bắt đầu" — nghỉ vài ngày không báo đỏ ngay.
+export function planPace(p, tasks, today) {
+  const ts = tasks.filter(t => t.project_id === p.id && !t.repeat_unit)
+  const N = ts.length, done = ts.filter(t => t.done).length, left = N - done
+  const start = p.start_date || localDay(p.created_at) || today
+  const elapsed = Math.max(1, daysBetween(today, start))
+  const recent = ts.filter(t => t.done && t.done_at && localDay(t.done_at) > addDays(today, -14)).length
+  const rate = Math.max(recent / 14, done / elapsed)                    // việc mỗi ngày
+  const daysLeft = p.deadline ? daysBetween(p.deadline, today) : null
+  const finish = !N ? null : left === 0 ? today : rate > 0 ? addDays(today, Math.ceil(left / rate)) : null
+  const late = p.deadline && finish ? daysBetween(finish, p.deadline) : null
+  let status
+  if (!N) status = 'empty'
+  else if (left === 0) status = 'done'
+  else if (!p.deadline) status = 'nodeadline'
+  else if (daysLeft < 0) status = 'overdue'
+  else if (!finish) status = 'notstarted'
+  else status = late <= 0 ? 'ontrack' : late <= 7 ? 'slow' : 'behind'
+  const span = p.deadline ? Math.max(1, daysBetween(p.deadline, start)) : null
+  return { N, done, left, pct: N ? Math.round(done / N * 100) : 0, daysLeft, finish, late, status,
+    timePct: span ? Math.max(0, Math.min(100, Math.round(daysBetween(today, start) / span * 100))) : null,
+    perWeek: p.deadline && daysLeft > 0 ? Math.ceil(left / (daysLeft / 7)) : left }
+}
+// Việc nên làm tiếp: hạng mục có hạn sớm nhất còn việc chưa lên lịch → việc tạo sớm nhất trong đó
+export function nextPlanTask(p, tasks) {
+  const ts = tasks.filter(t => t.project_id === p.id && !t.repeat_unit && !t.done && !t.due_date)
+  if (!ts.length) return null
+  const groups = planGroups(p, tasks).map((g, i) => ({ ...g, i }))
+    .sort((a, b) => (a.due || '9999').localeCompare(b.due || '9999') || a.i - b.i)
+  const byAge = (a, b) => String(a.created_at || '').localeCompare(String(b.created_at || ''))
+  for (const g of groups) {
+    const t = ts.filter(x => (x.group_name || 'Chung') === g.name).sort(byAge)[0]
+    if (t) return { t, group: g }
+  }
+  return null
+}
+// Đổi tên hạng mục khi sửa kế hoạch: dòng CÙNG VỊ TRÍ, tên cũ không còn, tên mới chưa từng có → coi là đổi tên.
+// (Xoá hẳn một dòng thì không đoán — việc vẫn giữ tên hạng mục cũ, không mất việc nào.)
+export function groupRenames(oldGroups = [], newGroups = []) {
+  const oldN = oldGroups.map(g => g.name), newN = newGroups.map(g => g.name), out = []
+  for (let i = 0; i < Math.min(oldN.length, newN.length); i++)
+    if (oldN[i] !== newN[i] && !newN.includes(oldN[i]) && !oldN.includes(newN[i])) out.push({ from: oldN[i], to: newN[i] })
+  return out
+}
+export async function renameGroupTasks(projectId, from, to) {
+  const { data, error } = await supabase.from('viec_tasks').update({ group_name: to }).eq('project_id', projectId).eq('group_name', from).select()
+  if (error) throw error
+  return data || []
+}
+// Các mốc 🏁 trên lịch: hạn kế hoạch + hạn từng hạng mục (kế hoạch đang chạy)
+export function planFlags(projects) {
+  const f = {}
+  for (const p of projects) {
+    if (p.archived) continue
+    if (p.deadline) (f[p.deadline] = f[p.deadline] || []).push({ p, label: 'Hạn kế hoạch' })
+    for (const g of p.groups || []) if (g.due) (f[g.due] = f[g.due] || []).push({ p, label: 'Hạn hạng mục ' + g.name })
+  }
+  return f
+}
+
 // ── Hàng đặt ──
 export async function saveOrder(fields) {
   const q = fields.id
