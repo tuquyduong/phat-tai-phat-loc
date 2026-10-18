@@ -17,7 +17,7 @@ const BACKUP_TABLES = [
   'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
   'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
   'stocks', 'stock_transactions', 'dividends',
-  'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders', 'expense_cards',
+  'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders', 'expense_cards', 'expense_accounts',
 ]
 
 // Lấy MỌI bảng đang có trong database (qua hàm db_usage), gộp với danh sách cố định.
@@ -156,7 +156,7 @@ export default function Home({ onNavigate, activeModules }) {
       for (const table of allTables) {
         try {
           backup.tables[table] = await fetchAllRows(table)
-        } catch (e) {
+        } catch {
           failedTables.push(table)
         }
       }
@@ -216,7 +216,7 @@ export default function Home({ onNavigate, activeModules }) {
           'ingredients', 'formulas', 'formula_ingredients',
           'lab_batches', 'lab_notes', 'ingredient_imports', 'ingredient_exports',
           'jewelry_trips', 'jewelry', 'jewelry_sales', 'jewelry_mounts', 'jewelry_intakes',
-          'stocks', 'stock_transactions', 'dividends', 'expense_cards', 'transactions',
+          'stocks', 'stock_transactions', 'dividends', 'expense_cards', 'expense_accounts', 'transactions',
           'viec_projects', 'viec_tasks', 'viec_daily', 'viec_logs', 'viec_orders'
         ]
         // Bảng có trong file backup nhưng không nằm trong thứ tự trên → khôi phục cuối

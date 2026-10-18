@@ -16,7 +16,8 @@ import {
   getTransactions, createTransaction, updateTransaction, deleteTransaction,
   getExpenseSummary, getRunningBalance, getInitialBalances, saveInitialBalances,
   getCards, saveCard, archiveCard, getUnassignedCredit, suggestCard, assignCard, reconcile, previewReconcile, closeCardBooks, getCardCutoff,
-  getReconState, backdateWarnings, warnText, getHealth, convertToPayCredit, keepAsExpense
+  getReconState, backdateWarnings, warnText, getHealth, convertToPayCredit, keepAsExpense,
+  getAccounts, saveAccount, archiveAccount, closeAccountBooks, getBankCutoff, getUnassignedBank, suggestAccount, assignAccount
 } from '../lib/expenses'
 
 // Helpers
@@ -38,6 +39,21 @@ function formatDateLabel(ds) {
 }
 const mBadge = (m) => m==='credit'?'bg-purple-50 text-purple-600 border-purple-200':m==='transfer'?'bg-blue-50 text-blue-600 border-blue-200':'bg-amber-50 text-amber-600 border-amber-200'
 const mShort = (m) => m==='credit'?'TD':m==='transfer'?'CK':'TM'
+// Đích của giao dịch chuyển (giao dịch cũ không ghi đích: TM ↔ CK)
+const txDest = (t) => t.to_method || ((t.payment_method||'cash')==='cash' ? 'transfer' : 'cash')
+// Một giao dịch làm số dư tài khoản `id` thay đổi bao nhiêu (+ vào, − ra)
+function accFlow(t, id) {
+  const a = Number(t.amount) || 0, m = t.payment_method || 'cash'
+  if (t.type === 'transfer') return (m === 'transfer' && t.account_id === id ? -a : 0) + (txDest(t) === 'transfer' && t.to_account_id === id ? a : 0)
+  if (m !== 'transfer' || t.account_id !== id) return 0
+  return t.type === 'income' || t.type === 'adjust' ? a : t.type === 'expense' || t.type === 'pay_credit' ? -a : 0   // điều chỉnh có thể âm
+}
+// Thẻ `id`: + là quẹt (nợ tăng), − là trả / hoàn tiền
+function cardFlow(t, id) {
+  if (t.card_id !== id) return 0
+  const a = Number(t.amount) || 0
+  return t.type === 'expense' ? a : t.type === 'pay_credit' ? -a : t.type === 'adjust' ? a : 0
+}
 const ICON_GROUPS = [
   { label: 'Ăn uống',    icons: ['🍜','🍚','🍲','🥘','🍖','🍗','🐟','🦐','🥗','🥬','🍅','🍎','🍌','🥭','☕','🍵','🧋','🍺','🍷','🥤','🍰','🍪','🍫','🧊'] },
   { label: 'Nhà cửa',    icons: ['🏠','🏡','🛏️','🛋️','🚿','🚽','🧹','🧽','🧴','🧺','💡','🔌','🔧','🔨','🪑','🪟','🌡️','🧯','🗑️','📦'] },
@@ -71,12 +87,15 @@ export default function Expenses() {
   const [activeView, setActiveView] = useState('list')
   const [filterCategory, setFilterCategory] = useState(null)
   const [filterMethod, setFilterMethod] = useState(null)
+  const [filterSub, setFilterSub] = useState(null)        // lọc thêm theo tài khoản (khi CK) hoặc thẻ (khi TD)
   const [search, setSearch] = useState('')
   const [showCatMgr, setShowCatMgr] = useState(false)
   const [showTransfer, setShowTransfer] = useState(false)
   const [showPayCredit, setShowPayCredit] = useState(false)
   const [showInitBal, setShowInitBal] = useState(false)
   const [cards, setCards] = useState([])
+  const [accounts, setAccounts] = useState([])           // tài khoản ngân hàng
+  const [showAccounts, setShowAccounts] = useState(false)
   const [showCards, setShowCards] = useState(false)
   const [recon, setRecon] = useState(null)              // { kind, cardId } đang đối soát
   const [reconLast, setReconLast] = useState({})        // mốc đối soát gần nhất của từng tài khoản
@@ -86,11 +105,11 @@ export default function Expenses() {
     setLoading(true)
     try {
       const { start, end } = getMonthRange(currentMonth)
-      const [cats,txs,sum,running,initBal,cds,rl] = await Promise.all([
+      const [cats,txs,sum,running,initBal,cds,rl,accs] = await Promise.all([
         getExpenseCategories(), getTransactions({startDate:start,endDate:end}),
-        getExpenseSummary(start,end), getRunningBalance(start), getInitialBalances(), getCards(), getReconState()
+        getExpenseSummary(start,end), getRunningBalance(start), getInitialBalances(), getCards(), getReconState(), getAccounts()
       ])
-      setCategories(cats); setTransactions(txs); setSummary(sum); setRunningBal(running); setInitialBal(initBal); setCards(cds); setReconLast(rl)
+      setCategories(cats); setTransactions(txs); setSummary(sum); setRunningBal(running); setInitialBal(initBal); setCards(cds); setReconLast(rl); setAccounts(accs)
     } catch(err) { console.error(err); toast.error('Lỗi tải dữ liệu') }
     finally { setLoading(false) }
   }, [currentMonth, toast])
@@ -103,20 +122,28 @@ export default function Expenses() {
     transfer: initialBal.transfer + runningBal.transfer,
     credit: initialBal.credit + runningBal.credit, // nợ TD
     cards: { ...(runningBal.cards || {}), none: ((runningBal.cards || {}).none || 0) + initialBal.credit },
+    banks: { ...(runningBal.banks || {}), none: ((runningBal.banks || {}).none || 0) + initialBal.transfer },
     get total() { return this.cash + this.transfer - this.credit }
   }), [initialBal, runningBal])
 
   const monthMoves = useMemo(() => {
     let c2t=0, t2c=0, payCreditCash=0, payCreditTransfer=0, refundCredit=0, creditSpend=0, adjCash=0, adjTransfer=0, adjCredit=0
     const cardMv = {}, card = (id, d) => { const k = id || 'none'; cardMv[k] = (cardMv[k] || 0) + d }
+    const bankMv = {}, bank = (id, d) => { const k = id || 'none'; bankMv[k] = (bankMv[k] || 0) + d }
     transactions.forEach(t => {
       const amt = Number(t.amount), m = t.payment_method||'cash'
-      if (t.type==='transfer') { if(m==='cash') c2t+=amt; else t2c+=amt }
-      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else if(m==='transfer') payCreditTransfer+=amt; else refundCredit+=amt; card(t.card_id, -amt) }   // 'credit' = hoàn tiền về thẻ
+      if (t.type==='income' && m==='transfer') bank(t.account_id, amt)
+      else if (t.type==='expense' && m==='transfer') bank(t.account_id, -amt)
+      if (t.type==='transfer') {                             // nguồn → đích (giao dịch cũ không có đích: TM↔CK)
+        const to = t.to_method || (m==='cash' ? 'transfer' : 'cash')
+        if (m==='transfer') bank(t.account_id, -amt); if (to==='transfer') bank(t.to_account_id, amt)
+        if (m==='cash' && to==='transfer') c2t+=amt; else if (m==='transfer' && to==='cash') t2c+=amt   // TK → TK: tổng CK không đổi
+      }
+      else if (t.type==='pay_credit') { if(m==='cash') payCreditCash+=amt; else if(m==='transfer') { payCreditTransfer+=amt; bank(t.account_id, -amt) } else refundCredit+=amt; card(t.card_id, -amt) }   // 'credit' = hoàn tiền về thẻ
       else if (t.type==='expense' && m==='credit') { creditSpend+=amt; card(t.card_id, amt) }
-      else if (t.type==='adjust') { if(m==='cash') adjCash+=amt; else if(m==='transfer') adjTransfer+=amt; else if(m==='credit') { adjCredit+=amt; card(t.card_id, amt) } }
+      else if (t.type==='adjust') { if(m==='cash') adjCash+=amt; else if(m==='transfer') { adjTransfer+=amt; bank(t.account_id, amt) } else if(m==='credit') { adjCredit+=amt; card(t.card_id, amt) } }
     })
-    return { c2t, t2c, payCreditCash, payCreditTransfer, refundCredit, creditSpend, adjCash, adjTransfer, adjCredit, cardMv }
+    return { c2t, t2c, payCreditCash, payCreditTransfer, refundCredit, creditSpend, adjCash, adjTransfer, adjCredit, cardMv, bankMv }
   }, [transactions])
 
   const closeBal = useMemo(() => {
@@ -127,6 +154,7 @@ export default function Expenses() {
       transfer: openBal.transfer + m.transfer.income - m.transfer.expense - mv.t2c + mv.c2t - mv.payCreditTransfer + mv.adjTransfer,
       credit: openBal.credit + mv.creditSpend - mv.payCreditCash - mv.payCreditTransfer - mv.refundCredit + mv.adjCredit,
       cards: Object.fromEntries([...new Set([...Object.keys(openBal.cards), ...Object.keys(mv.cardMv)])].map(k => [k, (openBal.cards[k] || 0) + (mv.cardMv[k] || 0)])),
+      banks: Object.fromEntries([...new Set([...Object.keys(openBal.banks), ...Object.keys(mv.bankMv)])].map(k => [k, (openBal.banks[k] || 0) + (mv.bankMv[k] || 0)])),
       get total() { return this.cash + this.transfer - this.credit }
     }
   }, [openBal, summary, monthMoves])
@@ -140,7 +168,9 @@ export default function Expenses() {
   const groupedTx = useMemo(() => {
     let f = transactions
     if (filterCategory) f = f.filter(t => t.category_id===filterCategory)
-    if (filterMethod) f = f.filter(t => (t.payment_method||'cash')===filterMethod)
+    if (filterMethod) f = f.filter(t => { const m = t.payment_method||'cash'
+      return m===filterMethod || (t.type==='transfer' && txDest(t)===filterMethod) || (filterMethod==='credit' && t.type==='pay_credit') })   // gồm cả tiền CHUYỂN ĐẾN
+    if (filterSub) f = f.filter(t => filterMethod==='credit' ? t.card_id===filterSub : (t.account_id===filterSub || t.to_account_id===filterSub))
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       // Gõ số thì tìm cả theo số tiền: "1650000", "1.650.000" hay "1650" đều ra
@@ -154,25 +184,26 @@ export default function Expenses() {
     const g = {}
     f.forEach(tx => { if(!g[tx.date]) g[tx.date]=[]; g[tx.date].push(tx) })
     return Object.entries(g).sort(([a],[b]) => b.localeCompare(a))
-  }, [transactions, filterCategory, filterMethod, search])
+  }, [transactions, filterCategory, filterMethod, filterSub, search])
 
   // Tổng của phần đang xem — để biết nhóm giao dịch vừa lọc cộng lại bao nhiêu
   const searchTotal = useMemo(() => {
     if (!search.trim() && !filterCategory && !filterMethod) return null
-    let thu = 0, chi = 0
+    let thu = 0, chi = 0, vao = 0, ra = 0
     groupedTx.forEach(([, list]) => list.forEach(t => {
       const a = Number(t.amount) || 0
       if (t.type === 'income') thu += a; else if (t.type === 'expense') chi += a   // trả thẻ, chuyển, điều chỉnh không phải chi
+      if (filterSub) { const d = filterMethod === 'credit' ? cardFlow(t, filterSub) : accFlow(t, filterSub); if (d > 0) vao += d; else ra -= d }
     }))
-    return { thu, chi, count: groupedTx.reduce((s, [, l]) => s + l.length, 0) }
-  }, [groupedTx, search, filterCategory, filterMethod])
+    return { thu, chi, vao, ra, sub: !!filterSub, count: groupedTx.reduce((s, [, l]) => s + l.length, 0) }
+  }, [groupedTx, search, filterCategory, filterMethod, filterSub])
 
   // Handlers
   const handleAddTx = (type) => { setAddType(type); setEditingTx(null); setShowAdd(true) }
   const handleEditTx = (tx) => { if(tx.type==='transfer'||tx.type==='pay_credit'||tx.type==='adjust') return; setEditingTx(tx); setAddType(tx.type); setShowAdd(true) }
   const handleDeleteTx = async (tx) => {
     if(!confirm(`Xóa "${tx.note||tx.category?.name||'giao dịch'}"?`)) return
-    const ws = backdateWarnings(tx, reconLast, cards); if (ws.length && !confirm(warnText(ws))) return
+    const ws = backdateWarnings(tx, reconLast, cards, accounts); if (ws.length && !confirm(warnText(ws))) return
     try { await deleteTransaction(tx.id); toast.success('Đã xóa'); loadData() } catch { toast.error('Lỗi xóa') }
   }
   const handleSaveTx = async (fd) => {
@@ -197,7 +228,8 @@ export default function Expenses() {
     return (tx.category?.color||'#6B7280')+'15'
   }
   const txLabel = (tx) => {
-    if(tx.type==='transfer') return `Chuyển ${(tx.payment_method||'cash')==='cash'?'TM → CK':'CK → TM'}`
+    if(tx.type==='transfer') { const m = tx.payment_method||'cash', to = tx.to_method || (m==='cash'?'transfer':'cash')
+      return `Chuyển ${srcLabel(m, tx.account_id)} → ${srcLabel(to, tx.to_account_id)}` }
     if(tx.type==='pay_credit') return tx.payment_method==='credit' ? `Hoàn tiền về thẻ ${cardName(tx.card_id)||''}`.trim() : `Trả nợ TD từ ${(tx.payment_method||'cash')==='cash'?'TM':'CK'}`
     if(tx.type==='adjust') return `Điều chỉnh đối soát · ${tx.payment_method==='cash'?'TM':tx.payment_method==='transfer'?'CK':'thẻ '+(cardName(tx.card_id)||'chưa phân')}`
     return tx.note||tx.category?.name||'Giao dịch'
@@ -212,6 +244,8 @@ export default function Expenses() {
   const txPrefix = (tx) => tx.type==='income'?'+':tx.type==='expense'?'-':tx.type==='adjust'&&Number(tx.amount)>0?'+':''
   const isSpecialTx = (tx) => tx.type==='transfer'||tx.type==='pay_credit'||tx.type==='adjust'
   const cardName = (id) => id ? cards.find(c => c.id === id)?.name : null
+  const accName = (id) => id ? accounts.find(a => a.id === id)?.name : null
+  const srcLabel = (m, accId) => m === 'cash' ? 'TM' : (accName(accId) || 'CK')
 
   return (
     <div className="pb-4">
@@ -250,8 +284,8 @@ export default function Expenses() {
               <p className="text-[9px] text-gray-400">💵 TM ⚖️</p>
               <p className={`text-xs font-bold ${closeBal.cash>=0?'text-amber-300':'text-red-300'}`}>{formatMoney(closeBal.cash)}</p>
             </button>
-            <button onClick={() => setRecon({ kind: 'transfer' })} aria-label="Đối soát chuyển khoản" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
-              <p className="text-[9px] text-gray-400">🏦 CK ⚖️</p>
+            <button onClick={() => setShowAccounts(true)} aria-label="Tài khoản ngân hàng" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
+              <p className="text-[9px] text-gray-400">{accounts.length ? `🏦 CK · ${accounts.length} TK ›` : '🏦 CK ›'}</p>
               <p className={`text-xs font-bold ${closeBal.transfer>=0?'text-blue-300':'text-red-300'}`}>{formatMoney(closeBal.transfer)}</p>
             </button>
             <button onClick={() => setShowCards(true)} aria-label="Thẻ tín dụng" className="flex-1 bg-white/10 rounded-lg px-2 py-1.5 text-center active:bg-white/20">
@@ -307,23 +341,35 @@ export default function Expenses() {
             {searchTotal && (
               <div className="flex items-center gap-2 px-3 py-2 bg-gray-50 rounded-xl text-xs">
                 <span className="text-gray-500">{searchTotal.count} giao dịch</span>
+                {searchTotal.sub ? <>
+                  <span className="text-green-600 font-semibold">{filterMethod==='credit' ? 'Quẹt' : 'Vào'} +{formatMoney(searchTotal.vao)}</span>
+                  <span className="text-red-500 font-semibold">{filterMethod==='credit' ? 'Trả' : 'Ra'} −{formatMoney(searchTotal.ra)}</span>
+                </> : <>
                 {searchTotal.thu > 0 && (
                   <span className="text-green-600 font-semibold">+{formatMoney(searchTotal.thu)}</span>
                 )}
                 {searchTotal.chi > 0 && (
                   <span className="text-red-500 font-semibold">−{formatMoney(searchTotal.chi)}</span>
-                )}
-                <button onClick={() => { setSearch(''); setFilterCategory(null); setFilterMethod(null) }}
+                )}</>}
+                <button onClick={() => { setSearch(''); setFilterCategory(null); setFilterMethod(null); setFilterSub(null) }}
                   className="ml-auto text-gray-400 active:scale-95">Bỏ lọc</button>
               </div>
             )}
 
             <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
               {[{v:null,l:'Tất cả'},{v:'cash',l:'💵 TM'},{v:'transfer',l:'🏦 CK'},{v:'credit',l:'💳 TD'}].map(f => (
-                <button key={f.v||'all'} onClick={() => setFilterMethod(f.v)}
+                <button key={f.v||'all'} onClick={() => { setFilterMethod(f.v); setFilterSub(null) }}
                   className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium ${filterMethod===f.v?'bg-gray-800 text-white':'bg-gray-100 text-gray-600'}`}>{f.l}</button>
               ))}
             </div>
+            {((filterMethod==='transfer' && accounts.length > 0) || (filterMethod==='credit' && cards.length > 0)) && (
+              <div className="flex gap-1.5 overflow-x-auto no-scrollbar" aria-label="Lọc theo tài khoản hoặc thẻ">
+                <button onClick={() => setFilterSub(null)} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium ${!filterSub?'bg-gray-700 text-white':'bg-gray-100 text-gray-600'}`}>{filterMethod==='credit' ? 'Mọi thẻ' : 'Mọi tài khoản'}</button>
+                {(filterMethod==='credit' ? cards : accounts).map(x => (
+                  <button key={x.id} onClick={() => setFilterSub(x.id)} className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium ${filterSub===x.id?'text-white':'bg-gray-100 text-gray-600'}`}
+                    style={filterSub===x.id ? { background: x.color } : {}}>{filterMethod==='credit' ? '💳' : '🏦'} {x.name}</button>))}
+              </div>
+            )}
             {categories.length>0 && (
               <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
                 <button onClick={() => setFilterCategory(null)}
@@ -369,7 +415,7 @@ export default function Expenses() {
                         <p className="text-sm font-medium text-gray-800 truncate">{txLabel(tx)}</p>
                         <div className="flex items-center gap-1.5 mt-0.5">
                           {!isSpecialTx(tx) && <span className="text-xs text-gray-400">{tx.category?.name}</span>}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}{(tx.payment_method==='credit'||tx.type==='pay_credit') && cardName(tx.card_id) ? '·' + cardName(tx.card_id) : ''}</span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}{tx.payment_method==='transfer' && accName(tx.account_id) ? '·' + accName(tx.account_id) : ''}{tx.type==='pay_credit' && tx.payment_method!=='credit' && cardName(tx.card_id) ? ' → TD·' + cardName(tx.card_id) : (tx.payment_method==='credit'||tx.type==='pay_credit') && cardName(tx.card_id) ? '·' + cardName(tx.card_id) : ''}</span>
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
@@ -395,15 +441,20 @@ export default function Expenses() {
         <button onClick={() => handleAddTx('expense')} className="w-12 h-12 bg-red-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90"><ArrowUpCircle size={24}/></button>
       </div>
 
-      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx} cards={cards} reconLast={reconLast}
+      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx} cards={cards} reconLast={reconLast} accounts={accounts}
         categories={categories} type={addType} editingTx={editingTx}
         onDelete={editingTx?() => { handleDeleteTx(editingTx); setShowAdd(false) }:null} />
-      <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} reconLast={reconLast} />
-      <PayCreditForm isOpen={showPayCredit} onClose={() => setShowPayCredit(false)} toast={toast} onSaved={loadData} closeBal={closeBal} cards={cards} reconLast={reconLast} />
+      <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} reconLast={reconLast} accounts={accounts} cards={cards} />
+      <PayCreditForm isOpen={showPayCredit} onClose={() => setShowPayCredit(false)} toast={toast} onSaved={loadData} closeBal={closeBal} cards={cards} reconLast={reconLast} accounts={accounts} />
       <CardsSheet isOpen={showCards} onClose={() => setShowCards(false)} cards={cards} cardDebts={closeBal.cards || {}} toast={toast} onSaved={loadData}
-        onReconcile={t => { setShowCards(false); setRecon(t) }} />
-      <ReconcileForm target={recon} cards={cards} toast={toast} onClose={() => setRecon(null)} onSaved={loadData} />
-      <HealthSheet isOpen={showHealth} onClose={() => setShowHealth(false)} cards={cards} reconLast={reconLast} toast={toast} onSaved={loadData}
+        onReconcile={t => { setShowCards(false); setRecon(t) }}
+        onView={id => { setShowCards(false); setActiveView('list'); setFilterCategory(null); setSearch(''); setFilterMethod('credit'); setFilterSub(id) }} />
+      <ReconcileForm target={recon} cards={cards} accounts={accounts} toast={toast} onClose={() => setRecon(null)} onSaved={loadData} />
+      <AccountsSheet isOpen={showAccounts} onClose={() => setShowAccounts(false)} accounts={accounts} balances={closeBal.banks || {}} toast={toast} onSaved={loadData}
+        onView={id => { setShowAccounts(false); setActiveView('list'); setFilterCategory(null); setSearch(''); setFilterMethod('transfer'); setFilterSub(id) }}
+        onReconcile={t => { setShowAccounts(false); setRecon(t) }} />
+      <HealthSheet isOpen={showHealth} onClose={() => setShowHealth(false)} cards={cards} accounts={accounts} reconLast={reconLast} toast={toast} onSaved={loadData}
+        onOpenAccounts={() => { setShowHealth(false); setShowAccounts(true) }}
         onReconcile={t => { setShowHealth(false); setRecon(t) }} onOpenCards={() => { setShowHealth(false); setShowCards(true) }} />
       <InitialBalanceForm isOpen={showInitBal} onClose={() => setShowInitBal(false)} initialBal={initialBal} toast={toast} onSaved={loadData} />
       <CategoryManager isOpen={showCatMgr} onClose={() => setShowCatMgr(false)} categories={categories} onChanged={loadData} />
@@ -462,7 +513,7 @@ function SummaryView({ summary, onCatClick }) {
 // ============================================
 // TRANSACTION FORM - TM/CK/TD
 // ============================================
-function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete, cards = [], reconLast = {} }) {
+function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete, cards = [], reconLast = {}, accounts = [] }) {
   const toast = useToast()
   const [formType, setFormType] = useState(type)
   const [amount, setAmount] = useState('')
@@ -471,16 +522,17 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
   const [date, setDate] = useState(getLocalDateString())
   const [pm, setPm] = useState('cash')
   const [cardId, setCardId] = useState('')               // thẻ nào (khi trả bằng TD)
+  const [accId, setAccId] = useState('')                 // tài khoản nào (khi CK)
   const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
 
   const filteredCats = categories.filter(c => { const isInc=c.metadata?.is_income===true; return formType==='income'?isInc:!isInc })
 
   useEffect(() => {
     if(isOpen) {
-      if(editingTx) { setFormType(editingTx.type); setAmount(String(editingTx.amount)); setCategoryId(editingTx.category_id||''); setNote(editingTx.note||''); setDate(editingTx.date); setPm(editingTx.payment_method||'cash'); setCardId(editingTx.card_id||'') }
-      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(getLocalDateString()); setPm('cash'); setCardId((()=>{try{return localStorage.getItem('thuchi_last_card')||''}catch{return ''}})()) }
+      if(editingTx) { setFormType(editingTx.type); setAmount(String(editingTx.amount)); setCategoryId(editingTx.category_id||''); setNote(editingTx.note||''); setDate(editingTx.date); setPm(editingTx.payment_method||'cash'); setCardId(editingTx.card_id||''); setAccId(editingTx.account_id||'') }
+      else { setFormType(type); setAmount(''); setCategoryId(''); setNote(''); setDate(getLocalDateString()); setPm('cash'); setAccId(accounts.length ? lastAcc(accounts) : ''); setCardId((()=>{try{return localStorage.getItem('thuchi_last_card')||''}catch{return ''}})()) }
     }
-  }, [isOpen, editingTx, type])
+  }, [isOpen, editingTx, type])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đặt lại khi MỞ form
 
   useEffect(() => { if(!isOpen||editingTx) return; if(filteredCats.length===1) setCategoryId(filteredCats[0].id) }, [isOpen, formType, filteredCats.length])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ tự chọn danh mục khi mở hoặc đổi loại
 
@@ -488,18 +540,24 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
     if(!categoryId) { toast.error('Chọn danh mục'); return }
     const useCard = pm==='credit' && cards.length > 0
-    if(useCard && !cards.some(c => c.id === cardId)) { toast.error('Chọn thẻ tín dụng'); return }
+    // khoản CŨ chưa gắn thẻ/tài khoản (trước chốt sổ) được giữ nguyên — ép chọn sẽ làm lệch số đã chốt
+    const legacy = editingTx && editingTx.payment_method === pm
+    if(useCard && !cards.some(c => c.id === cardId) && !(legacy && !editingTx.card_id)) { toast.error('Chọn thẻ tín dụng'); return }
+    const useAcc = pm==='transfer' && accounts.length > 0
+    if(useAcc && !accounts.some(a => a.id === accId) && !(legacy && !editingTx.account_id)) { toast.error('Chọn tài khoản'); return }
     if (busyRef.current) return
-    { const next = { type: formType, payment_method: pm, card_id: pm==='credit' ? (cardId || null) : null, date }
+    { const next = { type: formType, payment_method: pm, card_id: pm==='credit' ? (cardId || null) : null, account_id: pm==='transfer' ? (accId || null) : null, date }
       // Sửa mà không đổi tiền, ngày, loại, nguồn, thẻ (vd chỉ sửa ghi chú) → số dư không đổi, không cần hỏi
       const same = editingTx && editingTx.type === formType && Number(editingTx.amount) === Number(amount) && editingTx.date === date
         && (editingTx.payment_method || 'cash') === pm && (pm !== 'credit' || (editingTx.card_id || '') === (cardId || ''))
-      const ws = same ? [] : [...backdateWarnings(next, reconLast, cards), ...(editingTx ? backdateWarnings(editingTx, reconLast, cards) : [])]
+        && (pm !== 'transfer' || (editingTx.account_id || '') === (accId || ''))
+      const ws = same ? [] : [...backdateWarnings(next, reconLast, cards, accounts), ...(editingTx ? backdateWarnings(editingTx, reconLast, cards, accounts) : [])]
       const uniq = ws.filter((w, i) => ws.findIndex(x => x.key === w.key) === i)
       if (uniq.length && !confirm(warnText(uniq))) return }
     busyRef.current = true; setSaving(true)
     if (useCard) { try { localStorage.setItem('thuchi_last_card', cardId) } catch { /* bỏ qua */ } }
-    await onSave({ type:formType, amount:Number(amount), category_id:categoryId, note, date, payment_method:pm, ...(cards.length ? { card_id: pm==='credit' ? (cardId || null) : null } : {}) })   // chỉ gửi cột thẻ khi đã có thẻ (an toàn nếu chưa chạy SQL)
+    if (useAcc) rememberAcc(accId)
+    await onSave({ type:formType, amount:Number(amount), category_id:categoryId, note, date, payment_method:pm, ...(cards.length ? { card_id: pm==='credit' ? (cardId || null) : null } : {}), ...(accounts.length ? { account_id: pm==='transfer' ? (accId || null) : null } : {}) })   // chỉ gửi cột thẻ khi đã có thẻ (an toàn nếu chưa chạy SQL)
     setSaving(false); busyRef.current = false
   }
 
@@ -544,6 +602,7 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
               className={`px-3 py-2 rounded-full text-xs font-bold border-2 ${cardId===c.id ? 'text-white' : 'bg-white text-gray-600 border-gray-200'}`}
               style={cardId===c.id ? { background: c.color, borderColor: c.color } : {}}>💳 {c.name}{c.last4 ? ' ·' + c.last4 : ''}</button>)}
           </div>}
+          {pm==='transfer' && accounts.length > 0 && <div className="mt-2"><SourceChips accounts={accounts} value={accId} onChange={setAccId} cash={false}/></div>}
           {pm==='credit' && cards.length === 0 && <p className="text-[11px] text-purple-600 mt-1.5">Mẹo: bấm ô "Nợ TD" trên đầu để thêm các thẻ, theo dõi riêng từng thẻ.</p>}
         </div>
 
@@ -576,39 +635,44 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
 // ============================================
 // TRANSFER FORM (TM↔CK)
 // ============================================
-function TransferForm({ isOpen, onClose, toast, onSaved, closeBal, reconLast = {} }) {
-  const [amount, setAmount] = useState(''); const [dir, setDir] = useState('cash')
+function TransferForm({ isOpen, onClose, toast, onSaved, closeBal, reconLast = {}, accounts = [], cards = [] }) {
+  const [amount, setAmount] = useState(''), [from, setFrom] = useState('transfer'), [to, setTo] = useState('cash')
   const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setDir('cash'); setDate(getLocalDateString()) } }, [isOpen])
-
+  useEffect(() => { if (isOpen) { setAmount(''); setNote(''); setDate(getLocalDateString()); setFrom(accounts.length ? lastAcc(accounts) : 'transfer'); setTo('cash') } }, [isOpen])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đặt lại khi MỞ form
+  const name = id => id === 'cash' ? 'TM' : id === 'transfer' ? 'CK' : (accounts.find(a => a.id === id)?.name || 'CK')
+  const balOf = id => id === 'cash' ? (closeBal?.cash || 0) : id === 'transfer' ? (closeBal?.transfer || 0) : ((closeBal?.banks || {})[id] || 0)
+  const same = from === to
   const handleSave = async () => {
-    if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
-    { const ws = backdateWarnings({ type: 'transfer', payment_method: dir, date }, reconLast); if (ws.length && !confirm(warnText(ws))) return }
+    if (!amount || Number(amount) <= 0) { toast.error('Nhập số tiền'); return }
+    if (same) { toast.error('Chọn hai nguồn khác nhau'); return }
+    const s = srcFields(from), d = srcFields(to)
+    const tx = { type: 'transfer', payment_method: s.method, date,
+      ...(accounts.length ? { account_id: s.account_id, to_method: d.method, to_account_id: d.account_id } : {}) }   // chưa có tài khoản: lưu kiểu cũ TM↔CK
+    { const ws = backdateWarnings(tx, reconLast, cards, accounts); if (ws.length && !confirm(warnText(ws))) return }
     if (busyRef.current) return
     busyRef.current = true; setSaving(true)
-    try { await createTransaction({ type:'transfer', amount:Number(amount), payment_method:dir, date, note:note||(dir==='cash'?'Chuyển TM → CK':'Chuyển CK → TM'), category_id:null }); toast.success('Đã chuyển'); onClose(); onSaved() }
-    catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
+    try { await createTransaction({ ...tx, amount: Number(amount), note: note || `Chuyển ${name(from)} → ${name(to)}`, category_id: null }); rememberAcc(from); toast.success('Đã chuyển'); onClose(); onSaved() }
+    catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
   }
-
+  const balances = closeBal?.banks || {}
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="🔄 Chuyển tiền nội bộ">
+    <Modal isOpen={isOpen} onClose={onClose} title="🔄 Chuyển tiền">
       <div className="space-y-4 p-5">
-        <div className="flex gap-2">
-          <div className="flex-1 bg-amber-50 border border-amber-200 rounded-xl p-2.5 text-center"><p className="text-[10px] text-amber-600">💵 TM</p><p className="text-sm font-bold text-amber-700">{formatMoney(closeBal?.cash||0)}</p></div>
-          <div className="flex-1 bg-blue-50 border border-blue-200 rounded-xl p-2.5 text-center"><p className="text-[10px] text-blue-600">🏦 CK</p><p className="text-sm font-bold text-blue-700">{formatMoney(closeBal?.transfer||0)}</p></div>
-        </div>
-        <div><label className="text-xs text-gray-500 mb-1.5 block">Hướng chuyển</label>
-          <div className="flex gap-2">
-            <button onClick={() => setDir('cash')} className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 active:scale-95 ${dir==='cash'?'border-indigo-400 bg-indigo-50 text-indigo-700':'border-gray-200 text-gray-500'}`}>💵 → 🏦</button>
-            <button onClick={() => setDir('transfer')} className={`flex-1 py-3 rounded-xl text-sm font-bold border-2 active:scale-95 ${dir==='transfer'?'border-indigo-400 bg-indigo-50 text-indigo-700':'border-gray-200 text-gray-500'}`}>🏦 → 💵</button>
-          </div>
-        </div>
+        <div><label className="text-xs text-gray-500 mb-1.5 block">Từ</label>
+          <SourceChips accounts={accounts} value={from} onChange={setFrom} balances={balances} cashBal={closeBal?.cash || 0}/></div>
+        <div><label className="text-xs text-gray-500 mb-1.5 block">Sang</label>
+          <SourceChips accounts={accounts} value={to} onChange={setTo} balances={balances} cashBal={closeBal?.cash || 0}/>
+          {same && <p className="text-xs text-red-600 mt-1">Chọn hai nguồn khác nhau</p>}</div>
         <div><label className="text-xs text-gray-500 mb-1 block">Số tiền</label><div className="relative"><input type="text" inputMode="numeric" value={amount?Number(amount).toLocaleString('vi-VN'):''} onChange={e => setAmount(e.target.value.replace(/[^0-9]/g,''))} placeholder="0" autoFocus className="w-full text-xl font-bold text-center py-3 border-2 border-gray-200 rounded-xl"/><span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">đ</span></div></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder={dir==='cash'?'Nạp tiền vào bank':'Rút ATM'} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        {Number(amount) > 0 && !same && <div className="bg-indigo-50 rounded-xl p-3 text-xs text-indigo-900 space-y-0.5">
+          <p>{name(from)}: {moneyFull(balOf(from))} → {moneyFull(balOf(from) - Number(amount))}</p>
+          <p>{name(to)}: {moneyFull(balOf(to))} → {moneyFull(balOf(to) + Number(amount))}</p>
+          <p className="text-indigo-600">Tiền chỉ chuyển chỗ — không tính vào Thu Chi, Tiền đang có không đổi.</p></div>}
+        <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder={to === 'cash' ? 'Rút ATM' : from === 'cash' ? 'Nộp tiền vào tài khoản' : 'Chuyển giữa tài khoản'} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/></div>
         <div className="flex gap-2 pt-2">
           <button onClick={onClose} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-medium text-sm">Hủy</button>
-          <button onClick={handleSave} disabled={saving} className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Chuyển'}</button>
+          <button onClick={handleSave} disabled={saving || same} className="flex-1 py-3 bg-indigo-500 text-white rounded-xl font-bold text-sm shadow-md disabled:opacity-50 active:scale-98">{saving?'...':'Chuyển'}</button>
         </div>
       </div>
     </Modal>
@@ -618,22 +682,25 @@ function TransferForm({ isOpen, onClose, toast, onSaved, closeBal, reconLast = {
 // ============================================
 // PAY CREDIT FORM (Trả nợ TD)
 // ============================================
-function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], reconLast = {} }) {
+function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], reconLast = {}, accounts = [] }) {
   const [amount, setAmount] = useState(''); const [source, setSource] = useState('transfer')
   const [date, setDate] = useState(getLocalDateString()); const [note, setNote] = useState(''); const [saving, setSaving] = useState(false); const busyRef = useRef(false)   // chặn bấm đúp ngay lần chạm đầu
   const [cardId, setCardId] = useState('')
-  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource('transfer'); setDate(getLocalDateString()); setCardId(cards.length === 1 ? cards[0].id : '') } }, [isOpen])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đặt lại khi MỞ form
+  useEffect(() => { if(isOpen) { setAmount(''); setNote(''); setSource(accounts.length ? lastAcc(accounts) : 'transfer'); setDate(getLocalDateString()); setCardId(cards.length === 1 ? cards[0].id : '') } }, [isOpen])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đặt lại khi MỞ form
 
   const card = cards.find(c => c.id === cardId)
+  const srcName = source === 'cash' ? 'TM' : source === 'transfer' ? 'CK' : (accounts.find(a => a.id === source)?.name || 'CK')
+  const srcBal = source === 'cash' ? (closeBal?.cash || 0) : source === 'transfer' ? (closeBal?.transfer || 0) : ((closeBal?.banks || {})[source] || 0)
   const creditDebt = cards.length ? Math.round((closeBal?.cards||{})[cardId || 'none'] || 0) : (closeBal?.credit||0)
 
   const handleSave = async () => {
     if(!amount||Number(amount)<=0) { toast.error('Nhập số tiền'); return }
     if(cards.length && !card) { toast.error('Chọn thẻ đang trả'); return }
+    const refund = source === 'credit', sf = refund ? { method: 'credit', account_id: null } : srcFields(source)
     if (busyRef.current) return
-    { const ws = backdateWarnings({ type: 'pay_credit', payment_method: source, card_id: card ? card.id : null, date }, reconLast, cards); if (ws.length && !confirm(warnText(ws))) return }
+    { const ws = backdateWarnings({ type: 'pay_credit', payment_method: sf.method, account_id: sf.account_id, card_id: card ? card.id : null, date }, reconLast, cards, accounts); if (ws.length && !confirm(warnText(ws))) return }
     busyRef.current = true; setSaving(true)
-    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:source, date, note:note||(source==='credit' ? `Hoàn tiền thẻ ${card ? card.name : 'TD'}` : `Trả thẻ ${card ? card.name : 'TD'} từ ${source==='cash'?'TM':'CK'}`), category_id:null, ...(card ? { card_id: card.id } : {}) }); toast.success('Đã trả nợ TD'); onClose(); onSaved() }
+    try { await createTransaction({ type:'pay_credit', amount:Number(amount), payment_method:sf.method, date, note:note||(refund ? `Hoàn tiền thẻ ${card ? card.name : 'TD'}` : `Trả thẻ ${card ? card.name : 'TD'} từ ${srcName}`), category_id:null, ...(card ? { card_id: card.id } : {}), ...(accounts.length && !refund ? { account_id: sf.account_id } : {}) }); rememberAcc(source); toast.success(refund ? 'Đã ghi hoàn tiền' : 'Đã trả nợ TD'); onClose(); onSaved() }
     catch(err) { toast.error('Lỗi: '+err.message) } finally { setSaving(false); busyRef.current = false }
   }
 
@@ -651,10 +718,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
         {creditDebt<=0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg p-2">App đang ghi nhận thẻ này không có nợ. Nếu bạn vừa trả thật, vẫn ghi bình thường — rồi dùng ⚖️ Đối soát để khớp với sao kê.</p>}
         {(<>
           <div><label className="text-xs text-gray-500 mb-1.5 block">Nguồn</label>
-            <div className="flex gap-2">
-              <button onClick={() => setSource('transfer')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='transfer'?'border-blue-400 bg-blue-50 text-blue-700':'border-gray-200 text-gray-500'}`}>🏦 CK ({formatMoney(closeBal?.transfer||0)})</button>
-              <button onClick={() => setSource('cash')} className={`flex-1 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='cash'?'border-amber-400 bg-amber-50 text-amber-700':'border-gray-200 text-gray-500'}`}>💵 TM ({formatMoney(closeBal?.cash||0)})</button>
-            </div>
+            <SourceChips accounts={accounts} value={source === 'credit' ? null : source} onChange={setSource} balances={closeBal?.banks || {}} cashBal={closeBal?.cash || 0}/>
             <button onClick={() => setSource('credit')} className={`w-full mt-2 py-2.5 rounded-xl text-sm font-bold border-2 active:scale-95 ${source==='credit'?'border-pink-400 bg-pink-50 text-pink-700':'border-gray-200 text-gray-500'}`}>🎁 Hoàn tiền từ chương trình thẻ</button>
             {source==='credit' && <p className="text-[11px] text-pink-700 mt-1.5">Chỉ giảm nợ thẻ. Tiền mặt, CK và Thu Chi không đổi.</p>}
           </div>
@@ -670,7 +734,7 @@ function PayCreditForm({ isOpen, onClose, toast, onSaved, closeBal, cards = [], 
 
           {amount && Number(amount)>0 && (
             <div className="bg-purple-50 border border-purple-200 rounded-xl p-3 text-xs space-y-0.5">
-              {source!=='credit' && <p className="text-purple-700 font-medium">{source==='cash'?'💵 TM':'🏦 CK'}: {moneyFull(closeBal?.[source]||0)} → {moneyFull((closeBal?.[source]||0)-Number(amount))}</p>}
+              {source!=='credit' && <p className="text-purple-700 font-medium">{source==='cash'?'💵':'🏦'} {srcName}: {moneyFull(srcBal)} → {moneyFull(srcBal-Number(amount))}</p>}
               <p className="text-purple-700 font-medium">💳 {card ? 'Nợ thẻ ' + card.name : 'Nợ TD'}: {moneyFull(creditDebt)} → {moneyFull(creditDebt-Number(amount))}</p>
             </div>
           )}
@@ -857,14 +921,14 @@ const CARD_COLORS = ['#7C3AED', '#2563EB', '#DC2626', '#059669', '#D97706', '#DB
 const kindLabel = k => k === 'cash' ? '💵 Tiền mặt' : k === 'transfer' ? '🏦 Chuyển khoản' : '💳 Nợ thẻ'
 
 // Đối soát một nguồn tiền: gõ số thực tế → app ghi 1 dòng điều chỉnh cho phần chênh
-function ReconcileForm({ target, cards, toast, onClose, onSaved }) {
+function ReconcileForm({ target, cards, accounts = [], toast, onClose, onSaved }) {
   const [date, setDate] = useState(getLocalDateString()), [actual, setActual] = useState(''), [note, setNote] = useState('')
   const [recorded, setRecorded] = useState(null), [saving, setSaving] = useState(false); const busyRef = useRef(false)
   const card = target?.cardId ? cards.find(c => c.id === target.cardId) : null
   useEffect(() => {
     if (!target) return
     let alive = true; setRecorded(null)
-    previewReconcile({ kind: target.kind, cardId: target.cardId || null, date }).then(v => { if (alive) setRecorded(Math.round(v)) }).catch(() => {})
+    previewReconcile({ kind: target.kind, cardId: target.cardId || null, accountId: target.accountId, date }).then(v => { if (alive) setRecorded(Math.round(v)) }).catch(() => {})
     return () => { alive = false }
   }, [target, date])
   useEffect(() => { if (target) { setActual(''); setNote(''); setDate(getLocalDateString()) } }, [target])
@@ -874,12 +938,14 @@ function ReconcileForm({ target, cards, toast, onClose, onSaved }) {
     if (actual === '' || busyRef.current) return
     busyRef.current = true; setSaving(true)
     try {
-      const r = await reconcile({ kind: target.kind, cardId: target.cardId || null, actual: Number(actual) * (target.neg ? -1 : 1), date, note })
+      const r = await reconcile({ kind: target.kind, cardId: target.cardId || null, accountId: target.accountId, actual: Number(actual) * (target.neg ? -1 : 1), date, note })
       toast.success(r.diff === 0 ? 'Đã khớp — không cần điều chỉnh' : `Đã điều chỉnh ${r.diff > 0 ? '+' : ''}${moneyFull(r.diff)}`)
       onClose(); onSaved()
     } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
   }
-  const title = target.kind === 'credit' ? `⚖️ Đối soát thẻ ${card ? card.name : '(chưa phân thẻ)'}` : `⚖️ Đối soát ${kindLabel(target.kind)}`
+  const acc = target.accountId ? accounts.find(a => a.id === target.accountId) : null
+  const title = target.kind === 'credit' ? `⚖️ Đối soát thẻ ${card ? card.name : '(chưa phân thẻ)'}`
+    : target.accountId !== undefined ? `⚖️ Đối soát ${acc ? acc.name : 'CK chưa phân tài khoản'}` : `⚖️ Đối soát ${kindLabel(target.kind)}`
   return (
     <Modal isOpen={!!target} onClose={onClose} title={title}>
       <div className="space-y-4 p-5">
@@ -936,7 +1002,7 @@ function CardForm({ initial, toast, onClose, onSaved }) {
 }
 
 // Bảng thẻ: nợ từng thẻ, đối soát, chốt sổ, phân thẻ cho giao dịch quên chọn thẻ
-function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onReconcile }) {
+function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onReconcile, onView }) {
   const [edit, setEdit] = useState(null)          // null | 'new' | thẻ
   const [closing, setClosing] = useState(false), [actuals, setActuals] = useState({}), [saving, setSaving] = useState(false)
   const [cutoff, setCutoff] = useState(null), [unassigned, setUnassigned] = useState(null)
@@ -948,6 +1014,7 @@ function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onRecon
   useEffect(() => { if (isOpen) { setEdit(null); setClosing(false); setActuals({}); loadUn() } }, [isOpen, loadUn])
   const none = Math.round(cardDebts.none || 0)
   const total = Object.values(cardDebts).reduce((a, v) => a + v, 0)
+  const hidden = Math.round(Object.entries(cardDebts).filter(([k]) => k !== 'none' && !cards.some(c => c.id === k)).reduce((s, [, x]) => s + x, 0))
   const doClose = async () => {
     if (busyRef.current) return; busyRef.current = true; setSaving(true)
     try {
@@ -977,11 +1044,13 @@ function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onRecon
             </div>
             {c.credit_limit > 0 && <div className="h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden"><div className="h-full rounded-full" style={{ width: Math.min(100, Math.max(0, d / c.credit_limit * 100)) + '%', background: c.color }}/></div>}
             <div className="flex gap-2 mt-2">
+              <button onClick={() => onView?.(c.id)} className="flex-1 py-2 bg-gray-100 rounded-lg text-xs font-medium">📋 Giao dịch</button>
               <button onClick={() => onReconcile({ kind: 'credit', cardId: c.id })} className="flex-1 py-2 bg-gray-100 rounded-lg text-xs font-medium">⚖️ Đối soát</button>
-              <button onClick={async () => { if (confirm(`Ẩn thẻ ${c.name}? Giao dịch cũ vẫn giữ nguyên.`)) { await archiveCard(c.id); onSaved() } }} className="py-2 px-3 bg-gray-50 rounded-lg text-xs text-gray-400">Ẩn</button>
+              <button onClick={async () => { if (confirm(d !== 0 ? `Thẻ ${c.name} còn nợ ${moneyFull(d)}. Nên trả hết trước khi ẩn — nếu không, số này vẫn tính trong tổng nợ.\n\nVẫn ẩn?` : `Ẩn thẻ ${c.name}? Giao dịch cũ vẫn giữ nguyên.`)) { await archiveCard(c.id); onSaved() } }} className="py-2 px-3 bg-gray-50 rounded-lg text-xs text-gray-400">Ẩn</button>
             </div>
           </div>) })}
 
+        {hidden !== 0 && <div className="flex justify-between text-sm text-gray-500 bg-gray-50 rounded-xl px-3 py-2"><span>Thẻ đã ẩn — còn nợ</span><b>{moneyFull(hidden)}</b></div>}
         {Math.abs(none) > 0 && <div className="border border-dashed border-amber-300 bg-amber-50 rounded-xl p-3">
           <div className="flex justify-between"><span className="text-sm text-amber-800">Chưa phân thẻ{!cutoff && ' (dữ liệu cũ)'}</span><b className="text-sm text-amber-800">{moneyFull(none)}</b></div>
           {!cutoff && <p className="text-[11px] text-amber-700 mt-1">Giao dịch cũ không ghi rõ thẻ. Thêm các thẻ rồi bấm <b>Chốt sổ</b> để bắt đầu theo dõi từng thẻ đúng với sao kê.</p>}
@@ -1008,7 +1077,7 @@ function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onRecon
           {sugg.slice(0, 30).map(([t, s]) => <div key={t.id} className="flex items-center gap-2 py-1.5 border-b border-gray-50 text-xs">
             <span className="flex-1 min-w-0 truncate">{t.date.slice(8)}/{t.date.slice(5, 7)} · {t.note || t.category?.name || (t.type === 'pay_credit' ? 'Trả thẻ' : 'Quẹt thẻ')}</span>
             <b>{formatMoney(t.amount)}</b>
-            <select value="" onChange={e => e.target.value && assign([t.id], e.target.value)} className="text-xs border rounded px-1 py-1 bg-white" aria-label="Chọn thẻ">
+            <select value="" onChange={e => e.target.value && assign([t.id], e.target.value)} className="text-base border rounded px-1 py-1 bg-white" aria-label="Chọn thẻ">
               <option value="">{s ? `→ ${s.name}?` : 'Thẻ…'}</option>{cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           </div>)}
         </div>}
@@ -1020,23 +1089,23 @@ function CardsSheet({ isOpen, onClose, cards, cardDebts, toast, onSaved, onRecon
 // ============================================
 // 🩺 SỨC KHOẺ SỔ — mỗi tài khoản một dòng ✓/⚠, kèm nút xử lý
 // ============================================
-function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReconcile, onOpenCards }) {
+function HealthSheet({ isOpen, onClose, cards, accounts = [], reconLast, toast, onSaved, onReconcile, onOpenCards, onOpenAccounts }) {
   const [h, setH] = useState(null), [showMis, setShowMis] = useState(false), [pick, setPick] = useState({}), [busy, setBusy] = useState(false)
-  const load = useCallback(() => { getHealth(cards).then(setH).catch(e => toast.error('Lỗi: ' + e.message)) }, [cards])   // eslint-disable-line react-hooks/exhaustive-deps -- toast cố định; thêm vào có thể gây tải lặp
+  const load = useCallback(() => { getHealth(cards, accounts).then(setH).catch(e => toast.error('Lỗi: ' + e.message)) }, [cards, accounts])   // eslint-disable-line react-hooks/exhaustive-deps -- toast cố định; thêm vào có thể gây tải lặp
   useEffect(() => { if (isOpen) { setH(null); setShowMis(false); setPick({}) } }, [isOpen])   // chỉ gập lại khi MỞ màn này
   useEffect(() => { if (isOpen) load() }, [isOpen, load])                         // tải lại số liệu, giữ nguyên chỗ đang xem
   const dmy = s => s ? s.split('-').reverse().join('/') : ''
-  const icon = k => k === 'cash' ? '💵' : k === 'transfer' ? '🏦' : '💳'
-  const name = a => a.key === 'cash' ? 'Tiền mặt' : a.key === 'transfer' ? 'Chuyển khoản' : 'Thẻ ' + a.card.name
+  const icon = k => k === 'cash' ? '💵' : k === 'transfer' || k.startsWith('bank:') ? '🏦' : '💳'
+  const name = a => a.key === 'cash' ? 'Tiền mặt' : a.key === 'transfer' ? 'Chuyển khoản' : a.bank ? a.bank.name : 'Thẻ ' + a.card.name
   const convert = async (t) => {
     const cardId = pick[t.id] ?? (suggestCard(t, cards)?.id || '')
-    const ws = backdateWarnings({ type: 'pay_credit', payment_method: t.payment_method, card_id: cardId || null, date: t.date }, reconLast, cards)
+    const ws = backdateWarnings({ type: 'pay_credit', payment_method: t.payment_method, card_id: cardId || null, account_id: t.account_id, date: t.date }, reconLast, cards, accounts)
     if (ws.length && !confirm(warnText(ws))) return
     setBusy(true)
     try { await convertToPayCredit(t.id, cardId || null); toast.success('Đã chuyển thành trả thẻ'); onSaved(); load() } catch (e) { toast.error('Lỗi: ' + e.message) } finally { setBusy(false) }
   }
   const keep = async (t) => { setBusy(true); try { await keepAsExpense([t.id]); load() } catch (e) { toast.error('Lỗi: ' + e.message) } finally { setBusy(false) } }
-  const issues = h ? h.accounts.filter(a => !a.last || a.backdated.length || a.statementDue).length + (h.unassigned ? 1 : 0) + (h.misrecorded.length ? 1 : 0) : 0
+  const issues = h ? h.accounts.filter(a => !a.last || a.backdated.length || a.statementDue).length + (h.unassigned ? 1 : 0) + (h.unassignedBank ? 1 : 0) + (h.misrecorded.length ? 1 : 0) : 0
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="🩺 Sức khoẻ sổ">
       <div className="p-5 space-y-2">
@@ -1050,10 +1119,12 @@ function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReco
                 <span className="text-lg">{icon(a.key)}</span>
                 <div className="flex-1 min-w-0"><p className="text-sm font-medium text-gray-800">{name(a)}</p>
                   <p className={`text-xs ${bad ? 'text-amber-700' : 'text-gray-400'}`}>{bad ? '⚠ ' : '✓ '}{why}</p></div>
-                <button onClick={() => onReconcile({ kind: a.key.startsWith('card:') ? 'credit' : a.key, cardId: a.card?.id || null })}
+                <button onClick={() => onReconcile(a.bank ? { kind: 'transfer', accountId: a.bank.id } : { kind: a.key.startsWith('card:') ? 'credit' : a.key, cardId: a.card?.id || null })}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium ${bad ? 'bg-gray-800 text-white' : 'bg-gray-100 text-gray-600'}`}>Đối soát</button>
               </div>)
           })}
+          {h.unassignedBank > 0 && <button onClick={onOpenAccounts} className="w-full flex items-center gap-2.5 py-2.5 border-b border-gray-50 text-left">
+            <span className="text-lg">🏦</span><span className="flex-1 text-sm text-amber-700">⚠ {h.unassignedBank} khoản chuyển khoản chưa chọn tài khoản</span><span className="text-gray-300">›</span></button>}
           {h.unassigned > 0 && <button onClick={onOpenCards} className="w-full flex items-center gap-2.5 py-2.5 border-b border-gray-50 text-left">
             <span className="text-lg">🏷️</span><span className="flex-1 text-sm text-amber-700">⚠ {h.unassigned} giao dịch thẻ chưa chọn thẻ</span><span className="text-gray-300">›</span></button>}
           {h.misrecorded.length > 0 && <>
@@ -1066,7 +1137,7 @@ function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReco
                   <div key={t.id} className="bg-white rounded-lg p-2">
                     <div className="flex justify-between text-xs"><span className="truncate">{dmy(t.date)} · {t.note || t.category?.name}</span><b>{formatMoney(t.amount)}</b></div>
                     <div className="flex gap-1.5 mt-1.5">
-                      <select value={pick[t.id] ?? (s?.id || '')} onChange={e => setPick({ ...pick, [t.id]: e.target.value })} aria-label="Thẻ" className="flex-1 min-w-0 text-xs border rounded-lg px-1.5 py-1.5 bg-white">
+                      <select value={pick[t.id] ?? (s?.id || '')} onChange={e => setPick({ ...pick, [t.id]: e.target.value })} aria-label="Thẻ" className="flex-1 min-w-0 text-base border rounded-lg px-1.5 py-1.5 bg-white">
                         <option value="">Chưa rõ thẻ</option>{cards.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
                       <button disabled={busy} onClick={() => convert(t)} className="px-2.5 py-1.5 bg-purple-600 text-white rounded-lg text-xs font-medium disabled:opacity-50">→ Trả thẻ</button>
                       <button disabled={busy} onClick={() => keep(t)} className="px-2.5 py-1.5 bg-gray-100 rounded-lg text-xs disabled:opacity-50">Giữ là Chi</button>
@@ -1080,3 +1151,136 @@ function HealthSheet({ isOpen, onClose, cards, reconLast, toast, onSaved, onReco
     </Modal>
   )
 }
+
+// ============================================
+// 🏦 TÀI KHOẢN NGÂN HÀNG — tách chuyển khoản theo từng tài khoản
+// ============================================
+const ACC_COLORS = ['#185FA5', '#0F6E56', '#E24B4A', '#534AB7', '#BA7517', '#D4537E', '#0891B2', '#444441']
+function AccountForm({ initial, toast, onClose, onSaved }) {
+  const [f, setF] = useState(initial || { name: '', last4: '', keywords: '', color: ACC_COLORS[0] })
+  const [saving, setSaving] = useState(false); const busyRef = useRef(false)
+  const save = async () => {
+    if (!f.name.trim()) { toast.error('Nhập tên tài khoản'); return }
+    if (busyRef.current) return; busyRef.current = true; setSaving(true)
+    try { await saveAccount(f); toast.success('Đã lưu tài khoản'); onSaved() } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
+  }
+  return (
+    <div className="bg-gray-50 rounded-xl p-3 space-y-2.5">
+      <input value={f.name} onChange={e => setF({ ...f, name: e.target.value })} placeholder="Tên tài khoản, ví dụ: Vietcombank" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-base" aria-label="Tên tài khoản"/>
+      <div className="flex gap-2">
+        <input value={f.last4 || ''} onChange={e => setF({ ...f, last4: e.target.value.replace(/\D/g, '').slice(0, 4) })} inputMode="numeric" placeholder="4 số cuối" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-base"/>
+        <input value={f.keywords || ''} onChange={e => setF({ ...f, keywords: e.target.value })} placeholder="Từ khoá: vcb, 0123" className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-base"/>
+      </div>
+      <div className="flex gap-2">{ACC_COLORS.map(c => <button key={c} onClick={() => setF({ ...f, color: c })} aria-label={'Màu ' + c} aria-pressed={f.color === c}
+        className="w-7 h-7 rounded-full flex items-center justify-center text-white text-xs font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div>
+      <div className="flex gap-2">
+        <button onClick={onClose} className="flex-1 py-2.5 bg-white text-gray-600 rounded-xl text-sm">Hủy</button>
+        <button onClick={save} disabled={saving} className="flex-1 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-50">{saving ? '...' : 'Lưu tài khoản'}</button>
+      </div>
+    </div>
+  )
+}
+
+function AccountsSheet({ isOpen, onClose, accounts, balances, toast, onSaved, onReconcile, onView }) {
+  const [edit, setEdit] = useState(null)
+  const [closing, setClosing] = useState(false), [actuals, setActuals] = useState({}), [saving, setSaving] = useState(false)
+  const [cutoff, setCutoff] = useState(null), [unassigned, setUnassigned] = useState(null)
+  const busyRef = useRef(false)
+  const loadUn = useCallback(async () => {
+    const c = await getBankCutoff().catch(() => null); setCutoff(c)
+    setUnassigned(c ? await getUnassignedBank(c).catch(() => []) : null)
+  }, [])
+  useEffect(() => { if (isOpen) { setEdit(null); setClosing(false); setActuals({}); loadUn() } }, [isOpen, loadUn])
+  const none = Math.round(balances.none || 0)
+  const total = Object.values(balances).reduce((a, v) => a + v, 0)
+  // tài khoản đã ẩn mà còn tiền: vẫn nằm trong tổng → hiện riêng để tổng luôn khớp các dòng
+  const hidden = Math.round(Object.entries(balances).filter(([k]) => k !== 'none' && !accounts.some(a => a.id === k)).reduce((s, [, x]) => s + x, 0))
+  const doClose = async () => {
+    if (busyRef.current) return; busyRef.current = true; setSaving(true)
+    try {
+      await closeAccountBooks({ actuals: Object.fromEntries(Object.entries(actuals).filter(([, v]) => v !== '').map(([k, v]) => [k, Number(v)])), date: getLocalDateString() })
+      toast.success('Đã chốt sổ tài khoản — từ nay mỗi tài khoản khớp app ngân hàng'); setClosing(false); onSaved(); loadUn()
+    } catch (err) { toast.error('Lỗi: ' + err.message) } finally { setSaving(false); busyRef.current = false }
+  }
+  const assign = async (ids, accId) => {
+    try { await assignAccount(ids, accId); toast.success(`Đã gán ${ids.length} giao dịch`); onSaved(); loadUn() } catch (err) { toast.error('Lỗi: ' + err.message) }
+  }
+  const sugg = (unassigned || []).map(t => [t, suggestAccount(t, accounts)])
+  const byAcc = accounts.map(a => ({ a, ids: sugg.filter(([, s]) => s?.id === a.id).map(([t]) => t.id) })).filter(x => x.ids.length)
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title="🏦 Tài khoản ngân hàng">
+      <div className="space-y-3 p-5">
+        <div className="bg-blue-50 rounded-xl p-3 flex justify-between items-baseline"><span className="text-sm text-blue-800">Tổng chuyển khoản</span>
+          <b className="text-lg text-blue-900">{moneyFull(total)}</b></div>
+        {!accounts.length && <div className="bg-gray-50 rounded-xl p-3 text-sm text-gray-600">
+          Chưa có tài khoản nào — chuyển khoản đang tính chung. Thêm các tài khoản ngân hàng để theo dõi và đối soát riêng từng tài khoản.
+          <button onClick={() => onReconcile({ kind: 'transfer' })} className="mt-2 w-full py-2 bg-white rounded-lg text-xs font-medium text-gray-700">⚖️ Đối soát tổng chuyển khoản</button>
+        </div>}
+        {accounts.map(a => { const b = Math.round(balances[a.id] || 0)
+          return edit && edit !== 'new' && edit.id === a.id ? <AccountForm key={a.id} initial={a} toast={toast} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved() }}/> : (
+          <div key={a.id} className="border border-gray-100 rounded-xl p-3">
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: a.color }}/>
+              <button onClick={() => setEdit(a)} className="flex-1 text-left"><b className="text-sm">{a.name}</b>{a.last4 && <span className="text-xs text-gray-400"> ·{a.last4}</span>}</button>
+              <b className={`text-sm ${b < 0 ? 'text-red-600' : 'text-gray-800'}`}>{moneyFull(b)}</b>
+            </div>
+            <div className="flex gap-2 mt-2">
+              <button onClick={() => onView?.(a.id)} className="flex-1 py-2 bg-gray-100 rounded-lg text-xs font-medium">📋 Giao dịch</button>
+              <button onClick={() => onReconcile({ kind: 'transfer', accountId: a.id })} className="flex-1 py-2 bg-gray-100 rounded-lg text-xs font-medium">⚖️ Đối soát</button>
+              <button onClick={async () => { if (confirm(b !== 0 ? `${a.name} còn ${moneyFull(b)}. Nên chuyển hết sang tài khoản khác trước khi ẩn — nếu không, số này vẫn tính trong tổng CK.\n\nVẫn ẩn?` : `Ẩn tài khoản ${a.name}? Giao dịch cũ vẫn giữ nguyên.`)) { await archiveAccount(a.id); onSaved() } }} className="py-2 px-3 bg-gray-50 rounded-lg text-xs text-gray-400">Ẩn</button>
+            </div>
+          </div>) })}
+        {hidden !== 0 && <div className="flex justify-between text-sm text-gray-500 bg-gray-50 rounded-xl px-3 py-2"><span>Tài khoản đã ẩn — còn</span><b>{moneyFull(hidden)}</b></div>}
+        {accounts.length > 0 && Math.abs(none) > 0 && <div className="border border-dashed border-amber-300 bg-amber-50 rounded-xl p-3">
+          <div className="flex justify-between"><span className="text-sm text-amber-800">Chưa phân tài khoản{!cutoff && ' (CK cũ)'}</span><b className="text-sm text-amber-800">{moneyFull(none)}</b></div>
+          {!cutoff && <p className="text-[11px] text-amber-700 mt-1">Chuyển khoản cũ không ghi tài khoản nào. Thêm các tài khoản rồi bấm <b>Chốt sổ</b> để bắt đầu theo dõi từng tài khoản.</p>}
+          {cutoff && <button onClick={() => onReconcile({ kind: 'transfer', accountId: null })} className="mt-2 w-full py-2 bg-white rounded-lg text-xs font-medium text-amber-800">⚖️ Đối soát phần chưa phân</button>}
+        </div>}
+        {edit === 'new' ? <AccountForm toast={toast} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); onSaved() }}/>
+          : <button onClick={() => setEdit('new')} className="w-full py-2.5 border-2 border-dashed border-blue-200 text-blue-700 rounded-xl text-sm font-medium">+ Thêm tài khoản</button>}
+        {accounts.length > 0 && !closing && <button onClick={() => setClosing(true)} className="w-full py-3 bg-blue-600 text-white rounded-xl text-sm font-bold">📒 {cutoff ? 'Chốt sổ lại' : 'Chốt sổ tài khoản — bắt đầu theo dõi từng tài khoản'}</button>}
+        {closing && <div className="bg-blue-50 rounded-xl p-3 space-y-2">
+          <p className="text-xs text-blue-900">Mở app từng ngân hàng, gõ <b>số dư hiện tại</b> của mỗi tài khoản. Để trống thì giữ nguyên. Phần CK cũ chưa phân tài khoản sẽ về 0. Không giao dịch cũ nào bị sửa.</p>
+          {accounts.map(a => <div key={a.id} className="flex items-center gap-2"><span className="w-24 text-sm font-medium truncate">{a.name}</span>
+            <input inputMode="numeric" value={actuals[a.id] ? Number(actuals[a.id]).toLocaleString('vi-VN') : ''} onChange={e => setActuals({ ...actuals, [a.id]: e.target.value.replace(/\D/g, '') })}
+              placeholder="Số dư thực tế" aria-label={'Số dư ' + a.name} className="flex-1 min-w-0 px-3 py-2 border border-blue-200 rounded-lg text-base text-right"/></div>)}
+          <div className="flex justify-between text-sm pt-1"><span className="text-blue-800">Tổng CK sau chốt sổ</span>
+            <b>{moneyFull(accounts.reduce((s, a) => s + (actuals[a.id] !== undefined && actuals[a.id] !== '' ? Number(actuals[a.id]) : Math.round(balances[a.id] || 0)), 0))}</b></div>
+          <div className="flex gap-2"><button onClick={() => setClosing(false)} className="flex-1 py-2.5 bg-white rounded-xl text-sm">Hủy</button>
+            <button onClick={doClose} disabled={saving} className="flex-1 py-2.5 bg-blue-700 text-white rounded-xl text-sm font-bold disabled:opacity-50">{saving ? '...' : 'Chốt sổ'}</button></div>
+        </div>}
+        {cutoff && unassigned && unassigned.length > 0 && <div className="border-t border-gray-100 pt-3">
+          <p className="text-xs font-semibold text-gray-600 mb-2">⚠️ {unassigned.length} khoản chuyển khoản từ {cutoff.split('-').reverse().join('/')} chưa chọn tài khoản</p>
+          {byAcc.map(({ a, ids }) => <button key={a.id} onClick={() => assign(ids, a.id)} className="w-full mb-1.5 py-2 bg-blue-50 text-blue-800 rounded-lg text-xs font-medium">Gán {ids.length} khoản nhắc tới "{a.name}" vào {a.name}</button>)}
+          {sugg.slice(0, 30).map(([t, s]) => <div key={t.id} className="flex items-center gap-2 py-1.5 border-b border-gray-50 text-xs">
+            <span className="flex-1 min-w-0 truncate">{t.date.slice(8)}/{t.date.slice(5, 7)} · {t.note || t.category?.name || 'Chuyển khoản'}</span>
+            <b>{formatMoney(t.amount)}</b>
+            <select value="" onChange={e => e.target.value && assign([t.id], e.target.value)} className="text-base border rounded px-1 py-1 bg-white" aria-label="Chọn tài khoản">
+              <option value="">{s ? `→ ${s.name}?` : 'Tài khoản…'}</option>{accounts.map(a => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+          </div>)}
+        </div>}
+      </div>
+    </Modal>
+  )
+}
+
+// Hàng chọn nguồn tiền: Tiền mặt + từng tài khoản (chưa có tài khoản thì 🏦 CK chung như cũ)
+function SourceChips({ accounts, value, onChange, cash = true, exclude, balances = {}, cashBal }) {
+  const opts = [...(cash ? [{ id: 'cash', label: '💵 Tiền mặt', bal: cashBal }] : []),
+    ...(accounts.length ? accounts.map(a => ({ id: a.id, label: '🏦 ' + a.name, color: a.color, bal: balances[a.id] })) : [{ id: 'transfer', label: '🏦 CK' }])]
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {opts.filter(o => o.id !== exclude).map(o => (
+        <button key={o.id} onClick={() => onChange(o.id)} aria-pressed={value === o.id}
+          className={`px-3 py-2 rounded-xl text-xs font-bold border-2 text-left ${value === o.id ? 'text-white' : 'bg-white text-gray-600 border-gray-200'}`}
+          style={value === o.id ? { background: o.color || '#4F46E5', borderColor: o.color || '#4F46E5' } : {}}>
+          {o.label}{o.bal !== undefined && <span className={`block text-[10px] font-medium ${value === o.id ? 'text-white/80' : 'text-gray-400'}`}>{formatMoney(Math.round(o.bal))}</span>}
+        </button>))}
+    </div>
+  )
+}
+// Đổi lựa chọn nguồn thành các cột lưu: 'cash' | 'transfer' (CK chung) | id tài khoản
+const srcFields = (id) => id === 'cash' ? { method: 'cash', account_id: null } : id === 'transfer' ? { method: 'transfer', account_id: null } : { method: 'transfer', account_id: id }
+const LAST_ACC_KEY = 'thuchi_last_account'
+const lastAcc = (accounts) => { try { const v = localStorage.getItem(LAST_ACC_KEY); return accounts.some(a => a.id === v) ? v : (accounts[0]?.id || 'transfer') } catch { return accounts[0]?.id || 'transfer' } }
+const rememberAcc = (id) => { try { if (id && id !== 'cash' && id !== 'transfer') localStorage.setItem(LAST_ACC_KEY, id) } catch { /* bỏ qua */ } }

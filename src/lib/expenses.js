@@ -92,7 +92,9 @@ export async function createTransaction(tx) {
     .insert([{ category_id:tx.category_id||null, type:tx.type, amount:tx.amount,
       date:tx.date||getLocalDateString(), note:tx.note||'',
       payment_method:tx.payment_method||'cash', tags:tx.tags||[], linked_order_id:tx.linked_order_id||null,
-      ...(tx.card_id !== undefined ? { card_id: tx.card_id || null } : {}) }])
+      ...(tx.card_id !== undefined ? { card_id: tx.card_id || null } : {}),
+      ...(tx.account_id !== undefined ? { account_id: tx.account_id || null } : {}),
+      ...(tx.to_method !== undefined ? { to_method: tx.to_method || null, to_account_id: tx.to_account_id || null } : {}) }])
     .select('*, category:app_config(id, name, icon, color, metadata)').single()
   if (error) throw error
   return data
@@ -152,28 +154,31 @@ export async function getExpenseSummary(startDate, endDate) {
 // ============================================
 const cardKey = id => id || 'none'
 export function foldRunning(groups) {
-  const r = { cash: 0, transfer: 0, credit: 0, total: 0, count: 0, cards: {} }
+  const r = { cash: 0, transfer: 0, credit: 0, total: 0, count: 0, cards: {}, banks: {} }
   const card = (id, d) => { const k = cardKey(id); r.cards[k] = (r.cards[k] || 0) + d; r.credit += d }
+  const bank = (id, d) => { const k = id || 'none'; r.banks[k] = (r.banks[k] || 0) + d; r.transfer += d }   // chuyển khoản theo tài khoản
   for (const g of groups) {
     const amt = Number(g.total ?? g.amount) || 0, m = g.payment_method || 'cash'
     r.count += Number(g.n ?? 1)
     if (g.type === 'income') {
-      if (m === 'cash') r.cash += amt; else if (m === 'transfer') r.transfer += amt
+      if (m === 'cash') r.cash += amt; else if (m === 'transfer') bank(g.account_id, amt)
       r.total += amt
     } else if (g.type === 'expense') {
       if (m === 'cash') r.cash -= amt
-      else if (m === 'transfer') r.transfer -= amt
+      else if (m === 'transfer') bank(g.account_id, -amt)
       else if (m === 'credit') card(g.card_id, amt)           // quẹt thẻ: nợ thẻ đó tăng
       r.total -= amt
-    } else if (g.type === 'transfer') {                       // payment_method = nguồn chuyển ĐI
-      if (m === 'cash') { r.cash -= amt; r.transfer += amt } else { r.transfer -= amt; r.cash += amt }
+    } else if (g.type === 'transfer') {                       // payment_method = nguồn ĐI; to_method = đích (trống: giao dịch cũ TM↔CK)
+      if (m === 'cash') r.cash -= amt; else bank(g.account_id, -amt)
+      const to = g.to_method || (m === 'cash' ? 'transfer' : 'cash')
+      if (to === 'cash') r.cash += amt; else bank(g.to_account_id, amt)
     } else if (g.type === 'pay_credit') {                     // trả thẻ: nợ thẻ đó giảm
       if (m === 'cash') r.cash -= amt                         //   trả bằng tiền mặt
-      else if (m === 'transfer') r.transfer -= amt            //   trả bằng chuyển khoản
+      else if (m === 'transfer') bank(g.account_id, -amt)     //   trả bằng chuyển khoản (từ tài khoản nào)
       /* m === 'credit': HOÀN TIỀN từ chương trình thẻ — không ai bỏ tiền ra, chỉ giảm nợ thẻ */
       card(g.card_id, -amt)
     } else if (g.type === 'adjust') {                         // điều chỉnh đối soát (có thể âm)
-      if (m === 'cash') r.cash += amt; else if (m === 'transfer') r.transfer += amt
+      if (m === 'cash') r.cash += amt; else if (m === 'transfer') bank(g.account_id, amt)
       else if (m === 'credit') card(g.card_id, amt)
     }
   }
@@ -182,22 +187,28 @@ export function foldRunning(groups) {
 // Cộng tất cả giao dịch TRƯỚC ngày beforeDate. Ưu tiên để cơ sở dữ liệu tự cộng;
 // chưa chạy SQL thì đọc theo trang (không bao giờ bị cắt ở 1.000 dòng).
 export async function getRunningBalance(beforeDate) {
+  const r0 = await supabase.rpc('expense_totals_v3', { p_before: beforeDate })
+  if (!r0.error && Array.isArray(r0.data)) return foldRunning(r0.data)
   const r1 = await supabase.rpc('expense_totals', { p_before: beforeDate })
   if (!r1.error && Array.isArray(r1.data)) return foldRunning(r1.data)
   const r2 = await supabase.rpc('expense_running_totals', { p_before: beforeDate })
   if (!r2.error && Array.isArray(r2.data)) return foldRunning(r2.data)
   let rows
-  try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, type, amount, payment_method, card_id').lt('date', beforeDate)) }
-  catch { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, type, amount, payment_method').lt('date', beforeDate)) }
+  try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, type, amount, payment_method, card_id, account_id, to_method, to_account_id').lt('date', beforeDate)) }
+  catch {
+    try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, type, amount, payment_method, card_id').lt('date', beforeDate)) }
+    catch { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, type, amount, payment_method').lt('date', beforeDate)) }
+  }
   return foldRunning(rows)
 }
 // Số dư CUỐI ngày `date` (gồm cả giao dịch trong ngày đó), cộng số dư ban đầu
 const nextDay = iso => { const [y, m, d] = iso.split('-').map(Number); return getLocalDateString(new Date(y, m - 1, d + 1)) }
 export async function getBalanceAt(date) {
   const [run, init] = await Promise.all([getRunningBalance(nextDay(date)), getInitialBalances()])
-  const cards = { ...run.cards }
+  const cards = { ...run.cards }, banks = { ...run.banks }
   cards.none = (cards.none || 0) + init.credit                  // nợ ban đầu chưa gắn với thẻ nào
-  return { cash: init.cash + run.cash, transfer: init.transfer + run.transfer, credit: init.credit + run.credit, cards }
+  banks.none = (banks.none || 0) + init.transfer                // số dư CK ban đầu chưa gắn với tài khoản nào
+  return { cash: init.cash + run.cash, transfer: init.transfer + run.transfer, credit: init.credit + run.credit, cards, banks }
 }
 
 // ============================================
@@ -253,19 +264,22 @@ export async function assignCard(ids, cardId) {
 // ĐỐI SOÁT — so số thực tế với số theo app, ghi một dòng điều chỉnh cho phần chênh.
 // Không sửa giao dịch cũ. kind: 'cash' | 'transfer' | 'credit' (credit cần cardId, hoặc null = chưa phân thẻ)
 // ============================================
-export async function previewReconcile({ kind, cardId = null, date }) {
+export async function previewReconcile({ kind, cardId = null, accountId, date }) {
   const b = await getBalanceAt(date)
-  return kind === 'credit' ? (b.cards[cardKey(cardId)] || 0) : b[kind]
+  if (kind === 'credit') return b.cards[cardKey(cardId)] || 0
+  if (kind === 'transfer' && accountId !== undefined) return b.banks[accountId || 'none'] || 0
+  return b[kind]
 }
-export async function reconcile({ kind, cardId = null, actual, date, note = '' }) {
+export async function reconcile({ kind, cardId = null, accountId, actual, date, note = '' }) {
   const act = Math.round(Number(actual))
   if (!Number.isFinite(act)) throw new Error('Số thực tế không hợp lệ')
-  const recorded = Math.round(await previewReconcile({ kind, cardId, date }))
+  const recorded = Math.round(await previewReconcile({ kind, cardId, accountId, date }))
   const diff = act - recorded
   if (diff === 0) return { recorded, diff, tx: null }
   const label = kind === 'cash' ? 'tiền mặt' : kind === 'transfer' ? 'chuyển khoản' : 'nợ thẻ'
   const { data, error } = await supabase.from('transactions').insert([{
     type: 'adjust', payment_method: kind, card_id: kind === 'credit' ? cardId : null, amount: diff, date, category_id: null,
+    ...(kind === 'transfer' && accountId ? { account_id: accountId } : {}),
     note: (note ? note + ' · ' : '') + `Đối soát ${label}: thực tế ${act.toLocaleString('vi-VN')}đ, app ${recorded.toLocaleString('vi-VN')}đ`,
     tags: [], linked_order_id: null,
   }]).select('*, category:app_config(id, name, icon, color, metadata)').single()
@@ -295,35 +309,92 @@ export async function getCardCutoff() {
 }
 
 // ============================================
+// TÀI KHOẢN NGÂN HÀNG — tách chuyển khoản theo từng tài khoản (chung một sổ)
+// ============================================
+export async function getAccounts() {
+  const { data, error } = await supabase.from('expense_accounts').select('*').eq('is_active', true).order('sort').order('created_at')
+  if (error) return []                                           // chưa chạy SQL bản 3 → coi như chưa có tài khoản
+  return data || []
+}
+export async function saveAccount(a) {
+  const fields = { name: a.name.trim(), last4: a.last4 || null, keywords: a.keywords || null, color: a.color || '#185FA5' }
+  const q = a.id ? supabase.from('expense_accounts').update(fields).eq('id', a.id) : supabase.from('expense_accounts').insert([fields])
+  const { data, error } = await q.select().single()
+  if (error) throw error
+  return data
+}
+// Ẩn tài khoản (không xoá): giao dịch cũ giữ liên kết, số dư vẫn đúng
+export async function archiveAccount(id) {
+  const { error } = await supabase.from('expense_accounts').update({ is_active: false }).eq('id', id)
+  if (error) throw error
+}
+// Chốt sổ tài khoản: mỗi tài khoản về đúng số dư thật; CK cũ chưa ghi tài khoản về 0
+export async function closeAccountBooks({ actuals, date }) {
+  const results = []
+  for (const [accountId, actual] of Object.entries(actuals)) {
+    if (actual === '' || actual === null || actual === undefined) continue
+    results.push({ accountId, ...(await reconcile({ kind: 'transfer', accountId, actual, date, note: 'Chốt sổ tài khoản' })) })
+  }
+  results.push({ accountId: null, ...(await reconcile({ kind: 'transfer', accountId: null, actual: 0, date, note: 'Chốt sổ tài khoản — CK cũ chưa ghi tài khoản' })) })
+  await supabase.from('settings').upsert([{ key: 'thuchi_bank_cutoff', value: date }], { onConflict: 'key' })
+  return results
+}
+export async function getBankCutoff() {
+  const { data } = await supabase.from('settings').select('value').eq('key', 'thuchi_bank_cutoff').maybeSingle()
+  return data?.value || null
+}
+// Khoản chuyển khoản chưa chọn tài khoản (từ ngày chốt sổ)
+export async function getUnassignedBank(since = null) {
+  let rows
+  try {
+    rows = await fetchAllTx(() => {
+      let q = supabase.from('transactions').select('id, date, type, amount, payment_method, note, account_id, to_method, to_account_id, category:app_config(name)').eq('payment_method', 'transfer').is('account_id', null)
+      return since ? q.gte('date', since) : q
+    })
+  } catch { return [] }                                         // chưa có cột → chưa dùng tài khoản
+  return rows.filter(t => t.type === 'income' || t.type === 'expense' || t.type === 'pay_credit').sort((a, b) => b.date.localeCompare(a.date))
+}
+export function suggestAccount(tx, accounts) { return suggestCard(tx, accounts) }           // cùng cách nhận diện như thẻ
+export async function assignAccount(ids, accountId) {
+  for (let i = 0; i < ids.length; i += 200) {
+    const { error } = await supabase.from('transactions').update({ account_id: accountId }).in('id', ids.slice(i, i + 200))
+    if (error) throw error
+  }
+}
+
+// ============================================
 // MỐC ĐỐI SOÁT — mỗi tài khoản / mỗi thẻ: lần đối soát gần nhất (ngày + lúc ghi)
 // Khoá: 'cash' · 'transfer' · 'card:<id>' · 'card:none'
 // ============================================
-export const accKey = (method, cardId) => method === 'credit' ? 'card:' + (cardId || 'none') : method
+export const accKey = (method, cardId, accountId) => method === 'credit' ? 'card:' + (cardId || 'none')
+  : method === 'transfer' && accountId ? 'bank:' + accountId : method          // CK chưa chọn tài khoản giữ khoá cũ 'transfer'
 // Một giao dịch làm thay đổi số dư của những tài khoản nào
 export function affectedKeys(tx) {
   const m = tx.payment_method || 'cash'
-  if (tx.type === 'income') return m === 'credit' ? [] : [m]
-  if (tx.type === 'expense') return [accKey(m, tx.card_id)]
-  if (tx.type === 'transfer') return ['cash', 'transfer']
+  if (tx.type === 'income') return m === 'credit' ? [] : [accKey(m, null, tx.account_id)]
+  if (tx.type === 'expense') return [accKey(m, tx.card_id, tx.account_id)]
+  if (tx.type === 'transfer') { const to = tx.to_method || (m === 'cash' ? 'transfer' : 'cash')
+    return [accKey(m, null, tx.account_id), accKey(to, null, tx.to_account_id)].filter((k, i, a) => a.indexOf(k) === i) }
   if (tx.type === 'pay_credit') return m === 'credit' ? [accKey('credit', tx.card_id)]       // hoàn tiền: chỉ ảnh hưởng thẻ
-    : [m === 'cash' ? 'cash' : 'transfer', accKey('credit', tx.card_id)]
+    : [accKey(m === 'cash' ? 'cash' : 'transfer', null, tx.account_id), accKey('credit', tx.card_id)]
   return []                                                   // điều chỉnh không tính là ghi lùi
 }
 export async function getReconState() {
   let rows = []
-  try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, payment_method, card_id').eq('type', 'adjust')) }
-  catch { return {} }
+  try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, payment_method, card_id, account_id').eq('type', 'adjust')) }
+  catch { try { rows = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, payment_method, card_id').eq('type', 'adjust')) } catch { return {} } }
   const last = {}
   for (const r of rows) {
-    const k = accKey(r.payment_method, r.card_id)
+    const k = accKey(r.payment_method, r.card_id, r.account_id)
     if (!last[k] || r.date > last[k].date || (r.date === last[k].date && r.created_at > last[k].created_at)) last[k] = { date: r.date, created_at: r.created_at }
   }
   return last
 }
 // Ghi/sửa/xoá giao dịch ngày TRƯỚC mốc đối soát của tài khoản bị ảnh hưởng → danh sách cảnh báo
 // (cùng ngày đối soát thì không nhắc — tránh làm phiền khi vừa đối soát xong ghi tiếp trong ngày)
-export function backdateWarnings(tx, last, cards = []) {
-  const name = k => k === 'cash' ? 'tiền mặt' : k === 'transfer' ? 'chuyển khoản' : k === 'card:none' ? 'nợ thẻ (chưa phân thẻ)' : 'thẻ ' + (cards.find(c => 'card:' + c.id === k)?.name || '')
+export function backdateWarnings(tx, last, cards = [], accounts = []) {
+  const name = k => k === 'cash' ? 'tiền mặt' : k === 'transfer' ? 'chuyển khoản' : k === 'card:none' ? 'nợ thẻ (chưa phân thẻ)'
+    : k.startsWith('bank:') ? 'tài khoản ' + (accounts.find(a => 'bank:' + a.id === k)?.name || '') : 'thẻ ' + (cards.find(c => 'card:' + c.id === k)?.name || '')
   return affectedKeys(tx).filter(k => last[k] && tx.date < last[k].date).map(k => ({ key: k, name: name(k), date: last[k].date }))
 }
 export const warnText = ws => ws.map(w => `• ${w.name}: đã đối soát tới ngày ${w.date.split('-').reverse().join('/')}`).join('\n')
@@ -364,22 +435,27 @@ export function lastStatementDate(statementDay, today) {
   const thisMonth = mk(y, m)
   return thisMonth <= today ? thisMonth : mk(m === 1 ? y - 1 : y, m === 1 ? 12 : m - 1)
 }
-export async function getHealth(cards) {
+export async function getHealth(cards, banks = []) {
   const today = getLocalDateString()
-  const [last, cutoff] = await Promise.all([getReconState(), getCardCutoff().catch(() => null)])
-  const keys = ['cash', 'transfer', ...cards.map(c => 'card:' + c.id)]
+  const [last, cutoff, bankCutoff] = await Promise.all([getReconState(), getCardCutoff().catch(() => null), getBankCutoff().catch(() => null)])
+  const keys = ['cash', ...(banks.length ? banks.map(a => 'bank:' + a.id) : ['transfer']), ...cards.map(c => 'card:' + c.id)]
   // giao dịch ghi sau mốc đối soát nhưng mang ngày trước mốc
   const minCreated = Object.values(last).map(x => x.created_at).sort()[0]
   let late = []
-  if (minCreated) late = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, type, amount, payment_method, card_id, note').gte('created_at', minCreated))
+  if (minCreated) {
+    try { late = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, type, amount, payment_method, card_id, account_id, to_method, to_account_id, note').gte('created_at', minCreated)) }
+    catch { late = await fetchAllTx(() => supabase.from('transactions').select('id, date, created_at, type, amount, payment_method, card_id, note').gte('created_at', minCreated)) }
+  }
   const backdated = Object.fromEntries(keys.map(k => [k, []]))
   for (const t of late) for (const k of affectedKeys(t)) if (last[k] && backdated[k] && t.created_at >= last[k].created_at && t.date < last[k].date) backdated[k].push(t)
   const accounts = keys.map(k => {
     const card = k.startsWith('card:') ? cards.find(c => 'card:' + c.id === k) : null
+    const bank = k.startsWith('bank:') ? banks.find(a => 'bank:' + a.id === k) : null
     const st = card ? lastStatementDate(card.statement_day, today) : null
-    return { key: k, card, last: last[k] || null, backdated: backdated[k],
+    return { key: k, card, bank, last: last[k] || null, backdated: backdated[k],
       statementDue: !!(st && (!last[k] || last[k].date < st)), statementDate: st }
   })
-  const [unassigned, mis] = await Promise.all([cutoff ? getUnassignedCredit(cutoff).catch(() => []) : Promise.resolve([]), getMisrecorded().catch(() => [])])
-  return { accounts, unassigned: unassigned.length, misrecorded: mis }
+  const [unassigned, mis, unBank] = await Promise.all([cutoff ? getUnassignedCredit(cutoff).catch(() => []) : Promise.resolve([]), getMisrecorded().catch(() => []),
+    banks.length && bankCutoff ? getUnassignedBank(bankCutoff) : Promise.resolve([])])
+  return { accounts, unassigned: unassigned.length, unassignedBank: unBank.length, misrecorded: mis }
 }
