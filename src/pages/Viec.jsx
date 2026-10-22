@@ -13,7 +13,8 @@ import {
   addManual, deleteLog, quickSteps,
   saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary,
   addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
-  parseLines, parseGroupLines, groupsToText, planGroups, planPace, nextPlanTask, planFlags, groupRenames, renameGroupTasks } from '../lib/viec'
+  parseLines, parseGroupLines, groupsToText, planGroups, planPace, nextPlanTask, planFlags, groupRenames, renameGroupTasks,
+  hasCycle, cyclePhase, cycleEvents, cycleRounds } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
@@ -384,11 +385,19 @@ export default function Viec({ onNavigate }) {
   // Quá hạn / sắp tới: chỉ tính lại khi danh sách việc hoặc ngày đổi (không tính lại mỗi 15 giây khi đồng hồ chạy)
   const U0 = useMemo(() => upcoming(data.tasks, today), [data.tasks, today])
   const flags = useMemo(() => planFlags(data.projects), [data.projects])   // 🏁 hạn kế hoạch / hạng mục trên lịch
+  const cycMarks = useMemo(() => {                       // 💊 các mốc chu kỳ dùng – nghỉ trong khung lịch đang xem
+    const m = {}, ds = data.daily.filter(d => !d.archived && hasCycle(d))
+    if (!ds.length) return m
+    for (let i = -7; i <= 45; i++) { const iso = addDays(month + '-01', i)
+      for (const d of ds) for (const e of cycleEvents(d, iso)) (m[iso] = m[iso] || []).push({ ...e, d }) }
+    return m
+  }, [data.daily, month])
 
   if (!who) return <PinGate onDone={w => setWhoState(w)}/>
 
   const daily = data.daily.filter(d => !d.archived)
   const todayDaily = daily.filter(d => isDailyDay(d, today))
+  const restingDaily = daily.filter(d => !d.archived && hasCycle(d) && cyclePhase(d, today)?.state !== 'on')   // đang nghỉ / chưa tới đợt
   const prog = d => dailyProgress(d, data.logs, today, now)
   const avg = todayDaily.length ? Math.round(todayDaily.reduce((a, d) => a + prog(d).pct, 0) / todayDaily.length) : 0
   // Đơn đặt có ngày dự kiến về: hiện chung trong Sắp tới như một việc có 📦
@@ -451,7 +460,7 @@ export default function Viec({ onNavigate }) {
       {header}
       <div className="max-w-2xl mx-auto px-3 pt-2">
         {pushLost && <button onClick={() => setView('set')} className="w-full mb-2 text-left text-sm bg-amber-50 text-amber-800 rounded-xl px-3 py-2.5">🔕 Thông báo đang tắt trên máy này — bấm để bật lại</button>}
-        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel} marks={marks} showHair={linkPrefs.hair !== false} etaDays={etaDays} flags={flags}/>
+        <Calendar month={month} setMonth={setMonth} today={today} tasks={data.tasks} cfg={cfg} onOpen={setSel} marks={marks} showHair={linkPrefs.hair !== false} etaDays={etaDays} flags={flags} cycMarks={cycMarks}/>
         {!loading && <FocusCard projects={data.projects} tasks={data.tasks} today={today} onPull={pullToday} onOpenPlan={openPlan}/>}
 
         <div className="flex gap-1.5 mt-3 mb-2 bg-gray-200/70 rounded-2xl p-1">
@@ -470,7 +479,7 @@ export default function Viec({ onNavigate }) {
           {loading ? <p className="text-center text-sm text-gray-400 py-6">Đang tải…</p>
             : tab === 'ord' ? <OrdersPanel orders={data.orders} today={today} who={who} onToggle={toggleO} onEdit={o => setOrderEdit(o)} onNew={() => setOrderEdit('new')}/>
             : tab === 'up' ? <Upcoming U={U} today={today} cfg={cfg} onOpen={openItem} onOpenDay={setSel} onReview={() => setReviewOpen(true)} projects={data.projects}/>
-            : <DailyPanel list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now} projects={data.projects}
+            : <DailyPanel list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now} projects={data.projects} resting={restingDaily} today={today}
                 onStart={start} onStop={stop} onTick={tickD} onCount={(d, n) => logValue(d, n, today, false)} onManual={d => setLogFor(d.id)} onStats={() => setView('stat')}
                 onAdd={() => { setEditDaily(null); setDailyFrom('main'); setView('daily') }} onEdit={d => { setEditDaily(d); setDailyFrom('main'); setView('daily') }}/>}
         </div>
@@ -490,7 +499,7 @@ export default function Viec({ onNavigate }) {
       {logFor && data.daily.find(x => x.id === logFor) && <LogSheet daily={data.daily.find(x => x.id === logFor)} logs={data.logs} today={today}
         onSave={(n, day) => logValue(data.daily.find(x => x.id === logFor), n, day)} onDelete={delLog} onClose={() => setLogFor(null)}/>}
       {sel && <DaySheet iso={sel} today={today} who={who} cfg={cfg} showHair={linkPrefs.hair !== false} tasks={data.tasks} orders={data.orders}
-        onAddOrder={f => saveO(f)} onToggleOrder={toggleO} onEditOrder={o => setOrderEdit(o)} onOpenTask={openTask} flags={flags[sel] || []} onOpenPlan={openPlan} projects={data.projects} daily={daily} logs={data.logs} now={now}
+        onAddOrder={f => saveO(f)} onToggleOrder={toggleO} onEditOrder={o => setOrderEdit(o)} onOpenTask={openTask} flags={flags[sel] || []} cycEvents={cycMarks[sel] || []} onOpenPlan={openPlan} projects={data.projects} daily={daily} logs={data.logs} now={now}
         links={linkGroups(links, sel)} onNavigate={(tab, target) => { setSel(null); onNavigate?.(tab, target) }}
         onClose={() => setSel(null)} onAdd={addTask} onEdit={editTask} onDelete={removeTask} onTick={quickTick}
         onMove={iso => setSel(iso)}/>}
@@ -499,7 +508,7 @@ export default function Viec({ onNavigate }) {
 }
 
 // ── LỊCH THÁNG ──
-function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, showHair = true, etaDays = new Set(), flags = {} }) {
+function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, showHair = true, etaDays = new Set(), flags = {}, cycMarks = {} }) {
   const [y, m] = month.split('-').map(Number)
   const cells = gridRange(month)
   const from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
@@ -532,13 +541,13 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
             <button key={iso} onClick={() => onOpen(iso)}
               className={`relative rounded-xl flex flex-col items-center justify-center min-h-[50px] border-[1.5px] active:scale-95 transition-transform
                 ${isToday ? `border-purple-600 border-2 shadow-sm ${trai ? 'bg-emerald-50' : 'bg-purple-50'}` : trai ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-transparent'} ${out ? 'opacity-35' : ''}`}
-              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}${etaDays.has(iso) ? ', có hàng đặt đang về' : ''}${flags[iso] ? ', có hạn kế hoạch' : ''}`}>
+              aria-label={`Ngày ${d.getDate()}, ${L.day} tháng ${L.month} âm${trai ? ', ngày trai' : ''}${showHair && hairOf(iso)?.good ? ', ngày tốt cắt tóc' : ''}${open ? `, ${open} việc` : ''}${marks[iso] ? ', có mốc Trang sức/Lab' : ''}${etaDays.has(iso) ? ', có hàng đặt đang về' : ''}${flags[iso] ? ', có hạn kế hoạch' : ''}${cycMarks[iso] ? ', có mốc chu kỳ thuốc' : ''}`}>
               <span className={`text-base font-semibold leading-none ${isToday ? 'bg-purple-600 text-white w-7 h-7 rounded-full flex items-center justify-center' : d.getDay() === 0 ? 'text-red-500' : 'text-gray-900'}`}>{d.getDate()}</span>
               <span className={`text-[11px] leading-tight mt-0.5 ${trai ? 'text-emerald-700 font-semibold' : L.day === 1 || L.day === 15 ? 'text-orange-700 font-semibold' : 'text-orange-600/80'}`}>{lunarLabel(L)}</span>
               {showHair && hairOf(iso)?.good && <span className="absolute bottom-0.5 right-1 text-[10px] leading-none font-bold text-red-600" aria-hidden="true">✂</span>}
               {(marks[iso]?.jewelry || marks[iso]?.lab) && <span className="absolute top-0.5 left-1 text-[9px] leading-none" aria-hidden="true">{marks[iso].jewelry ? '💎' : ''}{marks[iso].lab ? '🧪' : ''}</span>}
               {etaDays.has(iso) && <span className="absolute top-0.5 right-1 text-[10px] leading-none" aria-hidden="true">📦</span>}
-              {flags[iso] && <span className="absolute bottom-0.5 left-1 text-[10px] leading-none" aria-hidden="true">🏁</span>}
+              {(flags[iso] || cycMarks[iso]) && <span className="absolute bottom-0.5 left-1 text-[10px] leading-none" aria-hidden="true">{flags[iso] ? '🏁' : '💊'}</span>}
               {mark && <i className={`absolute top-1 ${etaDays.has(iso) ? 'right-4' : 'right-1'} ${open > 1 ? 'min-w-[15px] h-[15px] px-0.5 text-[9px] leading-[15px] text-white not-italic' : 'w-2 h-2'} rounded-full ${mark}`}>{open > 1 ? open : ''}</i>}
             </button>
           )
@@ -551,6 +560,7 @@ function Calendar({ month, setMonth, today, tasks, cfg, onOpen, marks = {}, show
         <span className="whitespace-nowrap">📦 hàng đặt</span>
         <span className="whitespace-nowrap">💎🧪 mốc</span>
         {Object.keys(flags).length > 0 && <span className="whitespace-nowrap">🏁 hạn kế hoạch</span>}
+        {Object.keys(cycMarks).length > 0 && <span className="whitespace-nowrap">💊 đổi đợt thuốc</span>}
         {showHair && <span className="whitespace-nowrap"><b className="text-red-600">✂</b> tốt cắt tóc</span>}
       </div>
       {showHair && (() => {                                  // ngày tốt cắt tóc trong tháng đang xem
@@ -585,7 +595,7 @@ function Upcoming({ U, today, cfg, onOpen, onOpenDay, onReview, projects = [] })
 }
 
 // ── THẺ DAILY ──
-function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit, projects = [] }) {
+function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit, projects = [], resting = [], today }) {
   const totalMin = list.filter(d => d.kind === 'time').reduce((a, d) => a + prog(d).minutes, 0)
   const forgot = running && runD && looksForgotten(running, runD, now)
   const reachedNow = running && runD && prog(runD).minutes >= runD.target_min
@@ -616,7 +626,8 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
                 <div className="relative"><Ring pct={p.pct} color={d.color}/><span className="absolute inset-0 flex items-center justify-center text-base">{d.emoji}</span></div>
                 <div className="min-w-0"><div className="text-[13px] font-semibold text-gray-800 truncate">{d.name}{d.shared && ' 👥'}</div>
                   <div className="text-xs text-gray-500">{d.kind === 'tick' ? (p.done ? 'Đã xong' : 'Chưa') : `${d.kind === 'count' ? Number(p.minutes).toLocaleString('vi-VN') : du(p.minutes)} / ${dval(d, d.target_min)}`}</div>
-                  {(pl => pl && <div className="text-[11px] font-semibold truncate" style={{ color: pl.color }}>🎯 {pl.name}</div>)(d.project_id && projects.find(x => x.id === d.project_id))}</div>
+                  {(pl => pl && <div className="text-[11px] font-semibold truncate" style={{ color: pl.color }}>🎯 {pl.name}</div>)(d.project_id && projects.find(x => x.id === d.project_id))}
+                  {(ph => ph?.state === 'on' && <div className="text-[11px] text-emerald-700 font-semibold">💊 Đợt {ph.round} · ngày {ph.dayNo}/{d.cycle_on}</div>)(cyclePhase(d, today || getLocalDateString()))}</div>
               </button>
               {d.kind === 'count'
                 ? <div className="flex gap-1">{quickSteps(d).map(n => <button key={n} onClick={() => onCount(d, n)}
@@ -631,6 +642,15 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
         })}
         <button onClick={onAdd} className="rounded-2xl border-2 border-dashed border-gray-200 text-sm text-gray-500 min-h-[96px]">+ Thêm Daily</button>
       </div>
+      {resting.map(d => { const ph = cyclePhase(d, today || getLocalDateString())
+        return (
+          <button key={d.id} onClick={() => onEdit?.(d)} className="w-full mt-2 flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-left">
+            <span className="text-lg opacity-60">{d.emoji}</span>
+            <span className="flex-1 min-w-0 text-[13px] text-gray-500"><b className="font-semibold text-gray-600">{d.name}</b>
+              {ph.state === 'before' ? ` · bắt đầu ${dm(ph.next)} (còn ${ph.left} ngày)` : ` · ⏸ đang nghỉ · còn ${ph.left} ngày · dùng lại ${dm(ph.nextOn)}`}</span>
+            <span className="text-gray-300">›</span>
+          </button>)
+      })}
     </div>
   )
 }
@@ -640,9 +660,8 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
 // Không cuộn ngang: các nút tự xuống dòng nên luôn thấy hết.
 // Ô chọn giờ luôn có nhãn ("Chọn giờ…" hoặc giờ đã chọn); ô nhập thật nằm trong suốt phủ lên trên,
 // bấm vào là mở bánh xe giờ của điện thoại — tránh ô trống không chữ trên iPhone.
-const QUICK_TIMES = ['07:00', '08:00', '12:00', '14:00', '17:00', '20:00']
 function TimePicker({ value, onChange }) {
-  const custom = value && !QUICK_TIMES.includes(value)
+  const custom = !!value
   return (
     <div className="flex flex-wrap gap-1.5 items-center">
       <Chip on={!value} onClick={() => onChange('')}>Cả ngày</Chip>
@@ -652,8 +671,50 @@ function TimePicker({ value, onChange }) {
         <input type="time" value={value || ''} onChange={e => onChange(e.target.value)} aria-label="Giờ tuỳ chỉnh"
           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer text-base"/>
       </label>
-      {QUICK_TIMES.map(t => <Chip key={t} on={value === t} onClick={() => onChange(t)}>{t}</Chip>)}
     </div>
+  )
+}
+
+// ── CHU KỲ DÙNG – NGHỈ: 3 ô số + ngày bắt đầu, xem trước các đợt và mốc nhắc ──
+function CycleFields({ f, set }) {
+  const num = (k, label, after) => (
+    <label className="flex items-center gap-2 text-[13px] text-gray-600">
+      <span className="w-36">{label}</span>
+      <input type="number" inputMode="numeric" min="0" max="999" value={f[k] === '' || f[k] == null ? '' : f[k]} aria-label={label}
+        onChange={e => set(k, e.target.value === '' ? '' : Math.max(0, Math.min(999, parseInt(e.target.value, 10) || 0)))}
+        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-1.5 text-base"/>
+      <span>{after}</span>
+    </label>)
+  const preview = hasCycle({ ...f, cycle_on: Number(f.cycle_on), cycle_off: Number(f.cycle_off) }) ? cycleRounds({ ...f, cycle_on: Number(f.cycle_on), cycle_off: Number(f.cycle_off) }, 2) : []
+  return (
+    <div className="mt-3 bg-emerald-50/60 rounded-xl p-3 flex flex-col gap-2">
+      {num('cycle_on', 'Dùng liên tục', 'ngày')}
+      {num('cycle_off', 'Rồi nghỉ', 'ngày')}
+      <label className="flex items-center gap-2 text-[13px] text-gray-600"><span className="w-36">Bắt đầu đợt 1</span>
+        <input type="date" value={f.cycle_start || ''} onChange={e => e.target.value && set('cycle_start', e.target.value)} aria-label="Bắt đầu đợt 1"
+          className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-1.5 text-base bg-white"/></label>
+      {num('cycle_warn_end', 'Nhắc trước khi hết đợt', 'ngày')}
+      {num('cycle_warn_back', 'Nhắc trước khi dùng lại', 'ngày')}
+      {preview.length > 0 && <div className="text-xs text-emerald-900 mt-1 leading-relaxed">
+        {preview.map(r => <div key={r.round}>Đợt {r.round}: 💊 {dm(r.on)}/{r.on.slice(2, 4)} → {dm(r.onEnd)}/{r.onEnd.slice(2, 4)} · ⏸ nghỉ {dm(r.offStart)} → {dm(r.offEnd)}</div>)}
+        <div className="text-emerald-700">Ngày nghỉ Daily tự ẩn, không tính là bỏ sót · nhắc ở tóm tắt buổi sáng</div>
+      </div>}
+    </div>
+  )
+}
+
+// ── NHẮC TRƯỚC N NGÀY: một ô số, để trống = không nhắc ──
+function RemindDays({ value, onChange }) {
+  const n = Number(value) || 0
+  return (
+    <label className="flex items-center gap-2 text-[13px] text-gray-600">
+      <span>🔔 Nhắc trước</span>
+      <input type="number" inputMode="numeric" min="0" max="365" value={n || ''} placeholder="0" aria-label="Nhắc trước số ngày"
+        onChange={e => onChange(Math.max(0, Math.min(365, parseInt(e.target.value, 10) || 0)))}
+        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-1.5 text-base"/>
+      <span>ngày</span>
+      <span className="text-xs text-gray-400">{n ? `· nhắc lúc tóm tắt buổi sáng` : '· để trống là không nhắc'}</span>
+    </label>
   )
 }
 
@@ -927,7 +988,7 @@ function ShareSeg({ shared, onChange, who, owner, noun = 'việc' }) {
 // ── CHI TIẾT VIỆC (To-do): chạm vào việc ở bất kỳ đâu đều mở bảng này ──
 function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, onTick, onClose }) {
   const series = isSeries(t)
-  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '' })
+  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0 })
   const [rep, setRep] = useState(series
     ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
     : { unit: '', every: 1, start: t.due_date, until: '', custom: false })
@@ -939,7 +1000,8 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
     if (!f.title.trim()) { setErr('Chưa có tên việc'); return }
     const proj = projects.find(p => p.id === f.project_id)
     const base = { title: f.title.trim(), due_time: f.due_time || null, shared: mine ? (f.shared || !!proj?.shared) : t.shared,   // vào dự án chung → việc thành chung
-      project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null }
+      project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null,
+      ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}) }   // chỉ gửi khi đổi
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
     if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc kế hoạch cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
     onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date || null, ...repeatFields(rep) })
@@ -968,6 +1030,7 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
           {f.project_id && f.due_date && <button onClick={() => setF({ ...f, due_date: null })} className="text-xs text-gray-500 underline">Bỏ ngày</button>}
         </div>}
         <div className="mt-2"><TimePicker value={f.due_time} onChange={h => setF({ ...f, due_time: h })}/></div>
+        {(f.due_date || rep.unit) && <div className="mt-2"><RemindDays value={f.remind_days} onChange={n => setF({ ...f, remind_days: n })}/></div>}
         <div className="mt-2"><RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/></div>
         {series && <p className="text-xs text-gray-500 mt-1.5">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
 
@@ -1240,9 +1303,9 @@ function PlanHeader({ p, tasks, today, daily = [], logs = [], onPull }) {
 }
 
 // ── BẢNG CHI TIẾT NGÀY ──
-function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], flags = [], onOpenPlan, onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
+function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], flags = [], cycEvents = [], onOpenPlan, onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
-  const [opt, setOpt] = useState({ due_time: '', shared: false, project_id: '' })
+  const [opt, setOpt] = useState({ due_time: '', shared: false, project_id: '', remind_days: 0 })
   const [track, setTrack] = useState(false), [trk, setTrk] = useState(''), [etaN, setEtaN] = useState('')   // 📦 Theo dõi hàng
   const [rep, setRep] = useState({ unit: '', every: 1, start: iso, until: '', custom: false })
   const d = pdate(iso), L = lunarOf(iso), trai = isTraiDay(iso, cfg)
@@ -1257,8 +1320,9 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
       onAddOrder?.({ owner: who, title: t, tracking: trk.trim() || null, order_date: iso, eta: etaN ? addDays(iso, etaN) : null, shared: opt.shared })
       setText(''); setTrk(''); setEtaN(''); setTrack(false); return
     }
-    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, project_id: opt.project_id || null, ...repeatFields(rep) })
-    setText(''); setOpt({ due_time: '', shared: false, project_id: '' }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
+    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, project_id: opt.project_id || null, ...repeatFields(rep),
+      ...(opt.remind_days ? { remind_days: opt.remind_days } : {}) })   // chỉ gửi khi có nhắc (an toàn nếu chưa chạy SQL)
+    setText(''); setOpt({ due_time: '', shared: false, project_id: '', remind_days: 0 }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
   }
   return (
     <>
@@ -1282,6 +1346,12 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
               {hair.good ? 'Ngày tốt' : 'Không nên'}{!hair.good && nextGood && ` · ngày tốt gần nhất ${dm(nextGood)}: ${hairOf(nextGood).text}`}</div>
           </div>
         )}
+        {cycEvents.map((e, i) => (
+          <div key={'c' + i} className={`mt-2 flex items-center gap-2 rounded-xl px-3 py-2.5 text-[13px] ${e.kind === 'start' ? 'bg-emerald-50 text-emerald-900' : e.kind === 'rest' ? 'bg-gray-100 text-gray-700' : 'bg-amber-50 text-amber-900'}`}>
+            <span>{e.kind === 'start' ? '💊' : e.kind === 'rest' ? '⏸' : e.kind === 'warnEnd' ? '⏳' : '🔔'}</span>
+            <span className="flex-1 min-w-0"><b>{e.kind === 'start' ? `Bắt đầu đợt ${e.round}` : e.kind === 'rest' ? `Bắt đầu nghỉ · dùng lại ${dm(e.back)}`
+              : e.kind === 'warnEnd' ? `Còn ${e.days} ngày hết đợt ${e.round} (${dm(e.end)})` : `Còn ${e.days} ngày dùng lại (${dm(e.back)})`}</b> · {e.d.emoji} {e.d.name}</span>
+          </div>))}
         {flags.map((f, i) => (
           <button key={i} onClick={() => onOpenPlan?.(f.p.id)} className="mt-2 w-full flex items-center gap-2 rounded-xl px-3 py-2.5 bg-amber-50 text-amber-900 text-[13px] text-left">
             <span>🏁</span><span className="flex-1 min-w-0"><b>{f.label}</b> · {f.p.emoji} {f.p.name}</span><span className="text-purple-700 font-semibold whitespace-nowrap">Mở ›</span>
@@ -1299,6 +1369,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
             {ETA_CHOICES.map(([n, l]) => <Chip key={l} on={etaN === n} onClick={() => setEtaN(n)}>{l}</Chip>)}</div>
         </>}
         {!track && <div className="pt-2"><TimePicker value={opt.due_time} onChange={h => setOpt(o => ({ ...o, due_time: h }))}/></div>}
+        {!track && <div className="pt-2"><RemindDays value={opt.remind_days} onChange={n => setOpt(o => ({ ...o, remind_days: n }))}/></div>}
         <div className="flex flex-wrap gap-1.5 pt-1.5">
           <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
           <button onClick={() => setTrack(!track)} aria-pressed={track}
@@ -1646,6 +1717,8 @@ function NotifySection({ who }) {
         <SetRow title="To-do có giờ" sub="Báo đúng giờ hẹn"><Switch on={prefs.todo} onClick={() => upd({ ...prefs, todo: !prefs.todo })} label="To-do có giờ"/></SetRow>
         <SetRow title="Daily tới giờ" sub="Daily có bật nhắc và có giờ bắt đầu"><Switch on={prefs.daily} onClick={() => upd({ ...prefs, daily: !prefs.daily })} label="Daily tới giờ"/></SetRow>
         <SetRow title="Báo hết giờ Daily" sub="Đang bấm giờ mà đủ mục tiêu thì báo, kể cả khi khoá màn hình"><Switch on={prefs.timeup !== false} onClick={() => upd({ ...prefs, timeup: prefs.timeup === false })} label="Báo hết giờ Daily"/></SetRow>
+        <SetRow title="Nhắc trước hạn việc" sub="Việc có đặt 'Nhắc trước N ngày' — báo lúc tóm tắt buổi sáng"><Switch on={prefs.pre !== false} onClick={() => upd({ ...prefs, pre: prefs.pre === false })} label="Nhắc trước hạn việc"/></SetRow>
+        <SetRow title="Chu kỳ dùng – nghỉ" sub="Sắp hết đợt, bắt đầu nghỉ, sắp dùng lại, dùng lại"><Switch on={prefs.cyc !== false} onClick={() => upd({ ...prefs, cyc: prefs.cyc === false })} label="Chu kỳ dùng – nghỉ"/></SetRow>
         <SetRow title="Quên bấm kết thúc" sub="Khi đồng hồ chạy quá 3 lần mục tiêu"><Switch on={prefs.forgot} onClick={() => upd({ ...prefs, forgot: !prefs.forgot })} label="Quên bấm kết thúc"/></SetRow>
         <SetRow title="Tóm tắt buổi sáng" sub="Việc và Daily trong ngày">
           <input type="time" value={prefs.moAt} onChange={e => e.target.value && upd({ ...prefs, moAt: e.target.value })} aria-label="Giờ tóm tắt sáng" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center mr-2"/>
@@ -1713,17 +1786,25 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
 
 // ── THÊM / SỬA DAILY ──
 function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onManual }) {
-  const [f, setF] = useState(initial ? { ...initial } : { name: '', emoji: '⭐', color: '#7F77DD', kind: 'time', target_min: 30, start_time: '', weekdays: '1234567', remind: false, shared: false })
+  const hadCycle = hasCycle(initial)
+  const [f, setF] = useState(() => { const base = initial ? { ...initial } : { name: '', emoji: '⭐', color: '#7F77DD', kind: 'time', target_min: 30, start_time: '', weekdays: '1234567', remind: false, shared: false }
+    return { ...base, cycleOn: hadCycle, cycle_on: base.cycle_on || 90, cycle_off: base.cycle_off || 21, cycle_start: base.cycle_start || getLocalDateString(),
+      cycle_warn_end: base.cycle_warn_end ?? 7, cycle_warn_back: base.cycle_warn_back ?? 3 } })
+  const [cycErr, setCycErr] = useState('')
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
   const toggleDay = n => set('weekdays', f.weekdays.includes(n) ? f.weekdays.replace(n, '') : [...f.weekdays + n].sort().join(''))
   const save = () => {
     if (!f.name.trim()) return
     if (!f.weekdays) return
     const { id, name, emoji, color, kind, target_min, start_time, weekdays, remind, shared, archived, unit, project_id } = f
+    const cyc = f.cycleOn ? { cycle_on: Math.max(1, Number(f.cycle_on) || 0), cycle_off: Math.max(1, Number(f.cycle_off) || 0), cycle_start: f.cycle_start || getLocalDateString(),
+      cycle_warn_end: Math.max(0, Number(f.cycle_warn_end) || 0), cycle_warn_back: Math.max(0, Number(f.cycle_warn_back) || 0) }
+      : hadCycle ? { cycle_on: null, cycle_off: null, cycle_start: null } : {}       // tắt chu kỳ → xoá; chưa từng có → không gửi cột mới
+    if (f.cycleOn && (!(Number(f.cycle_on) > 0) || !(Number(f.cycle_off) > 0))) { setCycErr('Nhập số ngày dùng và số ngày nghỉ'); return }
     onSave({ ...(id ? { id } : {}), name: name.trim(), emoji, color, kind, target_min: kind === 'tick' ? 1 : Math.max(1, Math.round(Number(target_min) || 1)),
       unit: kind === 'count' ? ((unit || '').trim() || null) : null,
       start_time: start_time || null, weekdays, remind: !!(remind && start_time), shared: !!shared, archived: !!archived,
-      ...(project_id !== undefined ? { project_id: project_id || null } : {}) })   // chỉ gửi khi cột đã có hoặc vừa chọn
+      ...(project_id !== undefined ? { project_id: project_id || null } : {}), ...cyc })   // chỉ gửi khi cột đã có hoặc vừa chọn
   }
   return (
     <div className="pb-6">
@@ -1774,6 +1855,15 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
             <div className="flex-1"><div className="text-[15px] text-gray-800">Nhắc khi tới giờ</div><div className="text-xs text-gray-500">Gửi thông báo lúc {f.start_time} những ngày có làm</div></div>
             <Switch on={!!f.remind} onClick={() => set('remind', !f.remind)} label="Nhắc khi tới giờ"/>
           </div>}
+        </div>
+        <div>
+          <div className="flex items-center gap-3">
+            <div className="flex-1"><div className="text-[15px] text-gray-800">💊 Chu kỳ dùng – nghỉ</div>
+              <div className="text-xs text-gray-500">Ví dụ thuốc bổ: dùng 90 ngày rồi nghỉ 21 ngày, lặp lại</div></div>
+            <Switch on={!!f.cycleOn} onClick={() => { set('cycleOn', !f.cycleOn); setCycErr('') }} label="Chu kỳ dùng – nghỉ"/>
+          </div>
+          {f.cycleOn && <CycleFields f={f} set={(k, val) => { set(k, val); setCycErr('') }}/>}
+          {cycErr && <p className="text-xs text-red-600 mt-2" role="alert">{cycErr}</p>}
         </div>
         {projects.some(p => !p.archived) && <label className="text-xs text-gray-500">Thuộc kế hoạch
           <select value={f.project_id || ''} onChange={e => set('project_id', e.target.value)} aria-label="Thuộc kế hoạch"

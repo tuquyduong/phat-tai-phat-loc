@@ -250,7 +250,7 @@ export async function updateJewelry(id, updates) {
       // Món đang về: ô "Số lượng đặt" ghi vào cột hàng đang về, không phải tồn kho
       const next = nonNeg(updates.stock_qty)
       // Cũng không cho đặt ít hơn số đã bán trước — nhận hàng sẽ kẹt
-      const reserved = await getReserved(id)
+      const reserved = await getReserved(id, null, { skipPreorder: true })
       if (next < reserved) {
         throw new Error(`Đã bán trước ${reserved} cái — số lượng đặt không được ít hơn ${reserved}`)
       }
@@ -258,7 +258,7 @@ export async function updateJewelry(id, updates) {
     } else {
       // Không cho hạ tồn thấp hơn số đã bán mà chưa giao —
       // nếu không các đơn đó sẽ không bao giờ tick "Đã giao" được
-      const reserved = await getReserved(id)
+      const reserved = await getReserved(id, null, { skipPreorder: true })   // đơn đặt trước được phép vượt tồn
       const next = nonNeg(updates.stock_qty)
       if (next < reserved) {
         throw new Error(`Đang có ${reserved} cái đã bán chờ giao — tồn kho không được ít hơn ${reserved}`)
@@ -318,6 +318,19 @@ export async function getJewelrySales() {
 export async function createSale(sale) {
   const sellQty  = Math.max(1, nonNeg(sale.qty, 1))
   const isInStock = !!sale.jewelry_id
+  // ĐẶT TRƯỚC: bán mã trong kho khi chưa làm / chưa đủ hàng → chưa giao, không giới hạn theo tồn.
+  // Giao sau bằng nút "Đã giao" như mọi đơn — lúc đó mới trừ kho, và phải đủ hàng.
+  if (sale.preorder && isInStock) {
+    const { data, error } = await supabase.from('jewelry_sales').insert([{
+      jewelry_id: sale.jewelry_id, item_name: null, item_image: null, qty: sellQty, sell_price: nonNeg(sale.sell_price),
+      customer_name: sale.customer_name?.trim() || null, customer_phone: sale.customer_phone?.trim() || null,
+      deposit: sale.deposit ? nonNeg(sale.deposit) : null, due_date: sale.due_date || null, note: sale.note?.trim() || null,
+      sold_at: sale.sold_at, delivered: false, delivered_at: null,
+      paid: sale.paid ?? false, paid_at: (sale.paid ?? false) ? sale.sold_at : null, preorder: true,
+    }]).select().single()
+    if (error) throw /preorder/.test(error.message || '') ? new Error('Cần chạy migration_dat_truoc.sql trên Supabase để bán đặt trước') : error
+    return data
+  }
 
   const row = {
     jewelry_id:     sale.jewelry_id || null,
@@ -487,12 +500,13 @@ function nonNeg(v, fallback = 0) {
 }
 
 // Số đã bán nhưng chưa giao của 1 sản phẩm, có thể bỏ qua 1 đơn (khi đang sửa đơn đó)
-async function getReserved(jewelryId, exceptSaleId = null) {
+// skipPreorder: bỏ đơn ĐẶT TRƯỚC (bán khi chưa làm — được phép vượt tồn kho)
+async function getReserved(jewelryId, exceptSaleId = null, { skipPreorder = false } = {}) {
   const { data } = await supabase
-    .from('jewelry_sales').select('id, qty')
+    .from('jewelry_sales').select('*')                         // '*' để chạy được cả khi chưa có cột preorder
     .eq('jewelry_id', jewelryId).eq('delivered', false)
   return (data || [])
-    .filter(s => s.id !== exceptSaleId)
+    .filter(s => s.id !== exceptSaleId && !(skipPreorder && s.preorder))
     .reduce((sum, s) => sum + (Number(s.qty) || 0), 0)
 }
 
@@ -530,9 +544,9 @@ export async function updateSale(saleId, updates) {
         if (ue) throw ue
       }
     } else {
-      // Đơn CHƯA giao: kho chưa trừ. Tổng đặt (không tính đơn này) + số mới ≤ tồn
-      const reserved = await getReserved(old.jewelry_id, saleId)
-      if (reserved + newQty > stock) {
+      // Đơn CHƯA giao: kho chưa trừ. Tổng đặt (không tính đơn này) + số mới ≤ tồn — trừ đơn đặt trước
+      const reserved = old.preorder ? 0 : await getReserved(old.jewelry_id, saleId)
+      if (!old.preorder && reserved + newQty > stock) {
         const left = Math.max(0, stock - reserved)
         throw new Error(item.status === 'ordered'
           ? `Chỉ còn ${left} cái đang về chưa bán`
@@ -1443,3 +1457,26 @@ export function debtReport(sales, jewelry, today = todayLocal()) {
   return { customers, total: customers.reduce((a, c) => a + c.total, 0),
            orders: customers.reduce((a, c) => a + c.orders.length, 0) }
 }
+
+// ============================================
+// ĐẶT TRƯỚC — tồn, đang chờ giao, cần làm thêm cho từng mã
+// ============================================
+export function preorderNeed(item, sales) {
+  const pending = sales.filter(x => x.jewelry_id === item.id && !x.delivered).reduce((a, x) => a + (Number(x.qty) || 0), 0)
+  const have = item.status === 'ordered' ? nonNeg(item.incoming_qty) : nonNeg(item.stock_qty)
+  return { pending, have, need: Math.max(0, pending - have) }
+}
+// Tìm mã trong kho: mã, tên, loại, nhà cung cấp, ghi chú — không cần dấu, gõ nhiều từ thì phải có đủ các từ
+const plainVN = x => String(x || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd')
+export function searchJewelry(list, q, limit = 8) {
+  const words = plainVN(q).split(/\s+/).filter(Boolean)
+  if (!words.length) return []
+  const scored = []
+  for (const j of list) {
+    const code = plainVN(j.code), hay = [code, plainVN(j.name), plainVN(j.category), plainVN(j.supplier_name), plainVN(j.note)].join(' ')
+    if (!words.every(w => hay.includes(w))) continue
+    scored.push([code === words.join('') ? 0 : code.startsWith(words[0]) ? 1 : 2, j])     // khớp mã lên đầu
+  }
+  return scored.sort((a, b) => a[0] - b[0] || String(a[1].code).localeCompare(String(b[1].code))).slice(0, limit).map(x => x[1])
+}
+

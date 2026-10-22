@@ -53,6 +53,68 @@ async function fetchAllRows(table) {
   return rows
 }
 
+// ── SAO LƯU ẢNH: đọc thẳng danh sách file trong kho ảnh (không sót ảnh nào), gom thành một file ZIP ──
+// Bản sao lưu .json chỉ ghi ĐƯỜNG DẪN ảnh. File ZIP này giữ BẢN THÂN ảnh — giữ đúng tên file, nên khi cần
+// khôi phục chỉ việc tải các file này lại vào kho ảnh 'jewelry-images', mọi sản phẩm tự thấy lại ảnh.
+const IMG_BUCKET = 'jewelry-images'
+async function listAllImages() {
+  const files = []
+  for (let page = 0; page < 500; page++) {
+    const { data, error } = await supabase.storage.from(IMG_BUCKET).list('', { limit: 100, offset: page * 100, sortBy: { column: 'name', order: 'asc' } })
+    if (error) throw error
+    if (!data || !data.length) break
+    files.push(...data.filter(f => f.name && f.id !== null && !f.name.startsWith('.')))   // bỏ thư mục, file ẩn
+    if (data.length < 100) break
+  }
+  return files
+}
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip)
+  return new Promise((ok, fail) => {
+    const s = document.createElement('script')
+    s.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js'
+    s.onload = () => window.JSZip ? ok(window.JSZip) : fail(new Error('Không tải được bộ nén ZIP'))
+    s.onerror = () => fail(new Error('Không tải được bộ nén ZIP — kiểm tra kết nối mạng'))
+    document.head.appendChild(s)
+  })
+}
+// Blob → dữ liệu thô. Safari iOS 13 trở về trước chưa có blob.arrayBuffer() → đọc bằng FileReader
+function blobBytes(b) {
+  if (typeof b.arrayBuffer === 'function') return b.arrayBuffer().then(x => new Uint8Array(x))
+  return new Promise((ok, no) => { const r = new FileReader(); r.onload = () => ok(new Uint8Array(r.result)); r.onerror = () => no(r.error); r.readAsArrayBuffer(b) })
+}
+async function downloadImagesZip(onProgress) {
+  const [JSZip, files] = await Promise.all([loadJSZip(), listAllImages()])
+  if (!files.length) return { count: 0, failed: [] }
+  const zip = new JSZip(), failed = []
+  let done = 0
+  const work = [...files]
+  const worker = async () => {                              // tải 4 ảnh cùng lúc
+    for (let f = work.shift(); f; f = work.shift()) {
+      try {
+        const { data, error } = await supabase.storage.from(IMG_BUCKET).download(f.name)
+        if (error || !data) throw error || new Error('trống')
+        zip.file(f.name, await blobBytes(data))                   // dữ liệu thô: mọi trình duyệt đều nén được
+      } catch { failed.push(f.name) }
+      onProgress?.(++done, files.length)
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()])
+  zip.file('HUONG_DAN_KHOI_PHUC_ANH.txt',
+    'Ảnh sản phẩm Chi Mai — sao lưu ngày ' + new Date().toLocaleDateString('vi-VN') + '\n' +
+    'Số ảnh: ' + (files.length - failed.length) + (failed.length ? ' (thiếu ' + failed.length + ': ' + failed.join(', ') + ')' : '') + '\n\n' +
+    "Khôi phục: Supabase → Storage → kho '" + IMG_BUCKET + "' → Upload toàn bộ các file ảnh này (giữ nguyên tên).\n" +
+    'Dữ liệu sản phẩm (file .json) đã ghi đường dẫn theo đúng tên file, nên tải lên xong là ảnh tự hiện lại.\n')
+  const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })   // ảnh JPEG đã nén sẵn: chỉ gom, không nén lại — nhanh, đỡ tốn pin
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
+  a.download = 'chimai_anh_' + new Date().toISOString().slice(0, 10) + '.zip'; a.click()
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000)
+  return { count: files.length - failed.length, failed }
+}
+
+// Bảng gắn với từng máy, tự tạo lại — không khôi phục (danh sách máy nhận thông báo, nhật ký đã gửi)
+const SKIP_RESTORE = ['viec_push_subs', 'viec_push_sent']
+
 // Thanh dung lượng: xanh dưới 70%, vàng 70-90%, đỏ trên 90%
 function UsageBar({ label, used, limit, extra, err }) {
   const pct = limit > 0 ? Math.min(100, (used / limit) * 100) : 0
@@ -111,6 +173,7 @@ export default function Home({ onNavigate, activeModules }) {
 
   // Backup states
   const [backupLoading, setBackupLoading] = useState(false)
+  const [imgProgress, setImgProgress] = useState(null)    // { done, total } khi đang tải ảnh
 
   // Module cards (giữ nguyên)
   const modules = [
@@ -144,6 +207,18 @@ export default function Home({ onNavigate, activeModules }) {
   // ============================================
   // BACKUP
   // ============================================
+  const handleImageBackup = async () => {
+    if (imgProgress) return
+    setImgProgress({ done: 0, total: 0 })
+    try {
+      const r = await downloadImagesZip((done, total) => setImgProgress({ done, total }))
+      if (!r.count && !r.failed.length) toast.success('Chưa có ảnh nào để sao lưu')
+      else if (r.failed.length) toast.error(`Đã tải ${r.count} ảnh · ${r.failed.length} ảnh lỗi (ghi trong file hướng dẫn)`)
+      else toast.success(`✓ Đã tải ${r.count} ảnh (.zip)`)
+    } catch (err) { toast.error('Lỗi tải ảnh: ' + (err?.message || err)) }
+    finally { setImgProgress(null) }
+  }
+
   const handleBackup = async () => {
     setBackupLoading(true)
     try {
@@ -265,6 +340,7 @@ export default function Home({ onNavigate, activeModules }) {
         for (const table of restoreOrder) {
           const rows = backup.tables[table]
           if (!rows || rows.length === 0) continue
+          if (SKIP_RESTORE.includes(table)) continue                // gắn với từng máy, tự tạo lại
 
           if (useRpc) {
             // Hàm restore_table xoá và chèn cùng lúc.
@@ -514,6 +590,11 @@ export default function Home({ onNavigate, activeModules }) {
               <Download size={16} />
               {backupLoading ? 'Đang tải...' : 'Tải backup (.json)'}
             </button>
+            <button onClick={handleImageBackup} disabled={!!imgProgress}
+              className="w-full py-3 bg-blue-50 text-blue-700 font-medium rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-60 active:scale-98 transition-transform">
+              📷 {imgProgress ? (imgProgress.total ? `Đang tải ảnh ${imgProgress.done}/${imgProgress.total}…` : 'Đang đọc danh sách ảnh…') : 'Tải ảnh sao lưu (.zip)'}
+            </button>
+            <p className="text-[10px] text-gray-400 text-center">File .json giữ dữ liệu · file .zip giữ ảnh sản phẩm — nên tải cả hai</p>
             <button onClick={handleRestore} disabled={backupLoading}
               className="w-full py-3 border-2 border-orange-300 text-orange-600 font-medium rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-50 active:scale-98 transition-transform">
               <Upload size={16} />

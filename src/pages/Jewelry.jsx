@@ -25,7 +25,7 @@ import {
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, moneyFull, fmtInput, parseInput, todayLocal,
-  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf, flushPendingIntakes } from '../lib/jewelry'
+  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf, flushPendingIntakes , preorderNeed, searchJewelry } from '../lib/jewelry'
 
 // ============================================
 // MAIN
@@ -157,7 +157,7 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
       <div className="sticky top-0 z-30 bg-white border-b border-gray-200">
         <div className="flex items-center gap-3 px-4 py-3">
           {detail ? (
-            <button onClick={closeDetail} className="p-1 -ml-1 text-purple-600">
+            <button onClick={closeDetail} aria-label="Quay lại" className="p-1 -ml-1 text-purple-600">
               <ChevronLeft size={22}/>
             </button>
           ) : <Diamond size={20} className="text-purple-600"/>}
@@ -298,14 +298,14 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
             setEditing(null)
             setAddMode(khoView === 'incoming' ? 'ordered' : 'in_stock')
             setShowAdd(true)
-          }}
+          }} aria-label="Thêm sản phẩm"
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
           <Plus size={22}/>
         </button>
       )}
       {!detail && modTab === 'ban' && banView === 'orders' && (
-        <button onClick={() => setSellItem('new')}
+        <button onClick={() => setSellItem('new')} aria-label="Tạo đơn mới"
           className="fixed right-4 w-12 h-12 bg-purple-600 text-white rounded-full shadow-lg flex items-center justify-center z-20"
           style={{ bottom: 'calc(4.5rem + env(safe-area-inset-bottom,0px))' }}>
           <Plus size={22}/>
@@ -416,7 +416,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
 
   const fmtDay = d => {
     if (!d) return ''
-    const [y, m, day] = String(d).slice(0, 10).split('-')
+    const [, m, day] = String(d).slice(0, 10).split('-')
     return `${day}/${m}`
   }
 
@@ -424,7 +424,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
     const counts = { 'Tất cả': jewelry.length }
     categories.forEach(c => { counts[c] = jewelry.filter(j => j.category === c).length })
     return counts
-  }, [jewelry])
+  }, [jewelry, categories])                              // thêm loại mới → đếm lại ngay
 
   return (
     <>
@@ -569,7 +569,7 @@ function KhoTab({ items: jewelry, categories = DEFAULT_CATEGORIES, onSelect, onA
                   </span>
                   {sold > 0 && (
                     <span className="absolute top-7 right-1.5 text-[9px] font-semibold px-1.5 py-0.5 rounded-full bg-blue-100 text-blue-700">
-                      {sold} chờ giao
+                      {sold} chờ giao{item.status !== 'ordered' && sold > (Number(item.stock_qty) || 0) ? ` · thiếu ${sold - (Number(item.stock_qty) || 0)}` : ''}
                     </span>
                   )}
                   {/* Không còn đơn chờ giao nhưng đã từng bán → vẫn cho biết đã bán bao nhiêu */}
@@ -1054,9 +1054,9 @@ function BanTab({ sales, stats, onRefresh, onEdit, toast }) {
         const owed    = total - dep
         const isOrder = !s.jewelry_id
         const late    = !s.delivered && s.due_date && s.due_date < today10
-        const name    = s.jewelry?.code
+        const name    = (s.jewelry?.code
           ? `${s.jewelry.code}${s.jewelry.name ? ' · ' + s.jewelry.name : ''}`
-          : (s.item_name || 'Hàng order')
+          : (s.item_name || 'Hàng order')) + (s.preorder && !s.delivered ? ' · đặt trước' : '')
 
         return (
           <div key={s.id} className="bg-white border-b border-gray-100 px-4 py-3">
@@ -1701,7 +1701,7 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged, 
     let alive = true
     getIntakes(item.id).then(r => { if (alive) setIntakes(r) }).catch(() => {})
     return () => { alive = false }
-  }, [stockSig])
+  }, [stockSig])   // eslint-disable-line react-hooks/exhaustive-deps -- stockSig đã gồm item.id
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const sold      = sales.reduce((s,x) => s + Number(x.qty), 0)
   const reserved  = sales.filter(s => !s.delivered).reduce((s,x) => s + Number(x.qty), 0)
@@ -1738,7 +1738,8 @@ function DetailPanel({ item, sales, trips, onSell, onEdit, onDelete, onChanged, 
             : null],
           ['Tồn kho', `${item.stock_qty} cái`, item.stock_qty > 0 ? 'text-gray-800' : 'text-red-500'],
           ['Đang về', item.incoming_qty > 0 ? `${item.incoming_qty} cái` : null, 'text-purple-600'],
-          ['Chờ giao', reserved > 0 ? `${reserved} cái (đã bán, hàng còn trong tủ)` : null, 'text-blue-600'],
+          ['Chờ giao', reserved > 0 ? `${reserved} cái (đã bán, chưa giao)` : null, 'text-blue-600'],
+          ['Cần làm thêm', item.status !== 'ordered' && reserved > (Number(item.stock_qty) || 0) ? `${reserved - (Number(item.stock_qty) || 0)} cái — đơn đặt trước vượt tồn` : null, 'text-red-600 font-semibold'],
           ['Còn bán được', `${available} cái`,
             available > 0 ? 'text-green-600' : (reserved > 0 ? 'text-blue-600' : 'text-red-500')],
           ['Giá vốn', item.cost_price ? moneyFull(item.cost_price) + '/cái' : null],
@@ -2436,7 +2437,7 @@ function JewelryForm({ isOpen, onClose, item, mode = 'in_stock', trips, categori
       setImgPrev(null)
     }
     setImgFile(null)
-  }, [isOpen, item, activeTrip, mode])
+  }, [isOpen, item, activeTrip, mode])   // eslint-disable-line react-hooks/exhaustive-deps -- EMPTY là mẫu cố định
 
   const handleFile = async (e) => {
     const file = e.target.files?.[0]; if (!file) return
@@ -2984,7 +2985,7 @@ function DupeCodeDialog({ exist, payload, onCancel, onMerged, toast }) {
 function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], customerNames, onClose, onSaved, toast }) {
   const EMPTY = {
     mode: 'stock',          // stock | order
-    jewelry_id: '', item_name: '',
+    jewelry_id: '', item_name: '', preorder_id: '',   // preorder_id: mã trong kho được bán ĐẶT TRƯỚC
     qty: 1, sell_price: '', deposit: '',
     customer_name: '', customer_phone: '',
     due_date: '', note: '', sold_at: '',
@@ -2995,6 +2996,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
   const [acShow,  setAcShow]  = useState(false)
   const [acList,  setAcList]  = useState([])
   const [pickOpen,setPickOpen]= useState(false)
+  const [preQ,    setPreQ]    = useState('')               // ô tìm mã để bán đặt trước
   const [imgFile, setImgFile] = useState(null)
   const [imgPrev, setImgPrev] = useState(null)
   const [resizing,setResizing]= useState(false)
@@ -3019,8 +3021,9 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
     if (!isOpen) { setAcShow(false); setPickOpen(false); return }
     if (editSale) {
       setForm({
-        mode: editSale.jewelry_id ? 'stock' : 'order',
-        jewelry_id:     editSale.jewelry_id || '',
+        mode: editSale.jewelry_id && !editSale.preorder ? 'stock' : 'order',
+        jewelry_id:     editSale.preorder ? '' : (editSale.jewelry_id || ''),
+        preorder_id:    editSale.preorder ? editSale.jewelry_id : '',
         item_name:      editSale.item_name || '',
         qty:            editSale.qty || 1,
         sell_price:     String(editSale.sell_price || ''),
@@ -3044,8 +3047,8 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
       setForm({ ...EMPTY, sold_at: todayLocal() })
       setImgPrev(null)
     }
-    setImgFile(null)
-  }, [isOpen, item, editSale])
+    setImgFile(null); setPreQ('')
+  }, [isOpen, item, editSale])   // eslint-disable-line react-hooks/exhaustive-deps -- EMPTY là mẫu cố định
 
   const f = (k,v) => setForm(p => ({ ...p, [k]: v }))
 
@@ -3072,7 +3075,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
 
   const handleSubmit = async () => {
     if (form.mode === 'stock' && !form.jewelry_id) { toast.error('Chọn sản phẩm trong kho'); return }
-    if (form.mode === 'order' && !form.item_name.trim()) { toast.error('Nhập tên hàng'); return }
+    if (form.mode === 'order' && !form.preorder_id && !form.item_name.trim()) { toast.error('Nhập tên hàng, hoặc tìm mã trong kho để bán đặt trước'); return }
     if (!form.sell_price) { toast.error('Nhập giá bán'); return }
 
     // Chặn sớm trên giao diện — DB vẫn kiểm tra lại lần nữa
@@ -3098,13 +3101,15 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
           try { item_image = await uploadImage(imgFile, form.item_name.trim() || 'order') }
           catch { toast.error('Ảnh chưa lưu được — đơn vẫn được tạo') }
         }
+        const pre = form.mode === 'order' && !!form.preorder_id
         await createSale({
           ...form,
-          jewelry_id: form.mode === 'stock' ? form.jewelry_id : null,
-          item_name:  form.mode === 'order' ? form.item_name : null,
-          item_image,
+          jewelry_id: form.mode === 'stock' ? form.jewelry_id : pre ? form.preorder_id : null,
+          item_name:  form.mode === 'order' && !pre ? form.item_name : null,
+          item_image: pre ? null : item_image,
+          preorder:   pre,
         })
-        toast.success('Đã tạo đơn')
+        toast.success(pre ? 'Đã nhận đặt trước' : 'Đã tạo đơn')
       }
       onSaved()
     } catch (err) { toast.error(err.message) }
@@ -3119,7 +3124,7 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
         {!editSale && (
           <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
             {[['stock','Hàng có sẵn'],['order','Hàng order']].map(([id,label]) => (
-              <button key={id} onClick={() => { f('mode', id); f('jewelry_id',''); f('item_name','') }}
+              <button key={id} onClick={() => { f('mode', id); f('jewelry_id',''); f('item_name',''); f('preorder_id',''); setPreQ('') }}
                 className={`flex-1 py-2 text-xs font-medium rounded-lg transition-colors
                   ${form.mode===id ? 'bg-white text-purple-600 shadow-sm' : 'text-gray-500'}`}>
                 {label}
@@ -3161,8 +3166,46 @@ function SaleForm({ isOpen, item, editSale, jewelry = [], allSales = [], custome
           </div>
         )}
 
-        {/* Hàng order: tên + ảnh */}
-        {form.mode === 'order' && (
+        {/* Hàng order → bán ĐẶT TRƯỚC một mã trong kho (tìm theo mã, tên, từ khoá) */}
+        {form.mode === 'order' && (() => {
+          const pj = form.preorder_id ? jewelry.find(j => j.id === form.preorder_id) : null
+          if (pj) {
+            const n = preorderNeed(pj, allSales.filter(s => s.id !== editSale?.id)), add = Number(form.qty) || 1
+            return (
+              <div className="rounded-xl bg-pink-50 border border-pink-200 p-3">
+                <div className="flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-[11px] font-semibold text-pink-700">ĐẶT TRƯỚC · giao khi có hàng</div>
+                    <div className="text-sm font-semibold text-gray-800">{pj.code} <span className="font-normal text-gray-600">{pj.name}</span></div>
+                    <div className="text-xs text-gray-600 mt-0.5">Tồn {n.have} · chờ giao {n.pending}{n.need > 0 && <b className="text-red-600"> · cần làm thêm {n.need}</b>}</div>
+                    <div className="text-xs text-pink-800 mt-1">Sau đơn này: chờ giao {n.pending + add} · cần làm thêm <b>{Math.max(0, n.pending + add - n.have)}</b></div>
+                  </div>
+                  {!editSale && <button onClick={() => { f('preorder_id', ''); setPreQ('') }} aria-label="Bỏ chọn mã" className="w-7 h-7 rounded-full bg-white text-gray-500 text-xs">✕</button>}
+                </div>
+              </div>)
+          }
+          if (editSale) return null
+          const res = searchJewelry(jewelry, preQ)
+          return (
+            <div>
+              <label className="text-[11px] text-gray-500 block mb-1">🔍 Tìm mã trong kho để bán đặt trước — tuỳ chọn</label>
+              <input value={preQ} onChange={e => setPreQ(e.target.value)} placeholder="Gõ mã, tên hoặc từ khoá: hmd, hồng mẫu, viên hoàn…" aria-label="Tìm mã trong kho"
+                className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-base"/>
+              {preQ.trim() && <div className="mt-1.5 rounded-xl border border-gray-100 overflow-hidden">
+                {res.map(j => { const n = preorderNeed(j, allSales)
+                  return (
+                    <button key={j.id} onClick={() => { setForm(p => ({ ...p, preorder_id: j.id, item_name: '', sell_price: p.sell_price || String(j.sell_price || '') })); setPreQ('') }}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left border-b border-gray-50 last:border-0 active:bg-pink-50">
+                      <span className="flex-1 min-w-0"><b className="text-xs text-gray-800">{j.code}</b> <span className="text-xs text-gray-600">{j.name}</span></span>
+                      <span className="text-[10px] text-gray-500 whitespace-nowrap">tồn {n.have}{n.pending ? ` · chờ ${n.pending}` : ''}</span>
+                    </button>) })}
+                {!res.length && <p className="text-xs text-gray-400 px-3 py-2">Không có mã nào khớp — gõ tên hàng bên dưới để đặt hàng ngoài kho</p>}
+              </div>}
+            </div>)
+        })()}
+
+        {/* Hàng order: tên + ảnh (hàng ngoài kho) */}
+        {form.mode === 'order' && !form.preorder_id && (
           <>
             <div>
               <label className="text-[11px] text-gray-500 block mb-1">Tên hàng *</label>
@@ -3758,7 +3801,7 @@ function PickJewelryModal({ jewelry, sales = [], onPick, onClose }) {
     .filter(j => (Number(j.incoming_qty) || 0) > 0 && match(j))
     .sort((a, b) => (a.eta_date || '9999').localeCompare(b.eta_date || '9999'))
 
-  const fmtDate  = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}` }
+  const fmtDate  = d => { if(!d) return ''; const [,m,day]=d.split('-'); return `${day}/${m}` }
 
   const Row = ({ j, incoming: inc, first }) => (
     <div onClick={() => onPick(j)}

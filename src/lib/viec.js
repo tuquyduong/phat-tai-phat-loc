@@ -6,7 +6,7 @@
 import { supabase } from './supabase'
 import { fetchAll } from './fetchAll'
 import { getLocalDateString } from './helpers'
-import { isSeries, occurrencesBetween, isDoneOn } from './recur'
+import { isSeries, occurrencesBetween, isDoneOn, nextOccurrences } from './recur'
 
 export const PEOPLE = { linh: 'Anh Linh', mai: 'Chị Mai' }
 export const otherOf = who => (who === 'linh' ? 'mai' : 'linh')
@@ -352,7 +352,47 @@ export const daysBetween = (a, b) => {
 export function isDailyDay(daily, iso) {
   const [y, m, d] = iso.split('-').map(Number)
   const wd = ((new Date(y, m - 1, d).getDay() + 6) % 7) + 1
-  return (daily.weekdays || '1234567').includes(String(wd))
+  if (!(daily.weekdays || '1234567').includes(String(wd))) return false
+  const ph = cyclePhase(daily, iso)
+  return !ph || ph.state === 'on'                     // có chu kỳ: chỉ những ngày trong đợt dùng
+}
+
+// ── Chu kỳ dùng – nghỉ (vd thuốc bổ: dùng 90 ngày → nghỉ 21 ngày → lặp lại) ──
+export const hasCycle = d => Number(d?.cycle_on) > 0 && Number(d?.cycle_off) > 0 && !!d?.cycle_start
+export function cyclePhase(d, iso) {
+  if (!hasCycle(d)) return null
+  const on = Number(d.cycle_on), off = Number(d.cycle_off), cyc = on + off
+  const idx = daysBetween(iso, d.cycle_start)
+  if (idx < 0) return { state: 'before', next: d.cycle_start, left: -idx }
+  const n = Math.floor(idx / cyc), k = idx % cyc, s = addDays(d.cycle_start, n * cyc)
+  const base = { round: n + 1, roundStart: s, end: addDays(s, on - 1), offStart: addDays(s, on), nextOn: addDays(s, cyc) }
+  return k < on ? { ...base, state: 'on', dayNo: k + 1, left: on - k }
+    : { ...base, state: 'off', offDay: k - on + 1, left: cyc - k }
+}
+// Các mốc của chu kỳ rơi vào ngày iso: bắt đầu đợt, bắt đầu nghỉ, báo trước hết đợt, báo trước uống lại
+export function cycleEvents(d, iso) {
+  const ph = cyclePhase(d, iso); if (!ph || ph.state === 'before') return []
+  const wEnd = Number(d.cycle_warn_end) || 0, wBack = Number(d.cycle_warn_back) || 0, ev = []
+  if (ph.state === 'on' && ph.dayNo === 1) ev.push({ kind: 'start', round: ph.round })
+  if (ph.state === 'on' && wEnd > 0 && iso === addDays(ph.end, -wEnd)) ev.push({ kind: 'warnEnd', round: ph.round, days: wEnd, end: ph.end })
+  if (ph.state === 'off' && ph.offDay === 1) ev.push({ kind: 'rest', round: ph.round, back: ph.nextOn })
+  if (ph.state === 'off' && wBack > 0 && iso === addDays(ph.nextOn, -wBack)) ev.push({ kind: 'warnBack', round: ph.round + 1, days: wBack, back: ph.nextOn })
+  return ev
+}
+// Các đợt đầu tiên — để xem trước khi cài đặt
+export function cycleRounds(d, count = 3) {
+  if (!hasCycle(d)) return []
+  const on = Number(d.cycle_on), cyc = on + Number(d.cycle_off)
+  return Array.from({ length: count }, (_, i) => { const s = addDays(d.cycle_start, i * cyc)
+    return { round: i + 1, on: s, onEnd: addDays(s, on - 1), offStart: addDays(s, on), offEnd: addDays(s, cyc - 1) } })
+}
+// Nhắc trước N ngày: lần sắp tới của việc (việc lặp: lần gần nhất từ hôm nay) và ngày sẽ nhắc
+export function remindDate(t, today) {
+  const n = Number(t.remind_days) || 0
+  if (n <= 0) return null
+  const occ = isSeries(t) ? nextOccurrences(t, today, 1)[0] : t.due_date
+  if (!occ || (!isSeries(t) && t.done)) return null
+  return { occ, on: addDays(occ, -n), days: n }
 }
 // Tiến độ một Daily trong ngày; đồng hồ đang chạy được tính tới bây giờ
 export function dailyProgress(daily, logs, iso, nowMs = Date.now()) {
