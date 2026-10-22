@@ -92,7 +92,16 @@ export async function deleteTask(id) {
   if (error) throw error
 }
 // Tick một việc. Việc lặp: chỉ đánh dấu ĐÚNG lần (ngày) được tick, các lần khác giữ nguyên.
+// Lặp "SAU KHI XONG" (vd mua thuốc mỗi 30 ngày): bấm xong → CHÍNH việc đó dời sang N ngày sau hôm bấm.
+// Mua sớm hay muộn đều tự khớp vì luôn tính từ lần làm thật. Ngày đã xong ghi vào done_dates làm lịch sử.
+export const isRolling = t => !isSeries(t) && Number(t?.repeat_after) > 0
+export const rollNext = (t, today) => addDays(today, Number(t.repeat_after))
 export async function toggleTask(task, iso) {
+  if (isRolling(task) && !task.done) {
+    const today = getLocalDateString()
+    const next = rollNext(task, today)
+    return { updated: await updateTask(task.id, { due_date: next, done_dates: [...(task.done_dates || []), today].slice(-24) }), next }
+  }
   if (isSeries(task)) {
     const set = new Set(task.done_dates || [])
     set.has(iso) ? set.delete(iso) : set.add(iso)

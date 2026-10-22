@@ -14,7 +14,7 @@ import {
   saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary,
   addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats,
   parseLines, parseGroupLines, groupsToText, planGroups, planPace, nextPlanTask, planFlags, groupRenames, renameGroupTasks,
-  hasCycle, cyclePhase, cycleEvents, cycleRounds } from '../lib/viec'
+  hasCycle, cyclePhase, cycleEvents, cycleRounds, isRolling, rollNext } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
@@ -294,18 +294,21 @@ export default function Viec({ onNavigate }) {
   const tick = (task, iso) => run(async () => {
     const { updated } = await toggleTask(task, iso)
     patch('tasks', ts => ts.map(x => x.id === task.id ? updated : x))
-  })
+  }, isRolling(task) && !task.done ? `✓ Xong · hẹn lần sau ${dm(rollNext(task, getLocalDateString()))}` : undefined)
   // Tick nhanh bằng vòng tròn: hiện "Hoàn tác" 5 giây phòng chạm nhầm
   const quickTick = (task, iso) => {
     const wasDone = isDoneOn(task, iso || task.due_date)
     tick(task, iso)
     clearTimeout(undoTimer.current)
-    if (!wasDone) { setUndo({ id: task.id, iso, title: task.title }); undoTimer.current = setTimeout(() => setUndo(null), 5000) }
+    // lặp "sau khi xong": nhớ ngày hẹn cũ để Hoàn tác trả lại đúng như trước
+    const prev = isRolling(task) && !task.done ? { due_date: task.due_date, done_dates: task.done_dates || [] } : null
+    if (!wasDone) { setUndo({ id: task.id, iso, title: task.title, prev }); undoTimer.current = setTimeout(() => setUndo(null), 5000) }
     else setUndo(null)
   }
   const doUndo = () => {
     const t = data.tasks.find(x => x.id === undo?.id)
     clearTimeout(undoTimer.current); setUndo(null)
+    if (t && undo.prev) return run(async () => { const u = await updateTask(t.id, undo.prev); patch('tasks', ts => ts.map(x => x.id === t.id ? u : x)) }, 'Đã hoàn tác')
     if (t && isDoneOn(t, undo.iso || t.due_date)) tick(t, undo.iso)
   }
   const openTask = (t, iso) => setTaskEdit({ id: t.id, iso: iso || t.due_date || null })
@@ -737,15 +740,17 @@ const PRESETS = [
 ]
 function RepeatPicker({ value, onChange }) {
   const v = value, set = patch => onChange({ ...v, ...patch })
+  const after = !v.unit && !!v.afterOn                         // đang chọn lặp "sau khi xong" (số ngày có thể đang trống lúc gõ)
   const isPreset = !v.custom && PRESETS.some(([u, n]) => u === v.unit && (u === '' || u === 'lunar' || n === v.every))
   const preview = v.unit ? nextOccurrences({ repeat_unit: v.unit, repeat_every: v.every, repeat_start: v.start, repeat_until: v.until || null }, v.start, 4) : []
   return (
     <div>
       <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
         {PRESETS.map(([u, n, label]) => (
-          <Chip key={label} on={isPreset && v.unit === u && (u === '' || u === 'lunar' || v.every === n)}
-            onClick={() => set({ unit: u, every: n, custom: false })}>{label}</Chip>))}
-        <Chip on={!isPreset} onClick={() => set({ custom: true, unit: !v.unit || v.unit === 'lunar' ? 'week' : v.unit })}>Tuỳ chỉnh…</Chip>
+          <Chip key={label} on={isPreset && !after && v.unit === u && (u === '' || u === 'lunar' || v.every === n)}
+            onClick={() => set({ unit: u, every: n, custom: false, afterOn: false })}>{label}</Chip>))}
+        <Chip on={after} onClick={() => set({ unit: '', custom: false, afterOn: true, after: Number(v.after) > 0 ? v.after : 30 })}>Sau khi xong…</Chip>
+        <Chip on={!isPreset} onClick={() => set({ custom: true, afterOn: false, unit: !v.unit || v.unit === 'lunar' ? 'week' : v.unit })}>Tuỳ chỉnh…</Chip>
       </div>
       {!isPreset && (
         <div className="bg-gray-50 rounded-2xl p-3 mt-2 flex flex-col gap-2.5">
@@ -767,6 +772,18 @@ function RepeatPicker({ value, onChange }) {
               className={`flex-1 min-w-0 block appearance-none border rounded-xl px-2 py-2 text-base bg-white ${v.until ? 'border-purple-300' : 'border-gray-200'}`}/></div>
         </div>
       )}
+      {after && (
+        <div className="mt-2 text-[13px] text-gray-600 bg-purple-50 rounded-xl px-3 py-2.5">
+          <div className="flex items-center flex-wrap gap-x-1 gap-y-1.5 text-[15px] text-gray-700">
+            Lặp lại<input type="number" inputMode="numeric" min="1" max="3650" value={v.after || ''} aria-label="Số ngày sau khi xong"
+              onChange={e => set({ after: e.target.value === '' ? '' : Math.max(1, Math.min(3650, parseInt(e.target.value, 10) || 1)) })}
+              className="w-16 text-center border border-purple-200 rounded-lg px-1 py-1 text-base bg-white mx-1"/>ngày sau mỗi lần xong
+            {[30, 60, 90].map(n => <button key={n} onClick={() => set({ after: n })} className={`ml-1 px-2.5 py-1 rounded-lg text-xs ${v.after === n ? 'bg-purple-600 text-white font-semibold' : 'bg-white text-purple-700'}`}>{n}</button>)}
+          </div>
+          {!(Number(v.after) > 0) && <div className="mt-1.5 text-red-600" role="alert">Nhập số ngày</div>}
+          <div className="mt-1.5">Bấm ✓ khi xong → việc tự hẹn lần sau, tính từ hôm bấm. Làm sớm hay muộn đều tự khớp.</div>
+        </div>
+      )}
       {v.unit && (
         <div className="mt-2 text-[13px] text-gray-600 bg-purple-50 rounded-xl px-3 py-2">
           <div className="font-medium text-purple-800">↻ {describe({ repeat_unit: v.unit, repeat_every: v.every, repeat_start: v.start, repeat_until: v.until || null })}</div>
@@ -778,7 +795,8 @@ function RepeatPicker({ value, onChange }) {
 }
 const repeatFields = r => r.unit
   ? { repeat_unit: r.unit, repeat_every: r.unit === 'lunar' ? 1 : r.every, repeat_start: r.start, repeat_until: r.until || null, due_date: r.start }
-  : { repeat_unit: '', repeat_every: 1, repeat_start: null, repeat_until: null }
+  : { repeat_unit: '', repeat_every: 1, repeat_start: null, repeat_until: null,
+      ...(r.afterOn && Number(r.after) > 0 ? { repeat_after: Number(r.after) } : {}) }   // chỉ gửi khi dùng (an toàn nếu chưa chạy SQL)
 
 
 
@@ -1002,7 +1020,7 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
   const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0 })
   const [rep, setRep] = useState(series
     ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
-    : { unit: '', every: 1, start: t.due_date, until: '', custom: false })
+    : { unit: '', every: 1, start: t.due_date, until: '', custom: false, after: t.repeat_after || 30, afterOn: !!t.repeat_after })
   const [confirmDel, setConfirmDel] = useState(false), [err, setErr] = useState('')
   const mine = t.owner === who
   const day = iso || t.due_date                                   // lần (ngày) đang xem — với việc lặp
@@ -1015,7 +1033,11 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
       ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}) }   // chỉ gửi khi đổi
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
     if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc kế hoạch cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
-    onSave(rep.unit ? { ...base, ...repeatFields(rep) } : { ...base, due_date: f.due_date || null, ...repeatFields(rep) })
+    const rolling = !rep.unit && rep.afterOn
+    if (rolling && !(Number(rep.after) > 0)) { setErr('Nhập số ngày lặp lại sau khi xong'); return }
+    if (rolling && !f.due_date) { setErr('Việc lặp "sau khi xong" cần ngày hẹn lần đầu'); return }
+    const clearAfter = t.repeat_after && !rolling ? { repeat_after: null } : {}   // bỏ lặp sau khi xong
+    onSave(rep.unit ? { ...base, ...repeatFields(rep), ...clearAfter } : { ...base, due_date: f.due_date || null, ...repeatFields(rep), ...clearAfter })
   }
   const lbl = 'text-xs text-gray-500 font-semibold mt-4 mb-1.5 block'
   return (
@@ -1029,7 +1051,7 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
         <input value={f.title} onChange={e => { setF({ ...f, title: e.target.value }); setErr('') }} aria-label="Tên việc"
           className="w-full text-lg font-semibold border-0 border-b-2 border-gray-100 rounded-none px-0 py-1.5 mb-3 focus:outline-none focus:border-purple-300"/>
         {(day || !series) && <button onClick={() => onTick(t, day)} className={`w-full py-3 rounded-xl font-bold ${done ? 'bg-gray-100 text-gray-600' : 'bg-emerald-600 text-white'}`}>
-          {done ? '↩ Chưa xong' : series ? `✓ Xong lần ${dm(day)}` : '✓ Xong'}</button>}
+          {done ? '↩ Chưa xong' : series ? `✓ Xong lần ${dm(day)}` : isRolling(t) ? `✓ Xong · hẹn lần sau ${dm(rollNext(t, getLocalDateString()))}` : '✓ Xong'}</button>}
 
         <span className={lbl}>Ai thấy</span>
         <ShareSeg shared={f.shared} onChange={v => setF({ ...f, shared: v })} who={who} owner={t.owner}/>
@@ -1157,7 +1179,7 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
         {r && <>
           <SearchGroup label="☑️ Việc" items={r.tasks} render={t => <SearchRow key={t.id} onClick={() => onOpenTask(t, isSeries(t) ? (nextOccurrences(t, today, 1)[0] || t.repeat_start) : t.due_date)}
             icon={isSeries(t) ? '↻' : '☑️'} title={<Hl text={t.title} q={q}/>} status={taskStatus(t)}
-            sub={[t.due_date && !isSeries(t) && dm(t.due_date), t.due_time, isSeries(t) && describe(t), t.project_id && <Hl key="p" text={projName(t.project_id)} q={q}/>,
+            sub={[t.due_date && !isSeries(t) && dm(t.due_date), t.due_time, isSeries(t) && describe(t), isRolling(t) && `↻ ${t.repeat_after} ngày sau khi xong`, t.project_id && <Hl key="p" text={projName(t.project_id)} q={q}/>,
               t.shared && (t.owner === who ? '👥' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).reduce((a, x, i) => i ? [...a, ' · ', x] : [x], [])}/>}/>
           <SearchGroup label="📦 Đơn hàng" items={r.orders} render={o => { const hit = trackingCodes(o.tracking).find(c => compactStr(c).includes(compactStr(q)) && compactStr(q).length >= 3)
             return <SearchRow key={o.id} onClick={() => onOpenOrder(o)} icon={o.received_at ? '✅' : '📦'} title={<Hl text={o.title} q={q}/>} status={orderStatus(o)}
@@ -1326,6 +1348,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
   const list = tasks.filter(t => occurrencesBetween(t, iso, iso).length).sort((a, b) => (a.due_time || '99').localeCompare(b.due_time || '99'))
   const ds = daily.filter(x => isDailyDay(x, iso))
   const add = () => {
+    if (!rep.unit && rep.afterOn && !(Number(rep.after) > 0)) return   // đang chọn "sau khi xong" mà chưa nhập số ngày
     const t = text.trim(); if (!t) return
     if (track) {                                     // đơn đặt: ngày đang mở là ngày đặt
       onAddOrder?.({ owner: who, title: t, tracking: trk.trim() || null, order_date: iso, eta: etaN ? addDays(iso, etaN) : null, shared: opt.shared })
@@ -1419,6 +1442,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
                     t.project_id && (p => p ? p.emoji + ' ' + p.name + (t.group_name ? ' · ' + t.group_name : '') : null)(projects.find(p => p.id === t.project_id)),
                     t.shared && (t.owner === who ? '👥 chung với ' + PEOPLE[otherOf(who)] : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).join(' · ')}</div>
                   {isSeries(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {describe(t)}{next ? ` · lần tới ${dm(next)}` : ' · lần cuối'}</div>}
+                  {isRolling(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {t.repeat_after} ngày sau khi xong{t.done_dates?.length ? ` · lần trước ${dm(t.done_dates[t.done_dates.length - 1])}` : ''}</div>}
                 </button>
                 <span className="text-gray-300 text-lg">›</span>
               </div>
@@ -1616,7 +1640,7 @@ function ProjectDetail({ who, project: p, projects, tasks, today, daily = [], lo
                       <button onClick={() => onOpenTask(t, series ? (nextD || t.repeat_start) : t.due_date)} className="flex-1 text-left py-3 min-w-0">
                         <div className={`text-[15px] ${t.done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
                         <div className={`text-xs mt-0.5 ${late ? 'text-red-600' : 'text-gray-400'}`}>
-                          {series ? `↻ ${describe(t)}${nextD ? ' · lần tới ' + dm(nextD) : ''}` : t.due_date ? (late ? 'Quá hạn · ' : '') + dm(t.due_date) + (t.due_time ? ' · ' + t.due_time : '') : 'Chưa có ngày · bấm để đặt'}
+                          {series ? `↻ ${describe(t)}${nextD ? ' · lần tới ' + dm(nextD) : ''}` : t.due_date ? (late ? 'Quá hạn · ' : '') + dm(t.due_date) + (isRolling(t) ? ' · ↻ ' + t.repeat_after + 'n' : '') + (t.due_time ? ' · ' + t.due_time : '') : 'Chưa có ngày · bấm để đặt'}
                         </div>
                       </button>
                       {!series && !t.done && !t.due_date && onPull
