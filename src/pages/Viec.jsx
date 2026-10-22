@@ -2,7 +2,7 @@
 // TAB VIỆC — Lịch âm dương, To-do, Daily, ngày trai
 // Màn chính chỉ có lịch; bấm ngày mở bảng chi tiết.
 // ============================================
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useToast } from '../components/Toast'
 import { getLocalDateString } from '../lib/helpers'
 import { lunarOf, isTraiDay, isMakeupDay, hairOf } from '../lib/lunar'
@@ -675,30 +675,41 @@ function TimePicker({ value, onChange }) {
   )
 }
 
-// ── CHU KỲ DÙNG – NGHỈ: 3 ô số + ngày bắt đầu, xem trước các đợt và mốc nhắc ──
-function CycleFields({ f, set }) {
-  const num = (k, label, after) => (
-    <label className="flex items-center gap-2 text-[13px] text-gray-600">
-      <span className="w-36">{label}</span>
-      <input type="number" inputMode="numeric" min="0" max="999" value={f[k] === '' || f[k] == null ? '' : f[k]} aria-label={label}
-        onChange={e => set(k, e.target.value === '' ? '' : Math.max(0, Math.min(999, parseInt(e.target.value, 10) || 0)))}
-        className="w-16 text-center border border-gray-200 rounded-lg px-2 py-1.5 text-base"/>
-      <span>{after}</span>
-    </label>)
-  const preview = hasCycle({ ...f, cycle_on: Number(f.cycle_on), cycle_off: Number(f.cycle_off) }) ? cycleRounds({ ...f, cycle_on: Number(f.cycle_on), cycle_off: Number(f.cycle_off) }, 2) : []
+// ── THANH LỰA CHỌN: vài lựa chọn ngang nhau, chọn một ──
+function Seg3({ value, onChange, options, label }) {
   return (
-    <div className="mt-3 bg-emerald-50/60 rounded-xl p-3 flex flex-col gap-2">
-      {num('cycle_on', 'Dùng liên tục', 'ngày')}
-      {num('cycle_off', 'Rồi nghỉ', 'ngày')}
-      <label className="flex items-center gap-2 text-[13px] text-gray-600"><span className="w-36">Bắt đầu đợt 1</span>
+    <div role="radiogroup" aria-label={label} className="flex bg-gray-100 rounded-xl p-1 gap-1 mt-1">
+      {options.map(([k, l]) => <button key={k} role="radio" aria-checked={value === k} onClick={() => onChange(k)}
+        className={`flex-1 min-h-[40px] py-2 rounded-lg text-[13px] whitespace-nowrap ${value === k ? 'bg-white text-purple-800 font-semibold shadow-sm' : 'text-gray-600'}`}>{l}</button>)}
+    </div>
+  )
+}
+
+// ── CHU KỲ DÙNG – NGHỈ: 3 ô số + ngày bắt đầu, xem trước các đợt và mốc nhắc ──
+function CycleFields({ f, set, editRm, setEditRm }) {
+  const n = (k, label, min = 1) => (
+    <input type="number" inputMode="numeric" min={min} max="999" value={f[k] === '' || f[k] == null ? '' : f[k]} aria-label={label}
+      onChange={e => set(k, e.target.value === '' ? '' : Math.max(0, Math.min(999, parseInt(e.target.value, 10) || 0)))}
+      className="w-14 text-center border border-gray-200 rounded-lg px-1 py-1 text-base mx-1"/>)
+  const g = { ...f, cycle_on: Number(f.cycle_on), cycle_off: Number(f.cycle_off) }
+  const rs = hasCycle(g) ? cycleRounds(g, 2) : []
+  const yy = s => s.slice(2, 4)
+  return (
+    <div className="mt-3">
+      <div className="text-[15px] text-gray-700 leading-[2.4]">
+        Dùng{n('cycle_on', 'Dùng liên tục')}ngày, nghỉ{n('cycle_off', 'Rồi nghỉ')}ngày, từ
         <input type="date" value={f.cycle_start || ''} onChange={e => e.target.value && set('cycle_start', e.target.value)} aria-label="Bắt đầu đợt 1"
-          className="flex-1 min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-1.5 text-base bg-white"/></label>
-      {num('cycle_warn_end', 'Nhắc trước khi hết đợt', 'ngày')}
-      {num('cycle_warn_back', 'Nhắc trước khi dùng lại', 'ngày')}
-      {preview.length > 0 && <div className="text-xs text-emerald-900 mt-1 leading-relaxed">
-        {preview.map(r => <div key={r.round}>Đợt {r.round}: 💊 {dm(r.on)}/{r.on.slice(2, 4)} → {dm(r.onEnd)}/{r.onEnd.slice(2, 4)} · ⏸ nghỉ {dm(r.offStart)} → {dm(r.offEnd)}</div>)}
-        <div className="text-emerald-700">Ngày nghỉ Daily tự ẩn, không tính là bỏ sót · nhắc ở tóm tắt buổi sáng</div>
-      </div>}
+          className="ml-1 inline-block align-middle w-[9.5rem] h-9 appearance-none border border-gray-200 rounded-lg px-2 py-1 text-base bg-white"/>
+      </div>
+      {rs.length > 0 && <>
+        <div className="flex h-2 rounded overflow-hidden gap-0.5 mt-1" aria-hidden="true">
+          {[0, 1].map(i => <React.Fragment key={i}><i className="bg-emerald-600" style={{ flex: g.cycle_on }}/><i className="bg-gray-300" style={{ flex: g.cycle_off }}/></React.Fragment>)}</div>
+        <div className="text-xs text-emerald-800 mt-1.5">💊 {dm(rs[0].on)}/{yy(rs[0].on)} → {dm(rs[0].onEnd)}/{yy(rs[0].onEnd)} · ⏸ nghỉ tới {dm(rs[0].offEnd)} · 💊 đợt 2 từ {dm(rs[1].on)}/{yy(rs[1].on)}</div>
+      </>}
+      {editRm
+        ? <div className="text-[13px] text-gray-600 mt-2 leading-[2.4]">🔔 Nhắc trước{n('cycle_warn_end', 'Nhắc trước khi hết đợt', 0)}ngày khi hết đợt ·{n('cycle_warn_back', 'Nhắc trước khi dùng lại', 0)}ngày khi dùng lại (0 = không nhắc)</div>
+        : <button onClick={() => setEditRm(true)} className="text-xs text-gray-500 mt-2 text-left">🔔 Nhắc trước {Number(f.cycle_warn_end) || 0} ngày khi hết đợt · {Number(f.cycle_warn_back) || 0} ngày khi dùng lại <b className="text-purple-700 ml-1">sửa</b></button>}
+      <div className="text-[11px] text-gray-400 mt-1">Ngày nghỉ Daily tự ẩn, không tính là bỏ sót</div>
     </div>
   )
 }
@@ -1791,6 +1802,14 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
     return { ...base, cycleOn: hadCycle, cycle_on: base.cycle_on || 90, cycle_off: base.cycle_off || 21, cycle_start: base.cycle_start || getLocalDateString(),
       cycle_warn_end: base.cycle_warn_end ?? 7, cycle_warn_back: base.cycle_warn_back ?? 3 } })
   const [cycErr, setCycErr] = useState('')
+  const [pick, setPick] = useState(false)                 // bảng chọn biểu tượng + màu
+  const [editRm, setEditRm] = useState(false)             // sửa số ngày nhắc của chu kỳ
+  // Lịch: Hằng ngày · Chọn thứ · Theo đợt — gộp "Ngày làm" và "Chu kỳ" làm một câu hỏi
+  const sched = f.cycleOn ? 'cycle' : (f.weekdays === '1234567' && !f.pickDays) ? 'daily' : 'week'
+  const setSched = s => { setCycErr('')
+    setF(x => s === 'daily' ? { ...x, cycleOn: false, pickDays: false, weekdays: '1234567' }
+      : s === 'week' ? { ...x, cycleOn: false, pickDays: true }
+      : { ...x, cycleOn: true, pickDays: false, weekdays: x.cycleOn ? x.weekdays : '1234567' }) }
   const set = (k, v) => setF(x => ({ ...x, [k]: v }))
   const toggleDay = n => set('weekdays', f.weekdays.includes(n) ? f.weekdays.replace(n, '') : [...f.weekdays + n].sort().join(''))
   const save = () => {
@@ -1817,18 +1836,25 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
         <button onClick={() => onManual?.(initial)} className="flex-1 py-3 rounded-xl bg-white text-emerald-800 font-semibold border border-emerald-200">✎ Nhập tay</button>
       </div>}
       <div className="bg-white rounded-2xl p-4 flex flex-col gap-4">
-        <label className="block"><span className="text-xs text-gray-500">Tên</span>
-          <input value={f.name} onChange={e => set('name', e.target.value)} placeholder="Ví dụ: Học tiếng Trung" className="w-full mt-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/></label>
-        <div><span className="text-xs text-gray-500">Biểu tượng</span><div className="flex flex-wrap gap-1.5 mt-1">{EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => set('emoji', e)} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div></div>
-        <div><span className="text-xs text-gray-500">Màu</span><div className="flex flex-wrap gap-2.5 mt-1">{COLORS.map(c =>
-          <button key={c} onClick={() => set('color', c)} aria-label={'Màu ' + c} aria-pressed={f.color === c} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div></div>
-        <div><span className="text-xs text-gray-500">Cách theo dõi</span><div className="flex flex-wrap gap-1.5 mt-1">
-          <Chip on={f.kind === 'time'} onClick={() => setF(x => ({ ...x, kind: 'time', target_min: x.kind === 'time' ? x.target_min : 30 }))}>⏱ Bấm giờ</Chip>
-          <Chip on={f.kind === 'count'} onClick={() => setF(x => ({ ...x, kind: 'count', target_min: x.kind === 'count' ? x.target_min : 100, unit: x.unit || 'cái' }))}>🔢 Đếm số lượng</Chip>
-          <Chip on={f.kind === 'tick'} onClick={() => set('kind', 'tick')}>✓ Chỉ đánh dấu xong</Chip></div></div>
-        {f.kind === 'time' && <div><span className="text-xs text-gray-500">Mục tiêu mỗi ngày</span><div className="flex flex-wrap gap-1.5 mt-1">
+        <div className="text-[11px] font-bold tracking-wider text-gray-400">VIỆC GÌ</div>
+        <div className="flex gap-2 -mt-1">
+          <button onClick={() => setPick(x => !x)} aria-label="Biểu tượng và màu" aria-expanded={pick}
+            className="w-12 h-12 flex-shrink-0 rounded-xl border-2 text-2xl flex items-center justify-center" style={{ borderColor: f.color, background: f.color + '22' }}>{f.emoji}</button>
+          <input value={f.name} onChange={e => set('name', e.target.value)} placeholder="Ví dụ: Học tiếng Trung" aria-label="Tên"
+            className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+        </div>
+        {pick && <div className="bg-gray-50 rounded-xl p-3 flex flex-col gap-3 -mt-1">
+          <div className="flex flex-wrap gap-1.5">{EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => set('emoji', e)} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div>
+          <div className="flex flex-wrap gap-2.5">{COLORS.map(c =>
+            <button key={c} onClick={() => set('color', c)} aria-label={'Màu ' + c} aria-pressed={f.color === c} className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm font-bold" style={{ background: c, outline: f.color === c ? '3px solid #1F2937' : 'none', outlineOffset: 2 }}>{f.color === c && '✓'}</button>)}</div>
+          <button onClick={() => setPick(false)} className="self-end text-sm font-semibold text-purple-700 px-2">Xong</button>
+        </div>}
+        <div><span className="text-xs text-gray-500">Theo dõi bằng</span>
+          <Seg3 value={f.kind} onChange={k => setF(x => k === x.kind ? x : k === 'time' ? { ...x, kind: 'time', target_min: 30 } : k === 'count' ? { ...x, kind: 'count', target_min: 100, unit: x.unit || 'cái' } : { ...x, kind: 'tick' })}
+            options={[['time', '⏱ Bấm giờ'], ['count', '🔢 Đếm'], ['tick', '✓ Đánh dấu']]} label="Theo dõi bằng"/></div>
+        {f.kind === 'time' && <div><span className="text-xs text-gray-500">Mỗi ngày</span><div className="flex flex-wrap gap-1.5 mt-1">
           {[15, 20, 30, 45, 60, 90, 120].map(m => <Chip key={m} on={f.target_min === m} onClick={() => set('target_min', m)}>{du(m)}</Chip>)}</div></div>}
-        {f.kind === 'count' && <div><span className="text-xs text-gray-500">Mục tiêu mỗi ngày</span>
+        {f.kind === 'count' && <div><span className="text-xs text-gray-500">Mỗi ngày</span>
           <div className="flex gap-2 mt-1">
             <input type="number" inputMode="numeric" value={f.target_min || ''} onChange={e => set('target_min', Math.max(1, Math.round(Number(e.target.value) || 0)))} aria-label="Số lượng mục tiêu"
               className="w-28 min-w-0 border border-gray-200 rounded-xl px-3 py-2.5 text-base text-center font-semibold"/>
@@ -1837,10 +1863,19 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
           </div>
           <div className="flex flex-wrap gap-1.5 mt-1.5">{['cái', 'lần', 'trang', 'km', 'ly', 'bài'].map(u => <Chip key={u} on={f.unit === u} onClick={() => set('unit', u)}>{u}</Chip>)}</div>
         </div>}
-        <div><span className="text-xs text-gray-500">Ngày làm</span><div className="flex gap-1.5 mt-1">
-          {WD.map((w, i) => <Chip key={w} on={f.weekdays.includes(String(i + 1))} onClick={() => toggleDay(String(i + 1))} cls="flex-1 px-0">{w}</Chip>)}</div>
-          {!f.weekdays && <p className="text-xs text-red-500 mt-1">Chọn ít nhất một ngày</p>}</div>
-        <div><span className="text-xs text-gray-500">Giờ bắt đầu</span>
+
+        <div className="text-[11px] font-bold tracking-wider text-gray-400 border-t border-gray-100 pt-4 mt-1">KHI NÀO</div>
+        <div className="-mt-1"><span className="text-xs text-gray-500">Lịch</span>
+          <Seg3 value={sched} onChange={setSched} options={[['daily', 'Hằng ngày'], ['week', 'Chọn thứ'], ['cycle', 'Theo đợt']]} label="Lịch"/>
+          {sched === 'week' && <><div className="flex gap-1.5 mt-2">
+            {WD.map((w, i) => { const on = f.weekdays.includes(String(i + 1))
+              return <button key={w} onClick={() => toggleDay(String(i + 1))} aria-pressed={on}
+                className={`flex-1 py-2 rounded-lg text-[13px] ${on ? 'bg-purple-100 text-purple-800 font-bold' : 'bg-gray-100 text-gray-500'}`}>{w}</button> })}</div>
+            {!f.weekdays && <p className="text-xs text-red-500 mt-1">Chọn ít nhất một ngày</p>}</>}
+          {sched === 'cycle' && <CycleFields f={f} set={(k, val) => { set(k, val); setCycErr('') }} editRm={editRm} setEditRm={setEditRm}/>}
+          {cycErr && <p className="text-xs text-red-600 mt-2" role="alert">{cycErr}</p>}
+        </div>
+        <div><span className="text-xs text-gray-500">Giờ</span>
           <div className="flex gap-2 mt-1 items-center">
             <Chip on={!f.start_time} onClick={() => setF(x => ({ ...x, start_time: '', remind: false }))}>Lúc nào cũng được</Chip>
             <label className={`relative flex-1 min-w-0 flex items-center justify-center rounded-xl px-3 py-2.5 text-[15px] cursor-pointer border
@@ -1855,15 +1890,6 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
             <div className="flex-1"><div className="text-[15px] text-gray-800">Nhắc khi tới giờ</div><div className="text-xs text-gray-500">Gửi thông báo lúc {f.start_time} những ngày có làm</div></div>
             <Switch on={!!f.remind} onClick={() => set('remind', !f.remind)} label="Nhắc khi tới giờ"/>
           </div>}
-        </div>
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="flex-1"><div className="text-[15px] text-gray-800">💊 Chu kỳ dùng – nghỉ</div>
-              <div className="text-xs text-gray-500">Ví dụ thuốc bổ: dùng 90 ngày rồi nghỉ 21 ngày, lặp lại</div></div>
-            <Switch on={!!f.cycleOn} onClick={() => { set('cycleOn', !f.cycleOn); setCycErr('') }} label="Chu kỳ dùng – nghỉ"/>
-          </div>
-          {f.cycleOn && <CycleFields f={f} set={(k, val) => { set(k, val); setCycErr('') }}/>}
-          {cycErr && <p className="text-xs text-red-600 mt-2" role="alert">{cycErr}</p>}
         </div>
         {projects.some(p => !p.archived) && <label className="text-xs text-gray-500">Thuộc kế hoạch
           <select value={f.project_id || ''} onChange={e => set('project_id', e.target.value)} aria-label="Thuộc kế hoạch"
