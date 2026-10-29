@@ -188,6 +188,17 @@ export function planGroups(p, tasks) {
   for (const name of projectGroups(p.id, tasks)) if (!list.some(g => g.name === name)) list.push({ name, due: null })
   return list
 }
+// Mục tiêu nhỏ cũ chưa có hạn mà tên có ngày ở cuối → tách ra. Trả về null nếu không cần đổi.
+// refDay = ngày bắt đầu kế hoạch (không lấy hôm nay, để "30/10" không bị hiểu sang năm sau khi mở muộn)
+export function normalizeGroups(groups, refDay) {
+  let changed = false
+  const out = (groups || []).map(g => { if (g.due) return g
+    const x = parseGoalLine(g.name, refDay); if (!x.due || !x.name || x.name === g.name) return g
+    changed = true; return x })
+  const names = out.map(g => g.name.toLowerCase())
+  if (!changed || names.some((n, i) => names.indexOf(n) !== i)) return null   // tách ra mà trùng tên mục khác → để nguyên
+  return out
+}
 // ── TIẾN ĐỘ KẾ HOẠCH: mục tiêu lớn → mục tiêu nhỏ → việc ──
 // Việc thường: xong / chưa. Việc ↻ lặp (vd hằng ngày tới hạn mục tiêu nhỏ): số lần đã làm / số lần cần làm.
 export function jobProgress(t) {
@@ -223,7 +234,7 @@ export function planProgress(p, tasks, today) {
   const allDone = groups.length > 0 && groups.every(g => g.state === 'done')
   return { groups, pct, done: ts.filter(t => jobProgress(t) >= 1).length, total: ts.length,
     groupsDone: groups.filter(g => g.state === 'done').length, late, risk,
-    light: !groups.length ? 'empty' : allDone ? 'done' : late ? 'late' : risk ? 'risk' : 'ok',
+    light: !groups.length ? 'empty' : late ? 'late' : !ts.length ? 'notask' : allDone ? 'done' : risk ? 'risk' : 'ok',   // chưa có việc → không báo "đúng tiến độ"
     daysLeft: p.deadline ? daysBetween(p.deadline, today) : null }
 }
 // Nhịp độ: so tốc độ làm thật với thời gian còn lại.

@@ -8,7 +8,7 @@ import {
 import { getLocalDateString } from '../lib/helpers'
 import { lunarOf, isTraiDay, isMakeupDay, hairOf } from '../lib/lunar'
 import {
-  PEOPLE, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG, loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick, saveProject, deleteProject, setProjectShared, projectProgress, projectGroups, addManual, deleteLog, quickSteps, saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary, addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats, parseGroupLines, nextPlanTask, planFlags, groupRenames, renameGroupTasks, hasCycle, cyclePhase, cycleEvents, cycleRounds, isRolling, rollNext, planProgress, parseGoalLine, jobProgress } from '../lib/viec'
+  PEOPLE, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG, loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick, saveProject, deleteProject, setProjectShared, projectProgress, projectGroups, addManual, deleteLog, quickSteps, saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary, addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats, parseGroupLines, nextPlanTask, planFlags, groupRenames, renameGroupTasks, hasCycle, cyclePhase, cycleEvents, cycleRounds, isRolling, rollNext, planProgress, parseGoalLine, jobProgress, normalizeGroups } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
@@ -1024,7 +1024,7 @@ function ShareSeg({ shared, onChange, who, owner, noun = 'việc' }) {
 // ── CHI TIẾT VIỆC (To-do): chạm vào việc ở bất kỳ đâu đều mở bảng này ──
 function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, onTick, onClose }) {
   const series = isSeries(t)
-  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0 })
+  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0, notify: t.notify || 'both' })
   const [rep, setRep] = useState(series
     ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
     : { unit: '', every: 1, start: t.due_date, until: '', custom: false, after: t.repeat_after || 30, afterOn: !!t.repeat_after })
@@ -1037,7 +1037,9 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
     const proj = projects.find(p => p.id === f.project_id)
     const base = { title: f.title.trim(), due_time: f.due_time || null, shared: mine ? (f.shared || !!proj?.shared) : t.shared,   // vào dự án chung → việc thành chung
       project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null,
-      ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}) }   // chỉ gửi khi đổi
+      ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}),
+      ...(f.shared && f.notify !== (t.notify || 'both') ? { notify: f.notify === 'both' ? null : f.notify }
+        : !f.shared && t.notify ? { notify: null } : {}) }   // chỉ gửi khi đổi; thôi chia sẻ → bỏ lựa chọn nhắc cho
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
     if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc kế hoạch cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
     const rolling = !rep.unit && rep.afterOn
@@ -1071,6 +1073,12 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
         </div>}
         <div className="mt-2"><TimePicker value={f.due_time} onChange={h => setF({ ...f, due_time: h })}/></div>
         {(f.due_date || rep.unit) && <div className="mt-2"><RemindDays value={f.remind_days} onChange={n => setF({ ...f, remind_days: n })}/></div>}
+        {f.shared && <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] text-gray-600" role="radiogroup" aria-label="Nhắc cho">
+          <span>🔔 Nhắc cho</span>
+          {[['linh', PEOPLE.linh], ['mai', PEOPLE.mai], ['both', 'Cả hai']].map(([k, l]) =>
+            <button key={k} role="radio" aria-checked={f.notify === k} onClick={() => setF({ ...f, notify: k })}
+              className={`px-2.5 py-1 rounded-lg text-xs ${f.notify === k ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-100 text-gray-600'}`}>{l}</button>)}
+        </div>}
         <div className="mt-2"><RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/></div>
         {series && <p className="text-xs text-gray-500 mt-1.5">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
 
@@ -1479,7 +1487,7 @@ const PSTATE = {
   done: ['border-emerald-300', 'text-emerald-700', '✓ Xong'], ok: ['border-emerald-500', 'text-emerald-700', 'Đúng tiến độ'],
   risk: ['border-amber-400', 'text-amber-700 font-semibold', 'Có nguy cơ trễ'], late: ['border-red-500', 'text-red-600 font-semibold', 'Trễ'],
   empty: ['border-gray-200', 'text-gray-400', 'Chưa có việc'], nodue: ['border-gray-200', 'text-gray-400', 'Chưa có hạn'] }
-const LIGHT = { ok: ['bg-emerald-800', '🟢 Đúng tiến độ'], done: ['bg-emerald-800', '✅ Đã hoàn thành'], risk: ['bg-amber-800', '🟠 Có nguy cơ trễ'], late: ['bg-red-800', '🔴 Trễ'], empty: ['bg-gray-600', 'Chưa có mục tiêu nhỏ'] }
+const LIGHT = { ok: ['bg-emerald-800', '🟢 Đúng tiến độ'], done: ['bg-emerald-800', '✅ Đã hoàn thành'], risk: ['bg-amber-800', '🟠 Có nguy cơ trễ'], late: ['bg-red-800', '🔴 Trễ'], empty: ['bg-gray-600', 'Chưa có mục tiêu nhỏ'], notask: ['bg-gray-600', 'Chưa có việc nào — thêm việc vào mục tiêu nhỏ'] }
 const lightText = g => g.light === 'late' ? `🔴 Trễ: ${g.late} mục tiêu nhỏ quá hạn` : g.light === 'risk' ? `🟠 Có nguy cơ trễ: ${g.risk} mục tiêu nhỏ` : LIGHT[g.light][1]
 
 function ProjectCard({ p, tasks, today, onOpen }) {
@@ -1525,6 +1533,13 @@ function ProjectDetail({ who, project: p, tasks, today, daily = [], logs = [], o
   const [open, setOpen] = useState(() => new Set())
   const [newSubs, setNewSubs] = useState(''), [subErr, setSubErr] = useState('')
   const g = planProgress(p, tasks, today)
+  const fixed = useRef(null)
+  useEffect(() => {                                     // mục tiêu nhỏ cũ "Bàn pha chế shop 5/11" → tên "Bàn pha chế shop", hạn 5/11
+    if (fixed.current === p.id || !(p.owner === who || p.shared)) return
+    fixed.current = p.id
+    const ng = normalizeGroups(p.groups, p.start_date || today)
+    if (ng) onSaveProject({ id: p.id, groups: ng })    // đổi tên cùng vị trí → việc trong đó tự chuyển theo
+  }, [p.id])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ một lần khi mở kế hoạch
   const groups = [...g.groups].sort((x, y) => (x.due || '9999').localeCompare(y.due || '9999'))
   const canEdit = p.owner === who || p.shared
   const toggle = name => setOpen(s => { const n = new Set(s); n.has(name) ? n.delete(name) : n.add(name); return n })
@@ -1603,15 +1618,16 @@ function BigGoal({ p, g, onEdit }) {
 
 // Một mục tiêu nhỏ: hạn, %, x/y việc, tình trạng; mở ra là danh sách việc + ô thêm việc chọn "khi nào làm"
 function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpenTask, onSave, onRemove }) {
-  const [title, setTitle] = useState(''), [when, setWhen] = useState('due'), [pick, setPick] = useState(today)
+  const [title, setTitle] = useState(''), [when, setWhen] = useState('due'), [pick, setPick] = useState(today), [notify, setNotify] = useState('both')
   const [edit, setEdit] = useState(false), [line, setLine] = useState(''), [confirmDel, setConfirmDel] = useState(false), [editErr, setEditErr] = useState('')
   const S = PSTATE[sg.state] || PSTATE.empty
   const label = sg.state === 'late' ? `Trễ ${-sg.daysLeft} ngày` : sg.state === 'ok' ? (sg.daysLeft === 0 ? 'Hạn hôm nay' : `Đúng tiến độ · còn ${sg.daysLeft} ngày`)
-    : sg.state === 'risk' ? `Có nguy cơ trễ · còn ${sg.daysLeft} ngày` : S[2]
+    : sg.state === 'risk' ? `Có nguy cơ trễ · còn ${sg.daysLeft} ngày` : sg.state === 'nodue' ? '' : S[2]
   const dueOf = () => sg.due || p.deadline || today
   const add = () => {
     const t = title.trim(); if (!t) return
-    const base = { title: t, project_id: p.id, group_name: sg.name === 'Chung' ? null : sg.name, shared: p.shared }
+    const base = { title: t, project_id: p.id, group_name: sg.name === 'Chung' ? null : sg.name, shared: p.shared,
+      ...(p.shared && notify !== 'both' ? { notify } : {}) }   // chỉ gửi khi khác mặc định (an toàn nếu chưa chạy SQL)
     if (when === 'daily') { const until = dueOf() < today ? today : dueOf()
       onAdd({ ...base, due_date: today, repeat_unit: 'day', repeat_every: 1, repeat_start: today, repeat_until: until }) }
     else onAdd({ ...base, due_date: when === 'today' ? today : when === 'tmr' ? addDays(today, 1) : when === 'pick' ? (pick || today) : dueOf(), repeat_unit: '', repeat_every: 1 })
@@ -1624,7 +1640,7 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
     <div className={`bg-white rounded-2xl border-l-[5px] overflow-hidden ${S[0]} ${sg.state === 'done' ? 'opacity-80' : ''}`}>
       <button onClick={onToggle} aria-expanded={isOpen} className="w-full flex items-center gap-3 px-3 py-3 text-left">
         <span className="flex-1 min-w-0"><span className="block text-[15px] font-semibold text-gray-800">{sg.name}</span>
-          <span className="block text-xs text-gray-500 mt-0.5">{sg.due ? `Hạn ${WD_SHORT[new Date(sg.due + 'T00:00:00').getDay()]} ${dm(sg.due)}` : 'Chưa có hạn'} · <span className={S[1]}>{label}</span></span></span>
+          <span className="block text-xs text-gray-500 mt-0.5">{sg.due ? `Hạn ${WD_SHORT[new Date(sg.due + 'T00:00:00').getDay()]} ${dm(sg.due)}` : 'Chưa có hạn'}{label && <> · <span className={S[1]}>{label}</span></>}</span></span>
         <span className="flex flex-col items-end gap-1"><b className="text-sm text-gray-800">{sg.pct}%</b>
           <span className="block w-16 h-1.5 rounded-full bg-gray-100 overflow-hidden"><span className="block h-full bg-emerald-500" style={{ width: sg.pct + '%' }}/></span>
           <span className="text-[11px] text-gray-400">{sg.done}/{sg.total} việc</span></span>
@@ -1648,7 +1664,8 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
               </button>
               <span className={`text-[11px] rounded-lg px-2 py-0.5 whitespace-nowrap ${series ? 'bg-emerald-50 text-emerald-800' : late ? 'bg-red-50 text-red-700' : t.due_date === today ? 'bg-purple-50 text-purple-800 font-semibold' : 'bg-gray-100 text-gray-600'}`}>
                 {series ? `↻ ${t.repeat_unit === 'day' && t.repeat_every === 1 ? 'hằng ngày' : describe(t)}${t.repeat_until ? ' → ' + dm(t.repeat_until) : ''}`
-                  : t.due_date ? (t.due_date === today ? 'hôm nay' : (late ? 'quá hạn ' : '') + dm(t.due_date)) : 'chưa có ngày'}</span>
+                  : t.due_date ? (t.due_date === today ? 'hạn hôm nay' : (late ? 'quá hạn ' : 'hạn ') + dm(t.due_date)) : 'chưa có hạn'}</span>
+              {t.shared && (n => <span title={'Nhắc cho ' + (n === 'both' ? 'cả hai' : PEOPLE[n])} className="text-[10px] font-bold text-blue-700 bg-blue-50 rounded px-1.5 py-0.5">{n === 'both' ? 'L·M' : n === 'mai' ? 'M' : 'L'}</span>)(t.notify || 'both')}
             </div>) })}
         {canEdit && <>
           <div className="flex gap-2 mt-2">
@@ -1657,7 +1674,7 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
             <button onClick={add} className="bg-purple-600 text-white rounded-xl px-4 font-semibold text-sm">Thêm</button>
           </div>
           <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-gray-500" role="radiogroup" aria-label="Khi nào làm">
-            <span>Làm:</span>
+            <span>Hạn:</span>
             {[['due', sg.due ? 'hạn ' + dm(sg.due) : 'hạn'], ['today', 'hôm nay'], ['tmr', 'mai'], ['pick', '📅 ngày khác'], ['daily', '↻ hằng ngày']].map(([k, l]) =>
               <button key={k} role="radio" aria-checked={when === k} onClick={() => setWhen(k)}
                 className={`px-2.5 py-1 rounded-lg ${when === k ? 'bg-purple-600 text-white font-semibold' : 'bg-gray-100 text-gray-600'}`}>{l}</button>)}
@@ -1665,6 +1682,13 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
               className="block appearance-none border border-gray-200 rounded-lg px-2 py-1 text-base bg-white w-[9.5rem]"/>}
           </div>
           {when === 'daily' && <p className="text-[11px] text-gray-400 mt-1">Hiện trong lịch mỗi ngày từ hôm nay tới {dm(dueOf())}</p>}
+          {(d => sg.due && d && d > sg.due && <p className="text-[11px] text-amber-700 mt-1" role="alert">⚠ Hạn {dm(d)} sau hạn {sg.name} {dm(sg.due)}</p>)(when === 'today' ? today : when === 'tmr' ? addDays(today, 1) : when === 'pick' ? pick : null)}
+          {p.shared && <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-gray-500" role="radiogroup" aria-label="Nhắc cho">
+            <span>Nhắc cho:</span>
+            {[['linh', PEOPLE.linh], ['mai', PEOPLE.mai], ['both', 'Cả hai']].map(([k, l]) =>
+              <button key={k} role="radio" aria-checked={notify === k} onClick={() => setNotify(k)}
+                className={`px-2.5 py-1 rounded-lg ${notify === k ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-100 text-gray-600'}`}>{l}</button>)}
+          </div>}
           <div className="mt-2.5 text-right">
             {edit ? <div className="flex gap-2 items-center">
                 <input value={line} onChange={e => { setLine(e.target.value); setEditErr('') }} aria-label="Sửa mục tiêu nhỏ" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2 text-base"/>
