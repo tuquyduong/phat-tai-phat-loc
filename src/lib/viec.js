@@ -162,19 +162,24 @@ export function parseLines(text) {
   }
   return out
 }
-// Hạng mục: "Tên | 15/11" hoặc "Tên | 15/11/2027". Không ghi năm → lấy lần gần nhất từ refDay trở đi.
+// Mục tiêu nhỏ gõ tự nhiên, ngày ở cuối: "Chốt menu 30/10", "Mua nguyên liệu 5-10/11" (hạn = ngày cuối),
+// "Pháp lý | 31/10", "Bàn ghế 7/11/2027". Không ghi năm → lần gần nhất từ refDay trở đi.
+export function parseGoalLine(line, refDay) {
+  if (String(line).includes('|')) {                              // kiểu cũ "Tên | ngày": phần trước dấu | luôn là tên
+    const [name, rest = ''] = String(line).split('|').map(x => x.trim())
+    const d = rest ? parseGoalLine('x ' + rest, refDay).due : null
+    return { name, due: d }
+  }
+  const m = String(line).match(/^(.*?)[\s|·:,-]*(?:(\d{1,2})\s*[-–]\s*)?(\d{1,2})[/.](\d{1,2})(?:[/.](\d{2,4}))?\s*$/)
+  if (!m || !m[1].trim()) return { name: String(line).replace(/\s*\|\s*$/, '').trim(), due: null }
+  const dd = +m[3], mm = +m[4]; let yy = m[5] ? +m[5] : +refDay.slice(0, 4); if (yy < 100) yy += 2000
+  if (!(mm >= 1 && mm <= 12 && dd >= 1 && dd <= new Date(yy, mm, 0).getDate())) return { name: String(line).trim(), due: null }
+  let due = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`
+  if (!m[5] && due < refDay && daysBetween(refDay, due) > 60) due = `${yy + 1}${due.slice(4)}`   // "5/1" gõ vào tháng 11 → năm sau
+  return { name: m[1].trim(), due }
+}
 export function parseGroupLines(text, refDay) {
-  return parseLines(text).map(line => {
-    const [name, d] = line.split('|').map(x => x.trim())
-    const m = d && d.match(/^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?$/)
-    let due = null
-    if (m) {
-      const dd = +m[1], mm = +m[2]; let yy = m[3] ? +m[3] : +refDay.slice(0, 4); if (yy < 100) yy += 2000
-      const ok = mm >= 1 && mm <= 12 && dd >= 1 && dd <= new Date(yy, mm, 0).getDate()
-      if (ok) { due = `${yy}-${String(mm).padStart(2, '0')}-${String(dd).padStart(2, '0')}`; if (!m[3] && due < refDay) due = `${yy + 1}${due.slice(4)}` }
-    }
-    return { name, due }
-  }).filter(g => g.name)
+  return parseLines(text).map(l => parseGoalLine(l, refDay)).filter(g => g.name)
 }
 export const groupsToText = groups => (groups || []).map(g => g.due ? `${g.name} | ${+g.due.slice(8)}/${+g.due.slice(5, 7)}/${g.due.slice(0, 4)}` : g.name).join('\n')
 // Hạng mục của kế hoạch: theo thứ tự đã khai báo, cộng các nhóm có trong việc mà chưa khai báo
@@ -182,6 +187,44 @@ export function planGroups(p, tasks) {
   const list = (p.groups || []).map(g => ({ name: g.name, due: g.due || null }))
   for (const name of projectGroups(p.id, tasks)) if (!list.some(g => g.name === name)) list.push({ name, due: null })
   return list
+}
+// ── TIẾN ĐỘ KẾ HOẠCH: mục tiêu lớn → mục tiêu nhỏ → việc ──
+// Việc thường: xong / chưa. Việc ↻ lặp (vd hằng ngày tới hạn mục tiêu nhỏ): số lần đã làm / số lần cần làm.
+export function jobProgress(t) {
+  if (!isSeries(t)) return t.done ? 1 : 0
+  const from = t.repeat_start || t.due_date, to = t.repeat_until
+  if (!from || !to) return 0                                     // lặp không có ngày dừng: không tính vào %
+  const occ = occurrencesBetween(t, from, to)
+  if (!occ.length) return 0
+  const done = new Set(t.done_dates || [])
+  return Math.min(1, occ.filter(d => done.has(d)).length / occ.length)
+}
+// Trạng thái mỗi mục tiêu nhỏ: xong · trễ · có nguy cơ trễ (làm chậm hơn thời gian trôi 15%) · đúng tiến độ
+export function planProgress(p, tasks, today) {
+  const ts = tasks.filter(t => t.project_id === p.id)
+  const groups = planGroups(p, tasks).map(g => {
+    const list = ts.filter(t => (t.group_name || 'Chung') === g.name)
+    const pct = list.length ? Math.round(list.reduce((a, t) => a + jobProgress(t), 0) / list.length * 100) : 0
+    const done = list.filter(t => jobProgress(t) >= 1).length
+    let state
+    if (list.length && pct >= 100) state = 'done'
+    else if (!g.due) state = list.length ? 'nodue' : 'empty'
+    else if (g.due < today) state = 'late'
+    else if (!list.length) state = 'empty'
+    else {
+      const first = list.reduce((m, t) => { const d = t.repeat_start || t.due_date || today; return d < m ? d : m }, g.due)
+      const span = Math.max(1, daysBetween(g.due, first)), timePct = Math.max(0, Math.min(100, daysBetween(today, first) / span * 100))
+      state = pct + 15 < timePct ? 'risk' : 'ok'
+    }
+    return { ...g, list, pct, done, total: list.length, state, daysLeft: g.due ? daysBetween(g.due, today) : null }
+  })
+  const pct = groups.length ? Math.round(groups.reduce((a, g) => a + g.pct, 0) / groups.length) : 0
+  const late = groups.filter(g => g.state === 'late').length, risk = groups.filter(g => g.state === 'risk').length
+  const allDone = groups.length > 0 && groups.every(g => g.state === 'done')
+  return { groups, pct, done: ts.filter(t => jobProgress(t) >= 1).length, total: ts.length,
+    groupsDone: groups.filter(g => g.state === 'done').length, late, risk,
+    light: !groups.length ? 'empty' : allDone ? 'done' : late ? 'late' : risk ? 'risk' : 'ok',
+    daysLeft: p.deadline ? daysBetween(p.deadline, today) : null }
 }
 // Nhịp độ: so tốc độ làm thật với thời gian còn lại.
 // Tốc độ = nhanh hơn giữa "2 tuần gần nhất" và "trung bình từ khi bắt đầu" — nghỉ vài ngày không báo đỏ ngay.
@@ -228,8 +271,10 @@ export function groupRenames(oldGroups = [], newGroups = []) {
     if (oldN[i] !== newN[i] && !newN.includes(oldN[i]) && !oldN.includes(newN[i])) out.push({ from: oldN[i], to: newN[i] })
   return out
 }
+// from = null → các việc chưa thuộc mục tiêu nhỏ nào (nhóm "Chung")
 export async function renameGroupTasks(projectId, from, to) {
-  const { data, error } = await supabase.from('viec_tasks').update({ group_name: to }).eq('project_id', projectId).eq('group_name', from).select()
+  const q = supabase.from('viec_tasks').update({ group_name: to }).eq('project_id', projectId)
+  const { data, error } = await (from === null ? q.is('group_name', null) : q.eq('group_name', from)).select()
   if (error) throw error
   return data || []
 }
@@ -238,8 +283,8 @@ export function planFlags(projects) {
   const f = {}
   for (const p of projects) {
     if (p.archived) continue
-    if (p.deadline) (f[p.deadline] = f[p.deadline] || []).push({ p, label: 'Hạn kế hoạch' })
-    for (const g of p.groups || []) if (g.due) (f[g.due] = f[g.due] || []).push({ p, label: 'Hạn hạng mục ' + g.name })
+    if (p.deadline) (f[p.deadline] = f[p.deadline] || []).push({ p, label: 'Hoàn thành kế hoạch' })
+    for (const g of p.groups || []) if (g.due) (f[g.due] = f[g.due] || []).push({ p, label: 'Hạn mục tiêu nhỏ ' + g.name })
   }
   return f
 }
