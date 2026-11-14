@@ -1373,18 +1373,31 @@ export function revenueReport(sales, jewelry, month) {
   const rows = sales.filter(inMonth).map(s => {
     const day = saleDay(s), total = saleTotal(s)
     const paidDay = s.paid ? (vnDay(s.paid_at) || day) : null
+    const dep = Math.min(Number(s.deposit) || 0, total)
+    const got = s.paid ? total : dep          // đã thu tới giờ: đủ tiền, hoặc tiền cọc
     return {
       id: s.id, day, label: saleLabel(s, jMap), qty: Number(s.qty) || 0, total,
       customer: customerOf(s),
       category: (s.jewelry_id && jMap[s.jewelry_id]?.category) || 'Hàng order',
       gift: total === 0,                       // giá 0đ = quà tặng
       paid: !!s.paid, paidDay, paidLate: !!(paidDay && paidDay !== day),
+      dep, got, owe: total - got,
     }
   }).sort((a, b) => (b.day || '').localeCompare(a.day || ''))
 
   const sold = rows.filter(r => !r.gift), gifts = rows.filter(r => r.gift)
   const cats = {}
   sold.forEach(r => { cats[r.category] = (cats[r.category] || 0) + r.total })
+
+  // Tổng từng ngày bán (mới nhất lên đầu) — rows đã xếp theo ngày nên gom liền mạch
+  const days = []
+  rows.forEach(r => {
+    let d = days[days.length - 1]
+    if (!d || d.day !== r.day) days.push(d = { day: r.day, revenue: 0, got: 0, owe: 0, orders: 0, qty: 0, giftQty: 0, rows: [] })
+    d.rows.push(r)
+    if (r.gift) { d.giftQty += r.qty; return }
+    d.revenue += r.total; d.got += r.got; d.owe += r.owe; d.orders += 1; d.qty += r.qty
+  })
 
   // Bảng từng tháng (dùng cho chế độ Tất cả)
   const byMonth = {}
@@ -1396,7 +1409,9 @@ export function revenueReport(sales, jewelry, month) {
 
   return {
     rows,
+    days,
     revenue: sold.reduce((a, r) => a + r.total, 0),
+    got:     sold.reduce((a, r) => a + r.got, 0),
     orders:  sold.length,
     qty:     sold.reduce((a, r) => a + r.qty, 0),
     giftQty: gifts.reduce((a, r) => a + r.qty, 0),
@@ -1431,7 +1446,15 @@ export function cashflowReport(sales, jewelry, month) {
   })
   // Tiền về tháng này nhưng của đơn bán tháng trước = thu nợ cũ
   const fromOld = month ? list.filter(e => !(e.saleDay || '').startsWith(month)).reduce((a, e) => a + e.amount, 0) : 0
-  return { events: list, total, fromOld, byDay,
+  // Từng ngày tiền về: tổng, số khoản, phần thu nợ của đơn bán ngày trước
+  const days = []
+  list.forEach(e => {
+    let d = days[days.length - 1]
+    if (!d || d.day !== e.day) days.push(d = { day: e.day, total: 0, count: 0, fromOld: 0, events: [] })
+    d.events.push(e); d.total += e.amount; d.count += 1
+    if (e.saleDay && e.saleDay !== e.day) d.fromOld += e.amount
+  })
+  return { events: list, days, total, fromOld, byDay,
            months: Object.values(byMonth).sort((a, b) => b.month.localeCompare(a.month)) }
 }
 

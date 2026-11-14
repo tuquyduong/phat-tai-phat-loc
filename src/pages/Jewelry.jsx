@@ -88,8 +88,9 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
     getSuppliers().then(setSuppliers).catch(() => {})
   }, [])
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  // silent = true: tải lại ngầm, không hiện vòng xoay — màn đang xem (tháng, ngày đang mở) giữ nguyên
+  const loadData = useCallback(async (silent) => {
+    if (silent !== true) setLoading(true)
     try {
       const [j, s, t] = await Promise.all([getJewelry(), getJewelrySales(), getJewelryTrips()])
       setJewelry(j); setSales(s); setTrips(t)
@@ -282,7 +283,9 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
         <MountsTab toast={toast}/>
       ) : (
         soView === 'report'
-          ? <BcTab stats={stats} sales={sales} jewelry={jewelry}/>
+          ? <BcTab stats={stats} sales={sales} jewelry={jewelry} toast={toast}
+              onRefresh={() => loadData(true)}
+              onEditSale={s => setEditSale(s)}/>
           : soView === 'intake'
           ? <IntakeTab trips={trips} jewelry={jewelry} toast={toast} onRefresh={loadData}/>
           : <TripsTab trips={trips} jewelry={jewelry}
@@ -348,7 +351,7 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
         allSales={sales}
         customerNames={custNames}
         onClose={() => { setSellItem(null); setEditSale(null) }}
-        onSaved={() => { setSellItem(null); setEditSale(null); loadData() }}
+        onSaved={() => { setSellItem(null); setEditSale(null); loadData(modTab === 'so') }}
         toast={toast}/>
       <TripPickerModal isOpen={showTripPicker} trips={trips}
         activeTrip={activeTrip}
@@ -1328,9 +1331,62 @@ function KhachTab({ customers, sales, customerNotes, onNoteSaved }) {
 // ============================================
 // BÁO CÁO TAB
 // ============================================
-function BcTab({ stats, sales = [], jewelry = [] }) {
+// Ô lịch + khung số tổng cho một ngày trong Báo cáo (kiểu C)
+const WD_SHORT = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
+const WD_LONG  = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy']
+function DayHeader({ day, open, onToggle, amount, green = false, meta, note, noteClass = '', fill = '0%', paidPct = '0%' }) {
+  const [y, m, d] = (day || '0-0-0').split('-').map(Number)
+  const wd = new Date(y, m - 1, d).getDay()
+  const today = todayLocal(), yday = todayLocal(new Date(Date.now() - 86400000))
+  const name = day === today ? 'Hôm nay' : day === yday ? 'Hôm qua' : WD_LONG[wd]
+  return (
+    <button onClick={onToggle} aria-expanded={open}
+      className="w-full text-left px-4 py-3 flex items-center gap-3 active:bg-gray-50">
+      <div className={`w-11 h-11 rounded-xl flex flex-col items-center justify-center flex-shrink-0 leading-none
+        ${open ? 'bg-purple-600 text-white' : 'bg-purple-100 text-purple-800'}`}>
+        <span className="text-[17px] font-bold">{d}</span>
+        <span className="text-[9px] font-semibold mt-0.5">{WD_SHORT[wd]}</span>
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <span className="flex-1 text-[13px] font-semibold text-gray-800 truncate">{name} · {d}/{m}</span>
+          <span className={`text-sm font-bold px-2.5 py-1 rounded-lg border-[1.5px] whitespace-nowrap
+            ${green ? 'border-green-400 bg-green-50 text-green-700' : 'border-purple-400 bg-purple-50 text-purple-800'}`}>
+            {amount}
+          </span>
+        </div>
+        <div className="flex justify-between gap-2 mt-1 text-[11px]">
+          <span className="text-gray-500 truncate">{meta}</span>
+          {note && <span className={`font-semibold whitespace-nowrap ${noteClass}`}>{note}</span>}
+        </div>
+        <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden mt-1.5">
+          <div className={`h-full rounded-full overflow-hidden ${green ? 'bg-green-600' : 'bg-red-300'}`} style={{ width: fill }}>
+            {!green && <div className="h-full bg-green-600" style={{ width: paidPct }}/>}
+          </div>
+        </div>
+      </div>
+    </button>
+  )
+}
+
+function BcTab({ stats, sales = [], jewelry = [], toast, onRefresh, onEditSale }) {
   const [bcTab, setBcTab] = useState('dt')            // dt | tien | no | chay | ton
   const [month, setMonth] = useState(monthLocal())    // 'YYYY-MM' — null là Tất cả
+  const [openDays, setOpenDays] = useState({})        // 'dt:2026-11-12' → true/false; chưa bấm thì chỉ mở ngày mới nhất
+  const [selId, setSelId] = useState(null)            // món đang bấm để thu tiền / sửa
+  const [busy,  setBusy]  = useState(null)
+  const isOpen  = (t, day, first) => { const v = openDays[`${t}:${day}`]; return v === undefined ? day === first : v }
+  const setOpen = (t, list, val) => setOpenDays(o => { const n = { ...o }; list.forEach(d => { n[`${t}:${d}`] = val }); return n })
+  const pctOf   = (a, b) => `${b > 0 ? Math.min(100, a / b * 100) : 0}%`
+  const markPaid = async (r) => {
+    setBusy(r.id)
+    try {
+      await updateSaleStatus(r.id, 'paid', true)
+      toast?.success(`✓ Đã thu ${moneyFull(r.owe)}`)
+      onRefresh?.()
+    } catch (err) { toast?.error(err.message || 'Không lưu được') }
+    finally { setBusy(null) }
+  }
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const dm   = d => { if(!d) return ''; const [,m,day]=d.split('-'); return `${+day}/${+m}` }
   const mLab = m => m ? `Tháng ${+m.slice(5)}/${m.slice(0,4)}` : 'Tất cả các tháng'
@@ -1342,6 +1398,16 @@ function BcTab({ stats, sales = [], jewelry = [] }) {
   const prevM  = month ? prevMonthOf(month) : null           // tháng liền trước theo lịch
   const prev   = useMemo(() => prevM ? revenueReport(sales, jewelry, prevM).revenue : 0, [sales, jewelry, prevM])
   const mi     = month ? months.indexOf(month) : -1
+  // Số ngày tính trung bình: tháng này → tới hôm nay; tháng cũ → đủ cả tháng
+  const daysInView = !month ? 0 : month === monthLocal() ? Number(todayLocal().slice(8))
+    : new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()
+  const soldDays = rev.days.filter(d => d.revenue > 0).length
+  const dtFirst  = rev.days[0]?.day,  dtKeys = rev.days.map(d => d.day)
+  const dtAllOpen = dtKeys.length > 0 && dtKeys.every(d => isOpen('dt', d, dtFirst))
+  const dtMax    = Math.max(1, ...rev.days.map(d => d.revenue))
+  const cFirst   = cash.days[0]?.day, cKeys = cash.days.map(d => d.day)
+  const cAllOpen = cKeys.length > 0 && cKeys.every(d => isOpen('tien', d, cFirst))
+  const cMax     = Math.max(1, ...cash.days.map(d => d.total))
 
   const monthBar = (
     <div className="flex items-center gap-2 mx-3 mt-3">
@@ -1397,6 +1463,22 @@ function BcTab({ stats, sales = [], jewelry = [] }) {
                 </span>
               )}
             </div>
+            {rev.revenue > 0 && (
+              <>
+                <div className="h-2 bg-red-300 rounded-full overflow-hidden mt-2.5">
+                  <div className="h-full bg-green-600" style={{ width: pctOf(rev.got, rev.revenue) }}/>
+                </div>
+                <div className="flex justify-between gap-2 mt-1.5 text-xs font-semibold">
+                  <span className="text-green-700">Đã thu {moneyFull(rev.got)}</span>
+                  <span className={rev.revenue - rev.got > 0 ? 'text-red-700' : 'text-gray-400'}>Còn nợ {moneyFull(rev.revenue - rev.got)}</span>
+                </div>
+              </>
+            )}
+            {month && soldDays > 0 && (
+              <div className="text-[11px] text-gray-500 mt-1.5">
+                Có bán {soldDays}/{daysInView} ngày · trung bình {moneyFull(Math.round(rev.revenue / daysInView / 1000) * 1000)} mỗi ngày
+              </div>
+            )}
           </div>
 
           {!month && rev.months.length > 0 && (
@@ -1412,6 +1494,79 @@ function BcTab({ stats, sales = [], jewelry = [] }) {
                   <div className="text-sm font-bold text-green-600">{moneyFull(m.revenue)}</div>
                 </button>
               ))}
+            </>
+          )}
+
+          {month && (
+            <>
+              <div className="flex items-center justify-between pl-3 pr-1 mt-1">
+                <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Từng ngày · bấm để xem từng món</span>
+                {dtKeys.length > 0 && (
+                  <button onClick={() => setOpen('dt', dtKeys, !dtAllOpen)}
+                    className="px-2 py-2.5 text-xs font-semibold text-purple-600 active:opacity-60">
+                    {dtAllOpen ? 'Thu gọn' : 'Mở hết'}
+                  </button>
+                )}
+              </div>
+              {rev.days.length === 0 && (
+                <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn nào trong tháng này</div>
+              )}
+              {rev.days.map(dd => {
+                const open = isOpen('dt', dd.day, dtFirst)
+                return (
+                  <div key={dd.day} className="bg-white border-b border-gray-200">
+                    <DayHeader day={dd.day} open={open}
+                      onToggle={() => setOpen('dt', [dd.day], !open)}
+                      amount={moneyFull(dd.revenue)}
+                      meta={`${dd.orders} đơn · ${dd.qty} món${dd.giftQty ? ` · tặng ${dd.giftQty}` : ''}`}
+                      note={dd.revenue === 0 ? '' : dd.owe > 0 ? `còn nợ ${moneyFull(dd.owe)}` : 'đã thu đủ'}
+                      noteClass={dd.owe > 0 ? 'text-red-700' : 'text-green-700'}
+                      fill={pctOf(dd.revenue, dtMax)} paidPct={pctOf(dd.got, dd.revenue)}/>
+                    {open && dd.rows.map(r => {
+                      const sel = selId === r.id
+                      return (
+                        <div key={r.id} className={`border-t border-gray-100 ${sel ? 'bg-purple-50' : ''}`}>
+                          <button onClick={() => setSelId(sel ? null : r.id)}
+                            className="w-full text-left pl-[68px] pr-4 py-2 flex items-start gap-2 active:bg-gray-50">
+                            <div className="flex-1 min-w-0">
+                              <div className="text-xs font-medium text-gray-800 truncate">
+                                {r.label}{r.qty > 1 ? ` ×${r.qty}` : ''}
+                              </div>
+                              <div className="text-[10px] text-gray-500 truncate">{r.customer}</div>
+                            </div>
+                            <div className="text-right flex-shrink-0">
+                              <div className="text-xs font-semibold text-gray-800">{fmtMoney(r.total)}</div>
+                              {r.gift ? chip('Tặng', 'bg-purple-100 text-purple-700')
+                                : !r.paid ? chip('Còn nợ', 'bg-red-100 text-red-700')
+                                : r.paidLate ? chip(`Thu ${dm(r.paidDay)}`, 'bg-green-100 text-green-700')
+                                : chip('Đã thu', 'bg-green-100 text-green-700')}
+                            </div>
+                          </button>
+                          {sel && (
+                            <div className="pl-[68px] pr-4 pb-3 text-[11px] text-gray-600">
+                              Khách {r.customer} · bán {dm(r.day)}
+                              {r.dep > 0 && ` · đã cọc ${moneyFull(r.dep)}`}
+                              {r.gift ? ' · quà tặng' : r.paid ? ` · thu ngày ${dm(r.paidDay)}` : ` · còn nợ ${moneyFull(r.owe)}`}
+                              <div className="flex gap-2 mt-2">
+                                {!r.gift && !r.paid && (
+                                  <button onClick={() => markPaid(r)} disabled={busy === r.id}
+                                    className="px-3.5 py-2.5 rounded-lg bg-green-600 text-white text-xs font-semibold disabled:opacity-50 active:scale-95">
+                                    {busy === r.id ? 'Đang lưu…' : '✓ Đã thu đủ'}
+                                  </button>
+                                )}
+                                <button onClick={() => { const s = sales.find(x => x.id === r.id); if (s) onEditSale?.(s) }}
+                                  className="px-3.5 py-2.5 rounded-lg border border-gray-300 bg-white text-gray-700 text-xs font-medium active:scale-95">
+                                  Sửa đơn
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
             </>
           )}
 
@@ -1434,37 +1589,6 @@ function BcTab({ stats, sales = [], jewelry = [] }) {
                   </div>
                 )
               })}
-            </>
-          )}
-
-          {month && (
-            <>
-              {section('Chi tiết từng món')}
-              {rev.rows.length === 0 && (
-                <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn nào trong tháng này</div>
-              )}
-              {rev.rows.map((r, i) => (
-                <div key={r.id}>
-                  {(i === 0 || rev.rows[i-1].day !== r.day) && (
-                    <div className="px-4 pt-2.5 pb-1 text-[10px] text-gray-400 bg-gray-50">Ngày {dm(r.day)}</div>
-                  )}
-                  <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-start gap-2">
-                    <div className="flex-1 min-w-0">
-                      <div className="text-xs font-medium text-gray-800 truncate">
-                        {r.label}{r.qty > 1 ? ` ×${r.qty}` : ''}
-                      </div>
-                      <div className="text-[10px] text-gray-400 truncate">{r.customer}</div>
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <div className="text-xs font-semibold text-gray-800">{fmtMoney(r.total)}</div>
-                      {r.gift ? chip('Tặng', 'bg-purple-100 text-purple-700')
-                        : !r.paid ? chip('Còn nợ', 'bg-red-100 text-red-700')
-                        : r.paidLate ? chip(`Thu ${dm(r.paidDay)}`, 'bg-green-100 text-green-700')
-                        : chip('Đã thu', 'bg-green-100 text-green-700')}
-                    </div>
-                  </div>
-                </div>
-              ))}
             </>
           )}
 
@@ -1523,25 +1647,40 @@ function BcTab({ stats, sales = [], jewelry = [] }) {
               ))}
             </>
           )}
-          {month && cash.events.map((e, i) => {
-            const first = i === 0 || cash.events[i-1].day !== e.day
-            const old = month && !(e.saleDay || '').startsWith(month)
+          {month && cash.days.length > 0 && (
+            <div className="flex items-center justify-between pl-3 pr-1 mt-1">
+              <span className="text-[10px] font-medium text-gray-400 uppercase tracking-wider">Từng ngày · bấm để xem từng khoản</span>
+              <button onClick={() => setOpen('tien', cKeys, !cAllOpen)}
+                className="px-2 py-2.5 text-xs font-semibold text-purple-600 active:opacity-60">
+                {cAllOpen ? 'Thu gọn' : 'Mở hết'}
+              </button>
+            </div>
+          )}
+          {month && cash.days.map(dd => {
+            const open = isOpen('tien', dd.day, cFirst)
             return (
-              <div key={e.saleId + e.kind}>
-                {first && (
-                  <div className="px-4 pt-2.5 pb-1 text-[10px] text-gray-400 bg-gray-50 flex justify-between">
-                    <span>Ngày {dm(e.day)}</span><span className="font-semibold text-gray-500">{fmtMoney(cash.byDay[e.day])}</span>
-                  </div>
-                )}
-                <div className="bg-white border-b border-gray-100 px-4 py-2 flex items-start gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs font-medium text-gray-800 truncate">{e.customer}</div>
-                    <div className="text-[10px] text-gray-400 truncate">
-                      {e.kind} · {e.label} · đơn ngày {dm(e.saleDay)}{old ? ' (tháng trước)' : ''}
+              <div key={dd.day} className="bg-white border-b border-gray-200">
+                <DayHeader day={dd.day} open={open} green
+                  onToggle={() => setOpen('tien', [dd.day], !open)}
+                  amount={`+${moneyFull(dd.total)}`}
+                  meta={`${dd.count} khoản`}
+                  note={dd.fromOld > 0 ? `có ${moneyFull(dd.fromOld)} thu nợ đơn trước` : ''}
+                  noteClass="text-gray-600 !font-medium"
+                  fill={pctOf(dd.total, cMax)}/>
+                {open && dd.events.map(e => {
+                  const old = !(e.saleDay || '').startsWith(month)
+                  return (
+                    <div key={e.saleId + e.kind} className="border-t border-gray-100 pl-[68px] pr-4 py-2 flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-gray-800 truncate">{e.customer}</div>
+                        <div className="text-[10px] text-gray-500 truncate">
+                          {e.kind} · {e.label} · đơn ngày {dm(e.saleDay)}{old ? ' (tháng trước)' : ''}
+                        </div>
+                      </div>
+                      <div className="text-xs font-semibold text-green-600 flex-shrink-0">+{fmtMoney(e.amount)}</div>
                     </div>
-                  </div>
-                  <div className="text-xs font-semibold text-green-600 flex-shrink-0">+{fmtMoney(e.amount)}</div>
-                </div>
+                  )
+                })}
               </div>
             )
           })}
