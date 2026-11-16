@@ -8,7 +8,20 @@ import { fetchAll } from './fetchAll'
 import { getLocalDateString } from './helpers'
 import { isSeries, occurrencesBetween, isDoneOn, nextOccurrences } from './recur'
 
-export const PEOPLE = { linh: 'Anh Linh', mai: 'Chị Mai' }
+export const PEOPLE = { linh: 'Anh Linh', mai: 'Chị Mai', choo: 'Choo', moon: 'Moon' }
+export const PARENTS = ['linh', 'mai']
+export const isKid = who => who === 'choo' || who === 'moon'
+export const INI = { linh: 'L', mai: 'M', choo: 'C', moon: 'Mo' }            // chữ trên ảnh đại diện
+// Tên theo người đang xem: con thấy "Bố Linh, Mẹ Mai"; bố mẹ thấy "Anh Linh, Chị Mai"
+export function nameOf(k, viewer) {
+  if (k === viewer) return 'Bạn'
+  if (isKid(viewer) && k === 'linh') return 'Bố Linh'
+  if (isKid(viewer) && k === 'mai') return 'Mẹ Mai'
+  return PEOPLE[k] || k
+}
+// Danh sách người được chia sẻ (cột share_with; dòng cũ chỉ có "shared" → người kia)
+export const shareOf = x => Array.isArray(x?.share_with) ? x.share_with
+  : x?.shared ? (x.owner === 'linh' ? ['mai'] : x.owner === 'mai' ? ['linh'] : []) : []
 export const otherOf = who => (who === 'linh' ? 'mai' : 'linh')
 
 // ── Ai đang dùng máy này (nhớ trên máy, không phải đăng nhập lại) ──
@@ -56,7 +69,7 @@ export async function saveCfg(cfg) {
 }
 
 // ── Tải dữ liệu: của mình + những gì được chia sẻ ──
-const mineFilter = who => `owner.eq.${who},shared.eq.true`
+const mineFilter = who => `owner.eq.${who},share_with.cs.{${who}}`      // của mình hoặc được chia sẻ cho mình
 export async function loadAll(who, sinceDays = 40) {
   const since = addDays(getLocalDateString(), -sinceDays)
   // Việc đã xong quá 13 tháng thì không tải nữa (vẫn nằm trong database và bản sao lưu)
@@ -122,8 +135,8 @@ export async function saveProject(fields) {
   return data
 }
 // Bật/tắt chia sẻ dự án thì mọi việc trong dự án đổi theo — hai người nhìn cùng một tiến độ
-export async function setProjectShared(projectId, shared) {
-  const { data, error } = await supabase.from('viec_tasks').update({ shared }).eq('project_id', projectId).select()
+export async function setProjectShared(projectId, share_with) {          // đổi người chia sẻ của kế hoạch → các việc trong đó đổi theo
+  const { data, error } = await supabase.from('viec_tasks').update({ share_with }).eq('project_id', projectId).select()
   if (error) throw error
   return data || []
 }

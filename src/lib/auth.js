@@ -14,7 +14,7 @@ export function lastEmail() {
 // Đổi lỗi tiếng Anh của máy chủ sang câu dễ hiểu
 function niceError(err) {
   const m = err?.message || ''
-  if (/invalid login|invalid credentials/i.test(m)) return new Error('Email hoặc mật khẩu không đúng')
+  if (/invalid login|invalid credentials/i.test(m)) return new Error('Tên đăng nhập hoặc mật khẩu không đúng')
   if (/rate limit|too many/i.test(m))              return new Error('Thử sai quá nhiều lần — đợi vài phút rồi thử lại')
   if (/fetch|network|failed to/i.test(m))          return new Error('Không kết nối được máy chủ. Kiểm tra mạng và thử lại.')
   if (/should be different/i.test(m))              return new Error('Mật khẩu mới phải khác mật khẩu cũ')
@@ -22,11 +22,14 @@ function niceError(err) {
   return new Error(m || 'Có lỗi xảy ra')
 }
 
+// Tên đăng nhập không có @ (Choo, Moon) → đổi thành địa chỉ nội bộ của app, không gửi thư nào tới đó
+export const toLoginEmail = s => { const e = (s || '').trim().toLowerCase(); return !e || e.includes('@') ? e : e + '@phat-tai-phat-loc.io.vn' }
+
 export async function signIn(email, password) {
-  const e = (email || '').trim().toLowerCase()
+  const e = toLoginEmail(email)
   const { data, error } = await supabase.auth.signInWithPassword({ email: e, password })
   if (error) throw niceError(error)
-  try { localStorage.setItem(LAST_EMAIL, e) } catch {}
+  try { localStorage.setItem(LAST_EMAIL, (email || '').trim()) } catch {}
   return data.session
 }
 

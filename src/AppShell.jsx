@@ -70,6 +70,18 @@ export default function AppShell() {
   if (!session) return <Login />
   if (mustChangePassword(session)) return <SetNewPassword email={session.user?.email} />
 
+  // Vai trò ghi trong tài khoản: 'viec' = tài khoản con, chỉ có tab Việc (máy chủ cũng chặn phần còn lại)
+  const account = { who: session.user?.app_metadata?.who, role: session.user?.app_metadata?.role || 'full' }
+  if (account.role === 'viec') return (
+    <ToastProvider>
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+        <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
+          <Viec account={account} />
+        </Suspense>
+      </div>
+    </ToastProvider>
+  )
+
   // Module khác → cần ToastProvider riêng (vì nằm ngoài App.jsx)
   const renderModule = () => {
     switch (activeModule) {
@@ -90,7 +102,7 @@ export default function AppShell() {
       case 'viec':
         return (
           <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
-            <Viec onNavigate={openFromCalendar} />
+            <Viec onNavigate={openFromCalendar} account={account} />
           </Suspense>
         )
       default:

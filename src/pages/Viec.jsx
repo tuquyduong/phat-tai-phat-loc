@@ -8,14 +8,15 @@ import {
 import { getLocalDateString } from '../lib/helpers'
 import { lunarOf, isTraiDay, isMakeupDay, hairOf } from '../lib/lunar'
 import {
-  PEOPLE, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG, loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick, saveProject, deleteProject, setProjectShared, projectProgress, projectGroups, addManual, deleteLog, quickSteps, saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary, addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats, parseGroupLines, nextPlanTask, planFlags, groupRenames, renameGroupTasks, hasCycle, cyclePhase, cycleEvents, cycleRounds, isRolling, rollNext, planProgress, parseGoalLine, jobProgress, normalizeGroups } from '../lib/viec'
+  PEOPLE, PARENTS, isKid, INI, nameOf, shareOf, otherOf, getWho, setWho, hasPin, setPin, checkPin, getCfg, saveCfg, DEFAULT_CFG, loadAll, createTask, updateTask, deleteTask, toggleTask, saveDaily, startTimer, stopTimer, toggleTick, saveProject, deleteProject, setProjectShared, projectProgress, projectGroups, addManual, deleteLog, quickSteps, saveOrder, deleteOrder, trackingCodes, trackUrl, orderFlag, orderSummary, addDays, daysBetween, isDailyDay, dailyProgress, runningLog, looksForgotten, upcoming, periodStats, parseGroupLines, nextPlanTask, planFlags, groupRenames, renameGroupTasks, hasCycle, cyclePhase, cycleEvents, cycleRounds, isRolling, rollNext, planProgress, parseGoalLine, jobProgress, normalizeGroups } from '../lib/viec'
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
+import { signOut, changePasswordChecked } from '../lib/auth'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
 
 const WD = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
 const WD_FULL = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy']
-const AVA = { linh: 'bg-blue-100 text-blue-800', mai: 'bg-pink-100 text-pink-800' }
+const AVA = { linh: 'bg-blue-100 text-blue-800', mai: 'bg-pink-100 text-pink-800', choo: 'bg-emerald-100 text-emerald-800', moon: 'bg-amber-100 text-amber-800' }
 const EMOJI = ['📿', '💻', '📖', '🀄', '🧪', '🧘', '🏃', '💪', '🍵', '📸', '💰', '🎯', '📚', '💧', '⭐']
 const COLORS = ['#7F77DD', '#378ADD', '#1D9E75', '#639922', '#EF9F27', '#D85A30', '#D4537E', '#888780',
                 '#3C3489', '#185FA5', '#0F6E56', '#5DCAA5', '#BA7517', '#E24B4A', '#993556', '#444441']
@@ -137,10 +138,10 @@ function PinGate({ onDone }) {
       <div className="text-2xl font-bold text-gray-800">📅 Việc</div>
       <div className="text-gray-500 mt-1 mb-6">{title}</div>
       <div className="flex gap-3">
-        {Object.entries(PEOPLE).map(([k, n]) => (
+        {PARENTS.map(k => [k, PEOPLE[k]]).map(([k, n]) => (
           <button key={k} onClick={() => choose(k)}
             className={`flex-1 bg-white rounded-2xl py-5 border-2 ${who === k ? 'border-purple-500' : 'border-transparent'} active:scale-95`}>
-            <span className={`w-14 h-14 rounded-full mx-auto mb-2 flex items-center justify-center text-xl font-bold ${AVA[k]}`}>{n.split(' ')[1][0]}</span>
+            <span className={`w-14 h-14 rounded-full mx-auto mb-2 flex items-center justify-center text-xl font-bold ${AVA[k]}`}>{INI[k]}</span>
             <span className="font-semibold text-gray-800">{n}</span>
           </button>
         ))}
@@ -159,10 +160,11 @@ function PinGate({ onDone }) {
   )
 }
 
-export default function Viec({ onNavigate }) {
+export default function Viec({ onNavigate, account }) {
   const toast = useToast()
   const today = getLocalDateString()
-  const [who, setWhoState] = useState(getWho)
+  const kid = account?.role === 'viec'                       // tài khoản con: chỉ tab Việc, người dùng cố định
+  const [who, setWhoState] = useState(() => kid ? account.who : getWho())
   const [data, setData] = useState({ tasks: [], daily: [], logs: [], projects: [], orders: [] })
   const [cfg, setCfgState] = useState(DEFAULT_CFG)
   const [loading, setLoading] = useState(true)
@@ -202,9 +204,9 @@ export default function Viec({ onNavigate }) {
     if (!who) return
     const cells = gridRange(month), from = getLocalDateString(cells[0]), to = getLocalDateString(cells[cells.length - 1])
     let alive = true
-    loadLinks(from, to, linkPrefs).then(ev => { if (alive) setLinks(ev) }).catch(() => {})
+    loadLinks(from, to, kid ? { ...linkPrefs, jewelry: false, lab: false } : linkPrefs).then(ev => { if (alive) setLinks(ev) }).catch(() => {})
     return () => { alive = false }
-  }, [who, month, linkPrefs, linkTick])
+  }, [who, month, linkPrefs, linkTick, kid])
   // Hai người dùng hai máy: quay lại app thì lấy dữ liệu mới nhất (việc chung người kia vừa thêm, ngày mới…)
   useEffect(() => {
     const onVis = () => { if (document.visibilityState === 'visible' && !busy.current) { setNow(Date.now()); load(); setLinkTick(x => x + 1) } }
@@ -360,8 +362,8 @@ export default function Viec({ onNavigate }) {
     const p = await saveProject(fields)
     patch('projects', ps => fields.id ? ps.map(x => x.id === p.id ? p : x) : [...ps, p])
     if (!fields.id) { setProjId(p.id); setView('projd') }          // vừa tạo → mở ngay để chia mục tiêu nhỏ
-    if (before && 'shared' in fields && !!before.shared !== !!fields.shared) {     // đổi chia sẻ → việc trong dự án đổi theo
-      const changed = await setProjectShared(p.id, !!fields.shared)
+    if (before && Array.isArray(fields.share_with) && shareOf(before).join() !== [...fields.share_with].sort().join()) {   // đổi người chia sẻ → việc trong kế hoạch đổi theo
+      const changed = await setProjectShared(p.id, fields.share_with)
       const byId = Object.fromEntries(changed.map(t => [t.id, t]))
       patch('tasks', ts => ts.map(t => byId[t.id] || t))
     }
@@ -414,7 +416,7 @@ export default function Viec({ onNavigate }) {
   const header = (
     <header className="bg-white border-b border-gray-200 sticky top-0 z-30">
       <div className="max-w-2xl mx-auto px-4 py-2.5 flex items-center gap-2">
-        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${AVA[who]}`}>{PEOPLE[who].split(' ')[1][0]}</span>
+        <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${AVA[who]}`}>{INI[who]}</span>
         <h2 className="text-lg font-bold text-gray-800 flex-1 truncate">📅 {PEOPLE[who]}</h2>
         <button onClick={() => { setMonth(today.slice(0, 7)); setSel(today) }}
           className="text-sm px-3 py-1.5 rounded-full bg-purple-50 text-purple-700 font-medium active:scale-95">Hôm nay</button>
@@ -459,7 +461,7 @@ export default function Viec({ onNavigate }) {
   if (view === 'stat') return <StatsPage daily={daily} logs={data.logs} today={today} now={now} onBack={() => setView('main')}/>
   if (view === 'daily') return <DailyForm initial={editDaily} who={who} projects={data.projects} onSave={saveD} onBack={() => { setView(dailyFrom); setEditDaily(null) }}
     onStart={d => { setView('main'); setEditDaily(null); start(d) }} onManual={d => { setView('main'); setEditDaily(null); setLogFor(d.id) }}/>
-  if (view === 'set') return <SettingsPage who={who} cfg={cfg} onCfg={updCfg} daily={data.daily}
+  if (view === 'set') return <SettingsPage who={who} kid={kid} cfg={cfg} onCfg={updCfg} daily={data.daily}
     linkPrefs={linkPrefs} onLinkPrefs={p => { setLinkPrefs(p); saveLinkPrefs(who, p).catch(e => toast.error('Lỗi: ' + e.message)) }}
     onEditDaily={d => { setEditDaily(d); setDailyFrom('set'); setView('daily') }}
     onSwitch={() => { loaded.current = false; setWho(null); setWhoState(null); setView('main'); setData({ tasks: [], daily: [], logs: [], projects: [], orders: [] }) }}
@@ -865,7 +867,7 @@ function OrderRow({ o, today, avg, month, who, onEdit }) {
           <div className="text-xs text-gray-500 mt-0.5">
             {got ? <>Đặt {dm(o.order_date)} → nhận {dm(o.received_at)} · <b>về sau {daysBetween(o.received_at, o.order_date)} ngày</b></>
               : <>Đặt {dm(o.order_date)} · đã {daysBetween(today, o.order_date)} ngày{month && o.order_date.slice(0, 7) < month && <span className="text-amber-700"> · từ tháng {+o.order_date.slice(5, 7)}</span>}
-                {o.shared && o.owner !== who && ` · của ${PEOPLE[o.owner]}`}</>}
+                {o.shared && o.owner !== who && ` · của ${nameOf(o.owner, who)}`}</>}
           </div>
         </div>
         <span className="text-gray-300 text-lg">›</span>
@@ -903,7 +905,8 @@ function OrdersPanel({ orders, today, who, onToggle, onEdit, onNew }) {
 // Thêm / sửa đơn
 function OrderSheet({ initial, who, today, onSave, onDelete, onClose, onToggle }) {
   const [f, setF] = useState(initial ? { ...initial, tracking: initial.tracking || '', eta: initial.eta || '' }
-    : { title: '', tracking: '', order_date: today, eta: '', shared: false })
+    : { title: '', tracking: '', order_date: today, eta: '' })
+  const [share, setShare] = useState(() => shareOf(initial))
   const [err, setErr] = useState(''), [del, setDel] = useState(false)
   const canEdit = !initial || initial.owner === who || initial.shared
   const setEtaDays = n => setF(x => ({ ...x, eta: n ? addDays(x.order_date, n) : '' }))
@@ -911,7 +914,7 @@ function OrderSheet({ initial, who, today, onSave, onDelete, onClose, onToggle }
     if (!f.title.trim()) { setErr('Chưa ghi mua gì'); return }
     if (f.eta && f.eta < f.order_date) { setErr('Ngày dự kiến về không thể trước ngày đặt'); return }
     onSave({ ...(initial ? { id: initial.id } : { owner: who }), title: f.title.trim(), tracking: f.tracking.trim() || null,
-      order_date: f.order_date, eta: f.eta || null, shared: !!f.shared })
+      order_date: f.order_date, eta: f.eta || null, ...(!initial || initial.owner === who ? { share_with: share } : {}) })
   }
   return (
     <>
@@ -946,7 +949,7 @@ function OrderSheet({ initial, who, today, onSave, onDelete, onClose, onToggle }
         <div className="flex flex-wrap gap-1.5 mt-2">{ETA_CHOICES.map(([n, l]) =>
           <Chip key={l} on={n ? f.eta === addDays(f.order_date, n) : !f.eta} onClick={() => setEtaDays(n)}>{l}</Chip>)}</div>
         <span className="text-xs text-gray-500 font-semibold mt-4 mb-1.5 block">Ai thấy</span>
-        <ShareSeg shared={f.shared} onChange={x => setF({ ...f, shared: x })} who={who} owner={initial?.owner || who} noun="đơn"/>
+        <SharePick value={share} onChange={setShare} who={who} owner={initial?.owner || who} noun="đơn"/>
         {err && <p className="text-xs text-red-600 mt-2" role="alert">{err}</p>}
         <div className="flex gap-2 mt-3">
           {initial && (initial.owner === who) && <button onClick={() => del ? onDelete(initial.id) : setDel(true)}
@@ -1004,19 +1007,29 @@ function LogSheet({ daily: d, logs, today, onSave, onDelete, onClose }) {
 }
 
 
-// ── AI THẤY: hai lựa chọn rõ nghĩa, dùng chung cho việc, đơn hàng, Daily, dự án ──
-function ShareSeg({ shared, onChange, who, owner, noun = 'việc' }) {
-  const mine = !owner || owner === who
-  const other = PEOPLE[otherOf(who)]
+// ── AI THẤY: chạm chọn người — ai được chọn thì thấy và được nhắc. Dùng chung cho việc, đơn, Daily, kế hoạch ──
+function SharePick({ value = [], onChange, who, owner, noun = 'việc' }) {
+  const own = owner || who, mine = own === who
+  const people = Object.keys(PEOPLE).filter(k => k !== own)
+  const on = new Set(value)
+  const pick = list => onChange(people.filter(k => list.includes(k)))
+  const toggle = k => pick(on.has(k) ? value.filter(x => x !== k) : [...value, k])
+  const others = value.filter(k => k !== who).map(k => nameOf(k, who))
   return (
     <div>
-      <div className={`flex gap-1 bg-gray-100 rounded-xl p-1 ${mine ? '' : 'opacity-60'}`}>
-        {[[false, '🔒 Chỉ mình tôi'], [true, '👥 Cả hai']].map(([v, l]) => (
-          <button key={l} disabled={!mine} onClick={() => onChange(v)} aria-pressed={!!shared === v}
-            className={`flex-1 text-center py-2.5 rounded-lg text-sm ${!!shared === v ? 'bg-purple-600 font-semibold text-white shadow-sm' : 'text-gray-500'}`}>{l}</button>))}
+      <div className={`flex flex-wrap gap-2 ${mine ? '' : 'opacity-60'}`}>
+        {people.map(k => (
+          <button key={k} disabled={!mine} onClick={() => toggle(k)} aria-pressed={on.has(k)}
+            className={`flex items-center gap-1.5 pl-1 pr-3 py-1 rounded-full border-2 text-sm ${on.has(k) ? 'border-purple-600 bg-purple-50 text-purple-800 font-semibold' : 'border-gray-200 bg-white text-gray-600'}`}>
+            <span className={`w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold ${AVA[k]}`}>{INI[k]}</span>
+            {nameOf(k, who)}{on.has(k) && ' ✓'}</button>))}
       </div>
-      <p className="text-xs text-gray-500 mt-1.5">{!mine ? `${noun[0].toUpperCase() + noun.slice(1)} của ${PEOPLE[owner]} — chỉ ${PEOPLE[owner]} thôi chia sẻ hoặc xoá được. Bạn vẫn sửa được.`
-        : shared ? `${other} thấy ${noun} này trên lịch và được nhắc nếu có giờ.` : `Chỉ bạn thấy. Chọn "Cả hai" để ${other} cũng thấy.`}</p>
+      {mine && <div className="flex gap-4 mt-2 text-xs">
+        <button onClick={() => pick(people)} className="text-purple-700 font-medium">Cả nhà</button>
+        {isKid(who) && <button onClick={() => pick(PARENTS)} className="text-purple-700 font-medium">Bố mẹ</button>}
+        <button onClick={() => pick([])} className="text-gray-500">Chỉ mình tôi</button></div>}
+      <p className="text-xs text-gray-500 mt-1.5">{!mine ? `${noun[0].toUpperCase() + noun.slice(1)} của ${nameOf(own, who)} — chỉ ${nameOf(own, who)} chia sẻ hoặc xoá được. Bạn vẫn sửa được.`
+        : others.length ? `${others.join(', ')} thấy ${noun} này và được nhắc.` : '🔒 Chỉ bạn thấy.'}</p>
     </div>
   )
 }
@@ -1024,7 +1037,7 @@ function ShareSeg({ shared, onChange, who, owner, noun = 'việc' }) {
 // ── CHI TIẾT VIỆC (To-do): chạm vào việc ở bất kỳ đâu đều mở bảng này ──
 function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, onTick, onClose }) {
   const series = isSeries(t)
-  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', shared: t.shared, project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0, notify: t.notify || 'both' })
+  const [f, setF] = useState({ title: t.title, due_date: t.due_date, due_time: t.due_time || '', share: shareOf(t), project_id: t.project_id || '', group_name: t.group_name || '', remind_days: t.remind_days || 0 })
   const [rep, setRep] = useState(series
     ? { unit: t.repeat_unit, every: t.repeat_every || 1, start: t.repeat_start || t.due_date, until: t.repeat_until || '', custom: false }
     : { unit: '', every: 1, start: t.due_date, until: '', custom: false, after: t.repeat_after || 30, afterOn: !!t.repeat_after })
@@ -1035,11 +1048,10 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
   const save = () => {
     if (!f.title.trim()) { setErr('Chưa có tên việc'); return }
     const proj = projects.find(p => p.id === f.project_id)
-    const base = { title: f.title.trim(), due_time: f.due_time || null, shared: mine ? (f.shared || !!proj?.shared) : t.shared,   // vào dự án chung → việc thành chung
+    const base = { title: f.title.trim(), due_time: f.due_time || null,
+      ...(mine ? { share_with: [...new Set([...f.share, ...shareOf(proj)])] } : {}),   // vào kế hoạch chung → người của kế hoạch cũng thấy
       project_id: f.project_id || null, group_name: f.project_id ? (f.group_name.trim() || null) : null,
-      ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}),
-      ...(f.shared && f.notify !== (t.notify || 'both') ? { notify: f.notify === 'both' ? null : f.notify }
-        : !f.shared && t.notify ? { notify: null } : {}) }   // chỉ gửi khi đổi; thôi chia sẻ → bỏ lựa chọn nhắc cho
+      ...((Number(f.remind_days) || 0) !== (Number(t.remind_days) || 0) ? { remind_days: Number(f.remind_days) || 0 } : {}) }
     // Không lặp: ngày lấy từ ô ngày. Có lặp: ngày bắt đầu lấy từ bộ chọn lặp.
     if (!rep.unit && !f.due_date && !f.project_id) { setErr('Việc không thuộc kế hoạch cần có ngày — nếu không sẽ không hiện ở đâu cả'); return }
     const rolling = !rep.unit && rep.afterOn
@@ -1063,7 +1075,7 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
           {done ? '↩ Chưa xong' : series ? `✓ Xong lần ${dm(day)}` : isRolling(t) ? `✓ Xong · hẹn lần sau ${dm(rollNext(t, getLocalDateString()))}` : '✓ Xong'}</button>}
 
         <span className={lbl}>Ai thấy</span>
-        <ShareSeg shared={f.shared} onChange={v => setF({ ...f, shared: v })} who={who} owner={t.owner}/>
+        <SharePick value={f.share} onChange={v => setF({ ...f, share: v })} who={who} owner={t.owner}/>
 
         <span className={lbl}>Khi nào</span>
         {!rep.unit && <div className="flex gap-2 items-center">
@@ -1073,12 +1085,6 @@ function TaskSheet({ t, iso, who, projects = [], tasks = [], onSave, onDelete, o
         </div>}
         <div className="mt-2"><TimePicker value={f.due_time} onChange={h => setF({ ...f, due_time: h })}/></div>
         {(f.due_date || rep.unit) && <div className="mt-2"><RemindDays value={f.remind_days} onChange={n => setF({ ...f, remind_days: n })}/></div>}
-        {f.shared && <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[13px] text-gray-600" role="radiogroup" aria-label="Nhắc cho">
-          <span>🔔 Nhắc cho</span>
-          {[['linh', PEOPLE.linh], ['mai', PEOPLE.mai], ['both', 'Cả hai']].map(([k, l]) =>
-            <button key={k} role="radio" aria-checked={f.notify === k} onClick={() => setF({ ...f, notify: k })}
-              className={`px-2.5 py-1 rounded-lg text-xs ${f.notify === k ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-100 text-gray-600'}`}>{l}</button>)}
-        </div>}
         <div className="mt-2"><RepeatPicker value={rep} onChange={r => setRep(r.unit && !rep.unit ? { ...r, start: r.start || f.due_date || getLocalDateString() } : r)}/></div>
         {series && <p className="text-xs text-gray-500 mt-1.5">Sửa ở đây áp dụng cho cả chuỗi. Các lần đã tick vẫn được giữ.</p>}
 
@@ -1195,7 +1201,7 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
           <SearchGroup label="☑️ Việc" items={r.tasks} render={t => <SearchRow key={t.id} onClick={() => onOpenTask(t, isSeries(t) ? (nextOccurrences(t, today, 1)[0] || t.repeat_start) : t.due_date)}
             icon={isSeries(t) ? '↻' : '☑️'} title={<Hl text={t.title} q={q}/>} status={taskStatus(t)}
             sub={[t.due_date && !isSeries(t) && dm(t.due_date), t.due_time, isSeries(t) && describe(t), isRolling(t) && `↻ ${t.repeat_after} ngày sau khi xong`, t.project_id && <Hl key="p" text={projName(t.project_id)} q={q}/>,
-              t.shared && (t.owner === who ? '👥' : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).reduce((a, x, i) => i ? [...a, ' · ', x] : [x], [])}/>}/>
+              t.shared && (t.owner === who ? '👥' : '👥 của ' + nameOf(t.owner, who))].filter(Boolean).reduce((a, x, i) => i ? [...a, ' · ', x] : [x], [])}/>}/>
           <SearchGroup label="📦 Đơn hàng" items={r.orders} render={o => { const hit = trackingCodes(o.tracking).find(c => compactStr(c).includes(compactStr(q)) && compactStr(q).length >= 3)
             return <SearchRow key={o.id} onClick={() => onOpenOrder(o)} icon={o.received_at ? '✅' : '📦'} title={<Hl text={o.title} q={q}/>} status={orderStatus(o)}
               sub={`Đặt ${dm(o.order_date)}${o.received_at ? ` → về ${dm(o.received_at)} (sau ${daysBetween(o.received_at, o.order_date)} ngày)` : ''}`}
@@ -1305,7 +1311,7 @@ function FocusCard({ projects, tasks, today, onPull, onOpenPlan }) {
 
 function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [], orders = [], flags = [], cycEvents = [], onOpenPlan, onAddOrder, onToggleOrder, onEditOrder, onOpenTask, daily, logs, now, links = [], onNavigate, onClose, onAdd, onEdit, onDelete, onTick }) {
   const [text, setText] = useState('')
-  const [opt, setOpt] = useState({ due_time: '', shared: false, project_id: '', remind_days: 0 })
+  const [opt, setOpt] = useState({ due_time: '', share: [], project_id: '', remind_days: 0 })
   const [track, setTrack] = useState(false), [trk, setTrk] = useState(''), [etaN, setEtaN] = useState('')   // 📦 Theo dõi hàng
   const [rep, setRep] = useState({ unit: '', every: 1, start: iso, until: '', custom: false })
   const d = pdate(iso), L = lunarOf(iso), trai = isTraiDay(iso, cfg)
@@ -1318,12 +1324,12 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
     if (!rep.unit && rep.afterOn && !(Number(rep.after) > 0)) return   // đang chọn "sau khi xong" mà chưa nhập số ngày
     const t = text.trim(); if (!t) return
     if (track) {                                     // đơn đặt: ngày đang mở là ngày đặt
-      onAddOrder?.({ owner: who, title: t, tracking: trk.trim() || null, order_date: iso, eta: etaN ? addDays(iso, etaN) : null, shared: opt.shared })
+      onAddOrder?.({ owner: who, title: t, tracking: trk.trim() || null, order_date: iso, eta: etaN ? addDays(iso, etaN) : null, share_with: opt.share })
       setText(''); setTrk(''); setEtaN(''); setTrack(false); return
     }
-    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, shared: opt.shared, project_id: opt.project_id || null, ...repeatFields(rep),
+    onAdd({ title: t, due_date: iso, due_time: opt.due_time || null, share_with: opt.share, project_id: opt.project_id || null, ...repeatFields(rep),
       ...(opt.remind_days ? { remind_days: opt.remind_days } : {}) })   // chỉ gửi khi có nhắc (an toàn nếu chưa chạy SQL)
-    setText(''); setOpt({ due_time: '', shared: false, project_id: '', remind_days: 0 }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
+    setText(''); setOpt({ due_time: '', share: [], project_id: '', remind_days: 0 }); setRep({ unit: '', every: 1, start: iso, until: '', custom: false })
   }
   return (
     <>
@@ -1372,14 +1378,15 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
         {!track && <div className="pt-2"><TimePicker value={opt.due_time} onChange={h => setOpt(o => ({ ...o, due_time: h }))}/></div>}
         {!track && <div className="pt-2"><RemindDays value={opt.remind_days} onChange={n => setOpt(o => ({ ...o, remind_days: n }))}/></div>}
         <div className="flex flex-wrap gap-1.5 pt-1.5">
-          <Chip on={opt.shared} onClick={() => setOpt(o => ({ ...o, shared: !o.shared }))}>👥 Chung với {PEOPLE[otherOf(who)]}</Chip>
+          {Object.keys(PEOPLE).filter(k => k !== who).map(k => <Chip key={k} on={opt.share.includes(k)}
+            onClick={() => setOpt(o => ({ ...o, share: o.share.includes(k) ? o.share.filter(x => x !== k) : [...o.share, k] }))}>👥 {nameOf(k, who)}</Chip>)}
           <button onClick={() => setTrack(!track)} aria-pressed={track}
             className={`text-[13px] px-3 py-2 rounded-full whitespace-nowrap border-[1.5px] ${track ? 'bg-purple-600 text-white border-purple-600 font-semibold shadow-sm' : 'bg-white text-purple-700 border-purple-300 border-dashed'}`}>📦 Theo dõi hàng</button>
         </div>
         {!track && <div className="pt-1.5"><RepeatPicker value={rep} onChange={setRep}/></div>}
         {!track && projects.some(p => !p.archived) && <div className="flex gap-1.5 overflow-x-auto pt-1.5 no-scrollbar">
           <Chip on={!opt.project_id} onClick={() => setOpt(o => ({ ...o, project_id: '' }))}>Không thuộc kế hoạch</Chip>
-          {projects.filter(p => !p.archived).map(p => <Chip key={p.id} on={opt.project_id === p.id} onClick={() => setOpt(o => ({ ...o, project_id: p.id, shared: o.shared || p.shared }))}>{p.emoji} {p.name}</Chip>)}
+          {projects.filter(p => !p.archived).map(p => <Chip key={p.id} on={opt.project_id === p.id} onClick={() => setOpt(o => ({ ...o, project_id: p.id, share: [...new Set([...o.share, ...shareOf(p)])].filter(k => k !== who) }))}>{p.emoji} {p.name}</Chip>)}
         </div>}
 
         <div className="text-[13px] text-gray-400 mt-4 mb-1">To-do · {list.filter(t => !isDoneOn(t, iso)).length + dayOrders.filter(o => !o.received_at).length} việc</div>
@@ -1407,7 +1414,7 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
                   <div className={`text-[15px] ${done ? 'line-through text-gray-400' : 'text-gray-800'}`}>{t.title}</div>
                   <div className="text-xs text-gray-400 mt-0.5">{[t.due_time && '⏰ ' + t.due_time,
                     t.project_id && (p => p ? p.emoji + ' ' + p.name + (t.group_name ? ' · ' + t.group_name : '') : null)(projects.find(p => p.id === t.project_id)),
-                    t.shared && (t.owner === who ? '👥 chung với ' + PEOPLE[otherOf(who)] : '👥 của ' + PEOPLE[t.owner])].filter(Boolean).join(' · ')}</div>
+                    t.shared && (t.owner === who ? '👥 ' + shareOf(t).map(k => nameOf(k, who)).join(', ') : '👥 của ' + nameOf(t.owner, who))].filter(Boolean).join(' · ')}</div>
                   {isSeries(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {describe(t)}{next ? ` · lần tới ${dm(next)}` : ' · lần cuối'}</div>}
                   {isRolling(t) && <div className="text-xs text-purple-700 mt-0.5">↻ {t.repeat_after} ngày sau khi xong{t.done_dates?.length ? ` · lần trước ${dm(t.done_dates[t.done_dates.length - 1])}` : ''}</div>}
                 </button>
@@ -1441,12 +1448,13 @@ function DaySheet({ iso, today, who, cfg, showHair = true, tasks, projects = [],
 const P_EMOJI = ['📁', '🧪', '💎', '✈️', '🏠', '📚', '💻', '🍵', '🎯', '🛠️', '🌿', '⭐']
 function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
   const [f, setF] = useState(initial ? { ...initial, goal: initial.goal || '', deadline: initial.deadline || '' }
-    : { name: '', emoji: '🎯', color: '#7F77DD', shared: false, goal: '', deadline: '' })
+    : { name: '', emoji: '🎯', color: '#7F77DD', goal: '', deadline: '' })
+  const [share, setShare] = useState(() => shareOf(initial))
   const [err, setErr] = useState(''), [look, setLook] = useState(false), [confirm, setConfirm] = useState(false)
   const save = () => {
     if (!f.name.trim()) { setErr('Nhập tên mục tiêu lớn'); return }
     if (!f.deadline) { setErr('Chọn ngày hoàn thành'); return }
-    onSave({ name: f.name.trim(), emoji: f.emoji, color: f.color, shared: f.shared, goal: f.goal.trim() || null, deadline: f.deadline })
+    onSave({ name: f.name.trim(), emoji: f.emoji, color: f.color, ...(!initial || initial.owner === who ? { share_with: share } : {}), goal: f.goal.trim() || null, deadline: f.deadline })
   }
   const canShare = !initial || initial.owner === who
   const lbl = 'text-xs text-gray-500 font-semibold flex flex-col gap-1'
@@ -1463,7 +1471,7 @@ function ProjectForm({ initial, who, onSave, onCancel, onDelete }) {
         <input type="date" value={f.deadline} onChange={e => { setF({ ...f, deadline: e.target.value }); setErr('') }} aria-label="Hạn chót"
           className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-base block appearance-none min-w-0 bg-white font-normal"/></label>
       <div><span className="text-xs text-gray-500 font-semibold mb-1.5 block">Ai thấy</span>
-        <ShareSeg shared={f.shared} onChange={x => setF({ ...f, shared: x })} who={who} owner={initial?.owner || who} noun="kế hoạch"/></div>
+        <SharePick value={share} onChange={setShare} who={who} owner={initial?.owner || who} noun="kế hoạch"/></div>
       <button onClick={() => setLook(!look)} className="self-start text-xs text-gray-500">{f.emoji} Biểu tượng & màu {look ? '▾' : '▸'}</button>
       {look && <>
         <div className="flex flex-wrap gap-1.5 -mt-1">{P_EMOJI.map(e => <Chip key={e} on={f.emoji === e} onClick={() => setF({ ...f, emoji: e })} cls="text-lg px-2.5 py-1">{e}</Chip>)}</div>
@@ -1618,7 +1626,7 @@ function BigGoal({ p, g, onEdit }) {
 
 // Một mục tiêu nhỏ: hạn, %, x/y việc, tình trạng; mở ra là danh sách việc + ô thêm việc chọn "khi nào làm"
 function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpenTask, onSave, onRemove }) {
-  const [title, setTitle] = useState(''), [when, setWhen] = useState('due'), [pick, setPick] = useState(today), [notify, setNotify] = useState('both')
+  const [title, setTitle] = useState(''), [when, setWhen] = useState('due'), [pick, setPick] = useState(today)
   const [edit, setEdit] = useState(false), [line, setLine] = useState(''), [confirmDel, setConfirmDel] = useState(false), [editErr, setEditErr] = useState('')
   const S = PSTATE[sg.state] || PSTATE.empty
   const label = sg.state === 'late' ? `Trễ ${-sg.daysLeft} ngày` : sg.state === 'ok' ? (sg.daysLeft === 0 ? 'Hạn hôm nay' : `Đúng tiến độ · còn ${sg.daysLeft} ngày`)
@@ -1626,8 +1634,7 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
   const dueOf = () => sg.due || p.deadline || today
   const add = () => {
     const t = title.trim(); if (!t) return
-    const base = { title: t, project_id: p.id, group_name: sg.name === 'Chung' ? null : sg.name, shared: p.shared,
-      ...(p.shared && notify !== 'both' ? { notify } : {}) }   // chỉ gửi khi khác mặc định (an toàn nếu chưa chạy SQL)
+    const base = { title: t, project_id: p.id, group_name: sg.name === 'Chung' ? null : sg.name, share_with: shareOf(p) }   // việc theo người của kế hoạch
     if (when === 'daily') { const until = dueOf() < today ? today : dueOf()
       onAdd({ ...base, due_date: today, repeat_unit: 'day', repeat_every: 1, repeat_start: today, repeat_until: until }) }
     else onAdd({ ...base, due_date: when === 'today' ? today : when === 'tmr' ? addDays(today, 1) : when === 'pick' ? (pick || today) : dueOf(), repeat_unit: '', repeat_every: 1 })
@@ -1665,7 +1672,6 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
               <span className={`text-[11px] rounded-lg px-2 py-0.5 whitespace-nowrap ${series ? 'bg-emerald-50 text-emerald-800' : late ? 'bg-red-50 text-red-700' : t.due_date === today ? 'bg-purple-50 text-purple-800 font-semibold' : 'bg-gray-100 text-gray-600'}`}>
                 {series ? `↻ ${t.repeat_unit === 'day' && t.repeat_every === 1 ? 'hằng ngày' : describe(t)}${t.repeat_until ? ' → ' + dm(t.repeat_until) : ''}`
                   : t.due_date ? (t.due_date === today ? 'hạn hôm nay' : (late ? 'quá hạn ' : 'hạn ') + dm(t.due_date)) : 'chưa có hạn'}</span>
-              {t.shared && (n => <span title={'Nhắc cho ' + (n === 'both' ? 'cả hai' : PEOPLE[n])} className="text-[10px] font-bold text-blue-700 bg-blue-50 rounded px-1.5 py-0.5">{n === 'both' ? 'L·M' : n === 'mai' ? 'M' : 'L'}</span>)(t.notify || 'both')}
             </div>) })}
         {canEdit && <>
           <div className="flex gap-2 mt-2">
@@ -1683,12 +1689,6 @@ function SubGoal({ sg, p, today, isOpen, onToggle, canEdit, onAdd, onTick, onOpe
           </div>
           {when === 'daily' && <p className="text-[11px] text-gray-400 mt-1">Hiện trong lịch mỗi ngày từ hôm nay tới {dm(dueOf())}</p>}
           {(d => sg.due && d && d > sg.due && <p className="text-[11px] text-amber-700 mt-1" role="alert">⚠ Hạn {dm(d)} sau hạn {sg.name} {dm(sg.due)}</p>)(when === 'today' ? today : when === 'tmr' ? addDays(today, 1) : when === 'pick' ? pick : null)}
-          {p.shared && <div className="flex flex-wrap items-center gap-1.5 mt-2 text-xs text-gray-500" role="radiogroup" aria-label="Nhắc cho">
-            <span>Nhắc cho:</span>
-            {[['linh', PEOPLE.linh], ['mai', PEOPLE.mai], ['both', 'Cả hai']].map(([k, l]) =>
-              <button key={k} role="radio" aria-checked={notify === k} onClick={() => setNotify(k)}
-                className={`px-2.5 py-1 rounded-lg ${notify === k ? 'bg-blue-600 text-white font-semibold' : 'bg-gray-100 text-gray-600'}`}>{l}</button>)}
-          </div>}
           <div className="mt-2.5 text-right">
             {edit ? <div className="flex gap-2 items-center">
                 <input value={line} onChange={e => { setLine(e.target.value); setEditErr('') }} aria-label="Sửa mục tiêu nhỏ" className="flex-1 min-w-0 border border-gray-200 rounded-xl px-3 py-2 text-base"/>
@@ -1807,13 +1807,13 @@ function NotifySection({ who }) {
           <input type="time" value={prefs.evAt} onChange={e => e.target.value && upd({ ...prefs, evAt: e.target.value })} aria-label="Giờ tổng kết" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center mr-2"/>
           <Switch on={prefs.ev} onClick={() => upd({ ...prefs, ev: !prefs.ev })} label="Tổng kết cuối ngày"/></SetRow>
       </div>
-      <p className="text-xs text-gray-400 pb-3">Ngày trai nhắc theo giờ đặt ở mục Ngày trai, gửi cho cả hai người.</p>
+      <p className="text-xs text-gray-400 pb-3">Ngày trai nhắc theo giờ đặt ở mục Ngày trai, gửi cho cả nhà.</p>
     </div>
   )
 }
 
 // ── CÀI ĐẶT ──
-function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, linkPrefs = DEFAULT_LINKS, onLinkPrefs }) {
+function SettingsPage({ who, kid, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, linkPrefs = DEFAULT_LINKS, onLinkPrefs }) {
   const toast = useToast()
   const [pinMode, setPinMode] = useState(false), [p1, setP1] = useState('')
   const changePin = async () => {
@@ -1825,18 +1825,21 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
         <button onClick={onBack} className="w-11 h-11 text-2xl text-gray-500" aria-label="Quay lại">‹</button>
         <h2 className="flex-1 text-center text-lg font-bold text-gray-800">Cài đặt Việc</h2><span className="w-11"/></div></header>
       <div className="max-w-2xl mx-auto px-3 pt-3 flex flex-col gap-3">
-        <div className="bg-white rounded-2xl px-4">
+        {kid ? <div className="bg-white rounded-2xl px-4 py-3">
+          <div className="text-xs text-gray-400">Ngày trai · chung cả nhà</div>
+          <p className="text-sm text-gray-600 mt-1">{cfg.trai ? `Lịch đánh dấu 10 ngày trai${cfg.bu27 ? ', tháng thiếu ăn bù ngày 27' : ''} · nhắc lúc ${cfg.traiAt}.` : 'Đang tắt đánh dấu ngày trai.'} Bố mẹ cài đặt phần này.</p>
+        </div> : <div className="bg-white rounded-2xl px-4">
           <div className="text-xs text-gray-400 pt-3">Ngày trai · chung cả nhà</div>
           <SetRow title="Đánh dấu 10 ngày trai" sub="Mùng 1, 8, 14, 15, 18, 23, 24, 28, 29, 30 âm"><Switch on={cfg.trai} onClick={() => onCfg({ ...cfg, trai: !cfg.trai })} label="Đánh dấu ngày trai"/></SetRow>
           <SetRow title="Tháng thiếu ăn bù ngày 27" sub="Tháng âm 29 ngày không có ngày 30"><Switch on={cfg.bu27} onClick={() => onCfg({ ...cfg, bu27: !cfg.bu27 })} label="Ăn bù ngày 27"/></SetRow>
-          <SetRow title="Nhắc ngày trai lúc" sub="Gửi cho cả hai người">
+          <SetRow title="Nhắc ngày trai lúc" sub="Gửi cho cả nhà (ai không muốn thì tự tắt nhắc nhở)">
             <input type="time" value={cfg.traiAt} onChange={e => e.target.value && onCfg({ ...cfg, traiAt: e.target.value })} aria-label="Giờ nhắc ngày trai" className="w-[104px] min-w-0 block appearance-none border border-gray-200 rounded-lg px-2 py-2 text-base bg-white text-center"/></SetRow>
-        </div>
+        </div>}
         <NotifySection who={who}/>
         <div className="bg-white rounded-2xl px-4">
           <div className="text-xs text-gray-400 pt-3">Hiện thêm trên lịch · chỉ xem</div>
-          <SetRow title="💎 Trang sức" sub="Đặt hàng, hàng dự kiến về, nhập kho, hẹn giao khách"><Switch on={linkPrefs.jewelry} onClick={() => onLinkPrefs({ ...linkPrefs, jewelry: !linkPrefs.jewelry })} label="Mốc Trang sức"/></SetRow>
-          <SetRow title="🧪 Lab" sub="Làm lô, đặt nguyên liệu, nguyên liệu về"><Switch on={linkPrefs.lab} onClick={() => onLinkPrefs({ ...linkPrefs, lab: !linkPrefs.lab })} label="Mốc Lab"/></SetRow>
+          {!kid && <SetRow title="💎 Trang sức" sub="Đặt hàng, hàng dự kiến về, nhập kho, hẹn giao khách"><Switch on={linkPrefs.jewelry} onClick={() => onLinkPrefs({ ...linkPrefs, jewelry: !linkPrefs.jewelry })} label="Mốc Trang sức"/></SetRow>}
+          {!kid && <SetRow title="🧪 Lab" sub="Làm lô, đặt nguyên liệu, nguyên liệu về"><Switch on={linkPrefs.lab} onClick={() => onLinkPrefs({ ...linkPrefs, lab: !linkPrefs.lab })} label="Mốc Lab"/></SetRow>}
           <SetRow title="✂️ Ngày cắt tóc, móng tay" sub="Ngày tốt có dấu ✂ đỏ; kết quả hiện trong chi tiết ngày"><Switch on={linkPrefs.hair !== false} onClick={() => onLinkPrefs({ ...linkPrefs, hair: linkPrefs.hair === false })} label="Ngày cắt tóc"/></SetRow>
           <p className="text-xs text-gray-400 pb-3">Bật tắt riêng cho {PEOPLE[who]}. Không gửi thông báo cho các mốc này.</p>
         </div>
@@ -1851,15 +1854,39 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
               <span className="text-gray-300 text-xl">›</span></button>))}
           {daily.length === 0 && <p className="text-sm text-gray-400 py-4 text-center">Chưa có Daily nào</p>}
         </div>
-        <div className="bg-white rounded-2xl px-4">
+        {kid && <KidAccount who={who}/>}
+        {!kid && <div className="bg-white rounded-2xl px-4">
           <div className="text-xs text-gray-400 pt-3">Tài khoản</div>
           <SetRow title="Đổi mã PIN" sub={`Mã riêng của ${PEOPLE[who]}`}><button onClick={() => setPinMode(!pinMode)} className="text-sm text-purple-700">{pinMode ? 'Đóng' : 'Đổi'}</button></SetRow>
           {pinMode && <div className="flex gap-2 pb-3"><input inputMode="numeric" maxLength={4} value={p1} onChange={e => setP1(e.target.value.replace(/\D/g, ''))}
             placeholder="4 số mới" className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
             <button onClick={changePin} className="bg-purple-600 text-white rounded-xl px-4 font-semibold">Lưu</button></div>}
           <SetRow title={`Đổi sang ${PEOPLE[otherOf(who)]}`} sub="Máy này sẽ hỏi mã PIN của người kia"><button onClick={onSwitch} className="text-sm text-red-600">Đổi người</button></SetRow>
-        </div>
+        </div>}
       </div>
+    </div>
+  )
+}
+
+// Tài khoản con: đổi mật khẩu, đăng xuất (bố mẹ làm ở Home)
+function KidAccount({ who }) {
+  const toast = useToast()
+  const [open, setOpen] = useState(false), [cur, setCur] = useState(''), [pw, setPw] = useState(''), [busy, setBusy] = useState(false)
+  const change = async () => {
+    if (pw.length < 8) { toast.error('Mật khẩu mới tối thiểu 8 ký tự'); return }
+    setBusy(true)
+    try { await changePasswordChecked(cur, pw); toast.success('Đã đổi mật khẩu'); setOpen(false); setCur(''); setPw('') }
+    catch (e) { toast.error(e.message) } finally { setBusy(false) }
+  }
+  return (
+    <div className="bg-white rounded-2xl px-4">
+      <div className="text-xs text-gray-400 pt-3">Tài khoản · {PEOPLE[who]}</div>
+      <SetRow title="Đổi mật khẩu"><button onClick={() => setOpen(!open)} className="text-sm text-purple-700">{open ? 'Đóng' : 'Đổi'}</button></SetRow>
+      {open && <div className="flex flex-col gap-2 pb-3">
+        <input type="password" value={cur} onChange={e => setCur(e.target.value)} placeholder="Mật khẩu hiện tại" autoComplete="current-password" className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+        <input type="password" value={pw} onChange={e => setPw(e.target.value)} placeholder="Mật khẩu mới (tối thiểu 8 ký tự)" autoComplete="new-password" className="border border-gray-200 rounded-xl px-3 py-2.5 text-base"/>
+        <button disabled={busy || !cur || !pw} onClick={change} className="py-2.5 rounded-xl bg-purple-600 text-white font-semibold disabled:opacity-50">{busy ? 'Đang lưu…' : 'Lưu mật khẩu mới'}</button></div>}
+      <SetRow title="Đăng xuất khỏi máy này"><button onClick={() => confirm('Đăng xuất khỏi máy này?') && signOut()} className="text-sm text-red-600">Đăng xuất</button></SetRow>
     </div>
   )
 }
@@ -1867,8 +1894,8 @@ function SettingsPage({ who, cfg, onCfg, daily, onEditDaily, onSwitch, onBack, l
 // ── THÊM / SỬA DAILY ──
 function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onManual }) {
   const hadCycle = hasCycle(initial)
-  const [f, setF] = useState(() => { const base = initial ? { ...initial } : { name: '', emoji: '⭐', color: '#7F77DD', kind: 'time', target_min: 30, start_time: '', weekdays: '1234567', remind: false, shared: false }
-    return { ...base, cycleOn: hadCycle, cycle_on: base.cycle_on || 90, cycle_off: base.cycle_off || 21, cycle_start: base.cycle_start || getLocalDateString(),
+  const [f, setF] = useState(() => { const base = initial ? { ...initial } : { name: '', emoji: '⭐', color: '#7F77DD', kind: 'time', target_min: 30, start_time: '', weekdays: '1234567', remind: false }
+    return { ...base, share: shareOf(base), cycleOn: hadCycle, cycle_on: base.cycle_on || 90, cycle_off: base.cycle_off || 21, cycle_start: base.cycle_start || getLocalDateString(),
       cycle_warn_end: base.cycle_warn_end ?? 7, cycle_warn_back: base.cycle_warn_back ?? 3 } })
   const [cycErr, setCycErr] = useState('')
   const [pick, setPick] = useState(false)                 // bảng chọn biểu tượng + màu
@@ -1884,14 +1911,14 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
   const save = () => {
     if (!f.name.trim()) return
     if (!f.weekdays) return
-    const { id, name, emoji, color, kind, target_min, start_time, weekdays, remind, shared, archived, unit, project_id } = f
+    const { id, name, emoji, color, kind, target_min, start_time, weekdays, remind, share, archived, unit, project_id } = f
     const cyc = f.cycleOn ? { cycle_on: Math.max(1, Number(f.cycle_on) || 0), cycle_off: Math.max(1, Number(f.cycle_off) || 0), cycle_start: f.cycle_start || getLocalDateString(),
       cycle_warn_end: Math.max(0, Number(f.cycle_warn_end) || 0), cycle_warn_back: Math.max(0, Number(f.cycle_warn_back) || 0) }
       : hadCycle ? { cycle_on: null, cycle_off: null, cycle_start: null } : {}       // tắt chu kỳ → xoá; chưa từng có → không gửi cột mới
     if (f.cycleOn && (!(Number(f.cycle_on) > 0) || !(Number(f.cycle_off) > 0))) { setCycErr('Nhập số ngày dùng và số ngày nghỉ'); return }
     onSave({ ...(id ? { id } : {}), name: name.trim(), emoji, color, kind, target_min: kind === 'tick' ? 1 : Math.max(1, Math.round(Number(target_min) || 1)),
       unit: kind === 'count' ? ((unit || '').trim() || null) : null,
-      start_time: start_time || null, weekdays, remind: !!(remind && start_time), shared: !!shared, archived: !!archived,
+      start_time: start_time || null, weekdays, remind: !!(remind && start_time), ...(!initial || initial.owner === who ? { share_with: share } : {}), archived: !!archived,
       ...(project_id !== undefined ? { project_id: project_id || null } : {}), ...cyc })   // chỉ gửi khi cột đã có hoặc vừa chọn
   }
   return (
@@ -1967,7 +1994,7 @@ function DailyForm({ initial, who, projects = [], onSave, onBack, onStart, onMan
             {projects.filter(p => !p.archived || p.id === f.project_id).map(p => <option key={p.id} value={p.id}>{p.emoji} {p.name}</option>)}
           </select></label>}
         <div><span className="text-xs text-gray-500">Ai thấy</span><div className="mt-1">
-          <ShareSeg shared={f.shared} onChange={x => set('shared', x)} who={who} owner={initial?.owner || who} noun="Daily"/></div></div>
+          <SharePick value={f.share} onChange={x => set('share', x)} who={who} owner={initial?.owner || who} noun="Daily"/></div></div>
       </div>
       <div className="flex gap-2 mt-3">
         {initial && initial.owner === who && <button onClick={() => onSave({ id: initial.id, archived: !initial.archived })} className="flex-1 py-3 rounded-xl bg-white text-gray-600">{initial.archived ? 'Bỏ lưu trữ' : 'Lưu trữ'}</button>}

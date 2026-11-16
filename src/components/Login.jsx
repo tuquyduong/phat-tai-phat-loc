@@ -1,6 +1,6 @@
 // Màn đăng nhập (email + mật khẩu) và màn đặt mật khẩu mới lần đầu
 import { useState } from 'react'
-import { Lock, Mail, Eye, EyeOff, Package, KeyRound } from 'lucide-react'
+import { Lock, User, Eye, EyeOff, Package, KeyRound } from 'lucide-react'
 import { signIn, signOut, changePassword, lastEmail } from '../lib/auth'
 
 function Shell({ title, sub, children }) {
@@ -57,11 +57,11 @@ export default function Login() {
     <Shell title="Chi Mai" sub="Đăng nhập để tiếp tục">
       <form onSubmit={submit} className="bg-white rounded-2xl shadow-card p-6 space-y-4">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">Email</label>
+          <label className="block text-sm font-medium text-gray-700 mb-2">Email hoặc tên đăng nhập</label>
           <div className="relative">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><Mail size={20} /></div>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="username"
-              autoFocus={!email} placeholder="email@gmail.com" inputMode="email"
+            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"><User size={20} /></div>
+            <input type="text" value={email} onChange={e => setEmail(e.target.value)} autoComplete="username"
+              autoFocus={!email} placeholder="email@gmail.com hoặc tên" autoCapitalize="none" autoCorrect="off" spellCheck={false}
               className="w-full pl-10 pr-3 py-3 border border-gray-200 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-green-500" />
           </div>
         </div>
