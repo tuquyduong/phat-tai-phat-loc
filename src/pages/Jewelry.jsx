@@ -98,6 +98,10 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
     finally { setLoading(false) }
   }, [toast])
 
+  // Sửa 1 đơn ngay trong danh sách đang có (đã thu…) — không phải tải lại cả kho
+  const patchSale = useCallback((id, patch) =>
+    setSales(list => list.map(s => s.id === id ? { ...s, ...patch } : s)), [])
+
   useEffect(() => { loadData() }, [loadData])
   useEffect(() => {                                     // ghi bù các dòng sổ nhập lần trước mạng lỗi chưa ghi được
     flushPendingIntakes().then(n => { if (n) { toast.success(`Đã ghi bù ${n} dòng sổ nhập`); loadData() } }).catch(() => {})
@@ -264,7 +268,8 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
       ) : modTab === 'ban' ? (
         banView === 'orders' ? (
             <BanTab sales={sales} stats={stats}
-              onRefresh={loadData}
+              onRefresh={() => loadData(true)}
+              onPatch={patchSale}
               onEdit={s => setEditSale(s)}
               toast={toast}/>
           ) : (
@@ -284,7 +289,7 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
       ) : (
         soView === 'report'
           ? <BcTab stats={stats} sales={sales} jewelry={jewelry} toast={toast}
-              onRefresh={() => loadData(true)}
+              onPatch={patchSale}
               onEditSale={s => setEditSale(s)}/>
           : soView === 'intake'
           ? <IntakeTab trips={trips} jewelry={jewelry} toast={toast} onRefresh={loadData}/>
@@ -942,7 +947,7 @@ function ReceiveModal({ item, onClose, onDone, toast }) {
 // ============================================
 // BÁN HÀNG TAB — theo dõi đơn
 // ============================================
-function BanTab({ sales, stats, onRefresh, onEdit, toast }) {
+function BanTab({ sales, stats, onRefresh, onPatch, onEdit, toast }) {
   const [view,   setView]   = useState('pending')   // pending | done | all
   const [search, setSearch] = useState('')
   const [busy,   setBusy]   = useState(null)
@@ -970,8 +975,10 @@ function BanTab({ sales, stats, onRefresh, onEdit, toast }) {
   const toggle = async (sale, field) => {
     setBusy(sale.id + field)
     try {
-      await updateSaleStatus(sale.id, field, !sale[field])
-      onRefresh()
+      const upd = await updateSaleStatus(sale.id, field, !sale[field])
+      // Đã thu: chỉ đổi đơn này. Đã giao: tồn kho đổi theo → tải lại ngầm
+      if (field === 'paid' && onPatch) onPatch(sale.id, upd)
+      else onRefresh()
     } catch (err) { toast.error(err.message) }
     finally { setBusy(null) }
   }
@@ -1306,7 +1313,9 @@ function KhachTab({ customers, sales, customerNotes, onNoteSaved }) {
                     <div key={s.id} className="flex items-center gap-2.5 py-1.5 border-b border-gray-200 last:border-0">
                       <div className="flex-1 min-w-0">
                         <div className="text-xs text-gray-700 truncate">
-                          {s.jewelry?.code}{s.jewelry?.name ? ` · ${s.jewelry.name}` : ''}
+                          {s.jewelry?.code
+                            ? `${s.jewelry.code}${s.jewelry.name ? ` · ${s.jewelry.name}` : ''}`
+                            : (s.item_name || 'Hàng order')}
                           {s.jewelry?.size ? ` · size ${s.jewelry.size}` : ''}
                         </div>
                         <div className="text-[10px] text-gray-400">{fmtDate(s.sold_at)} · {s.qty} cái</div>
@@ -1334,10 +1343,9 @@ function KhachTab({ customers, sales, customerNotes, onNoteSaved }) {
 // Ô lịch + khung số tổng cho một ngày trong Báo cáo (kiểu C)
 const WD_SHORT = ['CN', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7']
 const WD_LONG  = ['Chủ nhật', 'Thứ Hai', 'Thứ Ba', 'Thứ Tư', 'Thứ Năm', 'Thứ Sáu', 'Thứ Bảy']
-function DayHeader({ day, open, onToggle, amount, green = false, meta, note, noteClass = '', fill = '0%', paidPct = '0%' }) {
+function DayHeader({ day, today, yday, open, onToggle, amount, green = false, meta, note, noteClass = '', fill = '0%', paidPct = '0%' }) {
   const [y, m, d] = (day || '0-0-0').split('-').map(Number)
   const wd = new Date(y, m - 1, d).getDay()
-  const today = todayLocal(), yday = todayLocal(new Date(Date.now() - 86400000))
   const name = day === today ? 'Hôm nay' : day === yday ? 'Hôm qua' : WD_LONG[wd]
   return (
     <button onClick={onToggle} aria-expanded={open}
@@ -1369,7 +1377,7 @@ function DayHeader({ day, open, onToggle, amount, green = false, meta, note, not
   )
 }
 
-function BcTab({ stats, sales = [], jewelry = [], toast, onRefresh, onEditSale }) {
+function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) {
   const [bcTab, setBcTab] = useState('dt')            // dt | tien | no | chay | ton
   const [month, setMonth] = useState(monthLocal())    // 'YYYY-MM' — null là Tất cả
   const [openDays, setOpenDays] = useState({})        // 'dt:2026-11-12' → true/false; chưa bấm thì chỉ mở ngày mới nhất
@@ -1377,13 +1385,14 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onRefresh, onEditSale }
   const [busy,  setBusy]  = useState(null)
   const isOpen  = (t, day, first) => { const v = openDays[`${t}:${day}`]; return v === undefined ? day === first : v }
   const setOpen = (t, list, val) => setOpenDays(o => { const n = { ...o }; list.forEach(d => { n[`${t}:${d}`] = val }); return n })
+  const today   = todayLocal(), yday = todayLocal(new Date(Date.now() - 86400000))
   const pctOf   = (a, b) => `${b > 0 ? Math.min(100, a / b * 100) : 0}%`
   const markPaid = async (r) => {
     setBusy(r.id)
     try {
-      await updateSaleStatus(r.id, 'paid', true)
+      const upd = await updateSaleStatus(r.id, 'paid', true)
+      onPatch?.(r.id, upd)                              // số ngày / tháng / Dòng tiền tính lại ngay
       toast?.success(`✓ Đã thu ${moneyFull(r.owe)}`)
-      onRefresh?.()
     } catch (err) { toast?.error(err.message || 'Không lưu được') }
     finally { setBusy(null) }
   }
@@ -1515,7 +1524,7 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onRefresh, onEditSale }
                 const open = isOpen('dt', dd.day, dtFirst)
                 return (
                   <div key={dd.day} className="bg-white border-b border-gray-200">
-                    <DayHeader day={dd.day} open={open}
+                    <DayHeader day={dd.day} today={today} yday={yday} open={open}
                       onToggle={() => setOpen('dt', [dd.day], !open)}
                       amount={moneyFull(dd.revenue)}
                       meta={`${dd.orders} đơn · ${dd.qty} món${dd.giftQty ? ` · tặng ${dd.giftQty}` : ''}`}
@@ -1660,7 +1669,7 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onRefresh, onEditSale }
             const open = isOpen('tien', dd.day, cFirst)
             return (
               <div key={dd.day} className="bg-white border-b border-gray-200">
-                <DayHeader day={dd.day} open={open} green
+                <DayHeader day={dd.day} today={today} yday={yday} open={open} green
                   onToggle={() => setOpen('tien', [dd.day], !open)}
                   amount={`+${moneyFull(dd.total)}`}
                   meta={`${dd.count} khoản`}

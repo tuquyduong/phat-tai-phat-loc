@@ -309,7 +309,8 @@ export async function deleteJewelry(id) {
 export async function getJewelrySales() {
   return fetchAll(() => supabase
     .from('jewelry_sales')
-    .select('*, jewelry(code, name, category)')
+    // Lấy đủ các trường mà màn Bán / Khách đọc qua s.jewelry — thiếu image_url là đơn mất ảnh
+    .select('*, jewelry(code, name, category, image_url, size)')
     .order('sold_at', { ascending: false })
     .order('created_at', { ascending: false }))
 }
@@ -449,15 +450,21 @@ export async function receiveOrder(jewelryId, actualQty) {
 }
 
 // Tick "đã giao" / "đã thanh toán"
+// Trả về đúng các trường đã ghi — để màn hình cập nhật tại chỗ, khỏi tải lại cả danh sách
 export async function updateSaleStatus(saleId, field, value) {
   const today = todayLocal()
-  const { data: sale, error: ge } = await supabase
-    .from('jewelry_sales').select('*').eq('id', saleId).single()
-  if (ge) throw ge
-
   const updates = {
     [field]: value,
     [`${field}_at`]: value ? today : null,
+  }
+
+  // Chỉ "đã giao" mới đụng tới kho → mới cần đọc đơn; "đã thu" ghi thẳng, bớt 1 lượt mạng
+  let sale = null
+  if (field === 'delivered') {
+    const { data, error: ge } = await supabase
+      .from('jewelry_sales').select('*').eq('id', saleId).single()
+    if (ge) throw ge
+    sale = data
   }
 
   // Khi tick "đã giao" lần đầu cho hàng CÓ SẴN → trừ kho
@@ -491,6 +498,7 @@ export async function updateSaleStatus(saleId, field, value) {
   const { error } = await supabase
     .from('jewelry_sales').update(updates).eq('id', saleId)
   if (error) throw error
+  return updates
 }
 
 // Ép về số không âm — chặn dữ liệu rác lọt vào DB
