@@ -1,9 +1,8 @@
 // ============================================
 // APP SHELL - v2 (thêm ToastProvider cho module mới)
-// App.jsx gốc KHÔNG bị sửa
+// (App.jsx — module Đơn hàng cũ — đã ẩn, không còn được nạp)
 // ============================================
 import { useState, useEffect, lazy, Suspense } from 'react'
-import App from './App'
 import { ToastProvider } from './components/Toast'
 import BottomTabs from './components/shared/BottomTabs'
 import Home from './pages/Home'
@@ -12,7 +11,9 @@ import Lab from './pages/Lab'
 import Jewelry from './pages/Jewelry'
 // Tab Việc chỉ tải khi mở lần đầu — các tab khác không phải gánh thêm
 const Viec = lazy(() => import('./pages/Viec'))
-import { verifySessionDetailed, hasLocalSession } from './lib/supabase'
+import { supabase } from './lib/supabase'
+import { mustChangePassword } from './lib/auth'
+import Login, { SetNewPassword } from './components/Login'
 import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
@@ -36,44 +37,23 @@ export default function AppShell() {
     navigator.serviceWorker.addEventListener('message', onMsg)
     return () => navigator.serviceWorker.removeEventListener('message', onMsg)
   }, [])
-  const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
+  // Phiên đăng nhập Supabase: undefined = đang đọc, null = chưa đăng nhập
+  const [session, setSession] = useState(undefined)
+  const isAuthenticated = !!session && !mustChangePassword(session)
   const [activeModules, setActiveModulesState] = useState(['expenses', 'lab', 'jewelry'])
 
-
-
-  // Kiểm tra auth từ localStorage
   useEffect(() => {
     let alive = true
-    const checkAuth = async () => {
-      try {
-        const r = await verifySessionDetailed()
-        if (!alive) return
-        // 'offline' → giữ nguyên trạng thái, không tự logout khi mất mạng
-        if (r === 'offline') return
-        const valid = r === 'valid'
-        if (valid !== isAuthenticated) setIsAuthenticated(valid)
-      } catch { /* im lặng, giữ trạng thái hiện tại */ }
-    }
-
-    // Đồng bộ nhanh khi login/logout (không phải chờ 60s)
-    const onAuthChanged = () => {
-      const hasToken = hasLocalSession()
-      if (alive && hasToken !== isAuthenticated) setIsAuthenticated(hasToken)
-      checkAuth()   // xác thực lại chữ ký ở nền
-    }
-
-    checkAuth()
-    window.addEventListener('auth-changed', onAuthChanged)
-    window.addEventListener('storage', onAuthChanged)   // đồng bộ giữa các tab
-    const interval = setInterval(checkAuth, 60000)
-
-    return () => {
-      alive = false
-      clearInterval(interval)
-      window.removeEventListener('auth-changed', onAuthChanged)
-      window.removeEventListener('storage', onAuthChanged)
-    }
-  }, [isAuthenticated])
+    // Đọc phiên đã lưu trong máy. Phiên quá hạn mà đang mất mạng → Supabase trả lỗi nhưng VẪN giữ phiên trong máy:
+    // khi đó đứng chờ, có mạng lại thì đọc lại — không đá ra màn đăng nhập.
+    const load = () => supabase.auth.getSession().then(({ data, error }) => {
+      if (alive && !(error && !data.session)) setSession(data.session || null)
+    })
+    load()
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { if (alive) setSession(s || null) })
+    window.addEventListener('online', load)
+    return () => { alive = false; sub.subscription.unsubscribe(); window.removeEventListener('online', load) }
+  }, [])
 
   // Load module config
   useEffect(() => {
@@ -84,25 +64,11 @@ export default function AppShell() {
     }
   }, [isAuthenticated])
 
-  // Load data cho Home
-
-  // Chưa login → App gốc lo màn đăng nhập
-  if (!isAuthenticated) {
-    return (
-      <>
-        <div className={isAuthenticated ? 'pb-16' : ''}>
-          <App />
-        </div>
-        {isAuthenticated && (
-          <BottomTabs
-            activeTab={activeModule}
-            onTabChange={setActiveModule}
-            activeModules={activeModules}
-          />
-        )}
-      </>
-    )
-  }
+  if (session === undefined) return (                                            // đang đọc phiên / chờ có mạng
+    <div className="min-h-screen flex items-center justify-center text-sm text-gray-400">Đang kết nối…</div>
+  )
+  if (!session) return <Login />
+  if (mustChangePassword(session)) return <SetNewPassword email={session.user?.email} />
 
   // Module khác → cần ToastProvider riêng (vì nằm ngoài App.jsx)
   const renderModule = () => {
@@ -112,6 +78,7 @@ export default function AppShell() {
           <Home
             onNavigate={setActiveModule}
             activeModules={activeModules}
+            email={session.user?.email}
           />
         )
       case 'expenses':

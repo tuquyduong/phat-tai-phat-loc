@@ -1253,7 +1253,7 @@ export async function getIntakes(jewelryId) {
 export async function getAllIntakes({ from, to, tripId, limit = 300 } = {}) {
   let q = supabase
     .from('jewelry_intakes')
-    .select('*, jewelry(code, name, image_url), jewelry_trips(name)')
+    .select('*, jewelry(code, name, image_url, sell_price), jewelry_trips(name)')
     .order('intake_at', { ascending: false })
     .limit(limit)
   if (from)   q = q.gte('intake_at', from)
@@ -1267,6 +1267,7 @@ export async function getAllIntakes({ from, to, tripId, limit = 300 } = {}) {
     name:      r.jewelry?.name || null,
     deleted:   !r.jewelry,
     image_url: r.jewelry?.image_url || null,
+    sell_price: Number(r.jewelry?.sell_price) || 0,   // giá trị sổ nhập tính theo giá bán của món
     trip_name: r.jewelry_trips?.name || null,
     jewelry: undefined, jewelry_trips: undefined,
   }))
@@ -1314,10 +1315,13 @@ export function groupIntakesByDay(list) {
   list.forEach(r => {
     // Lấy ngày theo giờ máy, không cắt chuỗi UTC
     const d = r.intake_at ? todayLocal(new Date(r.intake_at)) : ''
-    if (!map[d]) map[d] = { date: d, rows: [], totalQty: 0, totalCost: 0 }
+    if (!map[d]) map[d] = { date: d, rows: [], totalQty: 0, totalCost: 0, totalSell: 0, noPrice: 0 }
+    const q = Number(r.qty) || 0
     map[d].rows.push(r)
-    map[d].totalQty  += Number(r.qty) || 0
-    map[d].totalCost += (Number(r.qty) || 0) * (Number(r.cost_price) || 0)
+    map[d].totalQty  += q
+    map[d].totalCost += q * (Number(r.cost_price) || 0)      // vốn: chỉ dòng có ghi giá nhập
+    map[d].totalSell += q * (Number(r.sell_price) || 0)      // giá trị theo giá bán
+    if (!(Number(r.sell_price) > 0)) map[d].noPrice += 1
   })
   return Object.values(map).sort((a, b) => b.date.localeCompare(a.date))
 }

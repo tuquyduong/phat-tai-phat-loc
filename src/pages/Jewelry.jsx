@@ -2052,6 +2052,8 @@ function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
   const days = useMemo(() => groupIntakesByDay(filtered), [filtered])
   const totalQty  = filtered.reduce((s,r) => s + (Number(r.qty)||0), 0)
   const totalCost = filtered.reduce((s,r) => s + (Number(r.qty)||0) * (Number(r.cost_price)||0), 0)
+  const totalSell = filtered.reduce((s,r) => s + (Number(r.qty)||0) * (Number(r.sell_price)||0), 0)
+  const noPrice   = filtered.filter(r => !(Number(r.sell_price) > 0)).length
 
   const fmtDay = d => { if(!d) return ''; const [y,m,dd]=d.split('-'); return `${dd}/${m}/${y}` }
   const srcLabel = s => ({
@@ -2066,8 +2068,10 @@ function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
           <div className="text-lg font-semibold text-purple-600 mt-0.5">{totalQty} cái</div>
         </div>
         <div className="bg-white rounded-xl border border-gray-100 p-3">
-          <div className="text-[10px] text-gray-500">Tiền hàng</div>
-          <div className="text-lg font-semibold text-amber-600 mt-0.5">{fmtMoney(totalCost)}</div>
+          <div className="text-[10px] text-gray-500">Giá trị (theo giá bán)</div>
+          <div className="text-lg font-semibold text-amber-600 mt-0.5">{fmtMoney(totalSell)}</div>
+          {totalCost > 0 && <div className="text-[10px] text-gray-500">vốn đã ghi {fmtMoney(totalCost)}</div>}
+          {noPrice > 0 && <div className="text-[10px] text-orange-600">{noPrice} dòng chưa có giá bán</div>}
         </div>
       </div>
 
@@ -2107,8 +2111,7 @@ function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
           <div className="flex items-center justify-between px-4 py-1.5 bg-gray-50 border-y border-gray-100">
             <span className="text-[11px] font-semibold text-gray-600">{fmtDay(day.date)}</span>
             <span className="text-[10px] text-gray-500">
-              {day.totalQty} cái
-              {day.totalCost > 0 && ` · ${fmtMoney(day.totalCost)}`}
+              {day.totalQty} cái · {fmtMoney(day.totalSell)}
             </span>
           </div>
           {day.rows.map(r => (
@@ -2142,8 +2145,11 @@ function IntakeTab({ trips, jewelry = [], toast, onRefresh }) {
               </div>
               <div className="text-right flex-shrink-0">
                 <div className="text-xs font-bold text-purple-700">+{r.qty}</div>
+                {r.sell_price > 0
+                  ? <div className="text-[10px] text-gray-600">{fmtMoney(r.qty * r.sell_price)}</div>
+                  : <div className="text-[10px] text-orange-600">chưa có giá</div>}
                 {r.cost_price > 0 && (
-                  <div className="text-[10px] text-gray-400">{fmtMoney(r.qty * r.cost_price)}</div>
+                  <div className="text-[9px] text-gray-400">vốn {fmtMoney(r.qty * r.cost_price)}</div>
                 )}
               </div>
             </div>

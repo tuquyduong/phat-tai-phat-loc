@@ -3,12 +3,13 @@
 // Thêm: Đổi mật khẩu + Backup/Restore
 // ============================================
 import { useState, useEffect } from 'react'
-import { Lock, Download, Upload, Database, Eye, EyeOff } from 'lucide-react'
+import { Lock, Download, Upload, Database, Eye, EyeOff, LogOut } from 'lucide-react'
 import {
-  setPassword, checkPassword, supabase,
+  supabase,
   loadUsage, readUsageCache, fmtBytes, USAGE_LIMITS,
 } from '../lib/supabase'
 import { useToast } from '../components/Toast'
+import { changePasswordChecked, signOut } from '../lib/auth'
 
 // Backup tables list
 const BACKUP_TABLES = [
@@ -103,13 +104,50 @@ async function downloadImagesZip(onProgress) {
   zip.file('HUONG_DAN_KHOI_PHUC_ANH.txt',
     'Ảnh sản phẩm Chi Mai — sao lưu ngày ' + new Date().toLocaleDateString('vi-VN') + '\n' +
     'Số ảnh: ' + (files.length - failed.length) + (failed.length ? ' (thiếu ' + failed.length + ': ' + failed.join(', ') + ')' : '') + '\n\n' +
-    "Khôi phục: Supabase → Storage → kho '" + IMG_BUCKET + "' → Upload toàn bộ các file ảnh này (giữ nguyên tên).\n" +
+    'Khôi phục: mở app → Home → Sao lưu dữ liệu → "Khôi phục ảnh từ file .zip" → chọn file này.\n' +
+    'App chỉ thêm ảnh còn thiếu, ảnh đang có giữ nguyên.\n' +
     'Dữ liệu sản phẩm (file .json) đã ghi đường dẫn theo đúng tên file, nên tải lên xong là ảnh tự hiện lại.\n')
   const blob = await zip.generateAsync({ type: 'blob', compression: 'STORE' })   // ảnh JPEG đã nén sẵn: chỉ gom, không nén lại — nhanh, đỡ tốn pin
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob)
   a.download = 'chimai_anh_' + new Date().toISOString().slice(0, 10) + '.zip'; a.click()
   setTimeout(() => URL.revokeObjectURL(a.href), 4000)
   return { count: files.length - failed.length, failed }
+}
+
+// ── KHÔI PHỤC ẢNH từ file .zip ở trên ──
+// Chỉ THÊM ảnh còn thiếu trong kho (so theo tên file) — ảnh đang có giữ nguyên, không ghi đè.
+const IMG_MIME = { jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', gif: 'image/gif', heic: 'image/heic' }
+const extOf = n => (n.split('.').pop() || '').toLowerCase()
+async function restoreImagesZip(file, onProgress) {
+  const JSZip = await loadJSZip()
+  let zip
+  try { zip = await JSZip.loadAsync(await blobBytes(file)) }                 // đọc thô trước: mọi trình duyệt đều giải nén được
+  catch { throw new Error('File không phải .zip ảnh sao lưu') }
+  const entries = Object.values(zip.files).filter(f => {
+    const base = f.name.split('/').pop()
+    return !f.dir && base && !base.startsWith('.') && !f.name.startsWith('__MACOSX') && IMG_MIME[extOf(base)]
+  })
+  if (!entries.length) throw new Error('Trong file không có ảnh nào')
+  const have = new Set((await listAllImages()).map(f => f.name))
+  const todo = entries.filter(f => !have.has(f.name.split('/').pop()))
+  const failed = []
+  let done = 0, added = 0
+  onProgress?.(0, todo.length)
+  const work = [...todo]
+  const worker = async () => {                              // tải lên 3 ảnh cùng lúc
+    for (let f = work.shift(); f; f = work.shift()) {
+      const name = f.name.split('/').pop()
+      try {
+        const blob = new Blob([await f.async('uint8array')], { type: IMG_MIME[extOf(name)] })
+        const { error } = await supabase.storage.from(IMG_BUCKET).upload(name, blob, { upsert: false, contentType: IMG_MIME[extOf(name)] })
+        if (error && !/exists|duplicate/i.test(error.message)) throw error
+        if (!error) added++
+      } catch { failed.push(name) }
+      onProgress?.(++done, todo.length)
+    }
+  }
+  await Promise.all([worker(), worker(), worker()])
+  return { skipped: entries.length - todo.length, added, failed }
 }
 
 // Bảng gắn với từng máy, tự tạo lại — không khôi phục (danh sách máy nhận thông báo, nhật ký đã gửi)
@@ -140,7 +178,7 @@ function UsageBar({ label, used, limit, extra, err }) {
   )
 }
 
-export default function Home({ onNavigate, activeModules }) {
+export default function Home({ onNavigate, activeModules, email }) {
   const toast = useToast()
 
   // Password states
@@ -174,6 +212,7 @@ export default function Home({ onNavigate, activeModules }) {
   // Backup states
   const [backupLoading, setBackupLoading] = useState(false)
   const [imgProgress, setImgProgress] = useState(null)    // { done, total } khi đang tải ảnh
+  const [imgRestore, setImgRestore] = useState(null)      // { done, total } khi đang khôi phục ảnh
 
   // Module cards (giữ nguyên)
   const modules = [
@@ -189,19 +228,22 @@ export default function Home({ onNavigate, activeModules }) {
   const handleChangePassword = async () => {
     if (!currentPw) { toast.error('Nhập mật khẩu hiện tại'); return }
     if (!newPw) { toast.error('Nhập mật khẩu mới'); return }
-    if (newPw.length < 4) { toast.error('Mật khẩu mới tối thiểu 4 ký tự'); return }
+    if (newPw.length < 8) { toast.error('Mật khẩu mới tối thiểu 8 ký tự'); return }
     if (newPw !== confirmPw) { toast.error('Xác nhận mật khẩu không khớp'); return }
 
     setPwLoading(true)
     try {
-      const valid = await checkPassword(currentPw)
-      if (!valid) { toast.error('Mật khẩu hiện tại không đúng'); return }
-      await setPassword(newPw)
+      await changePasswordChecked(currentPw, newPw)
       toast.success('Đã đổi mật khẩu thành công!')
       setCurrentPw(''); setNewPw(''); setConfirmPw(''); setShowSecurity(false)
     } catch (err) {
-      toast.error('Lỗi: ' + err.message)
+      toast.error(err.message)
     } finally { setPwLoading(false) }
+  }
+
+  const handleLogout = async () => {
+    if (!confirm('Đăng xuất khỏi máy này?')) return
+    await signOut()
   }
 
   // ============================================
@@ -217,6 +259,25 @@ export default function Home({ onNavigate, activeModules }) {
       else toast.success(`✓ Đã tải ${r.count} ảnh (.zip)`)
     } catch (err) { toast.error('Lỗi tải ảnh: ' + (err?.message || err)) }
     finally { setImgProgress(null) }
+  }
+
+  const handleImageRestore = () => {
+    if (imgRestore) return
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = '.zip,application/zip'
+    input.onchange = async e => {
+      const file = e.target.files?.[0]
+      if (!file) return
+      setImgRestore({ done: 0, total: 0 })
+      try {
+        const r = await restoreImagesZip(file, (done, total) => setImgRestore({ done, total }))
+        const msg = `Thêm ${r.added} ảnh · ${r.skipped} ảnh đã có sẵn (giữ nguyên)`
+        if (r.failed.length) toast.error(`${msg} · ${r.failed.length} ảnh lỗi: ${r.failed.slice(0, 3).join(', ')}${r.failed.length > 3 ? '…' : ''}`)
+        else toast.success('✓ ' + msg)
+      } catch (err) { toast.error('Lỗi khôi phục ảnh: ' + (err?.message || err)) }
+      finally { setImgRestore(null) }
+    }
+    input.click()
   }
 
   const handleBackup = async () => {
@@ -528,7 +589,7 @@ export default function Home({ onNavigate, activeModules }) {
             </div>
             <div className="flex-1 text-left">
               <p className="text-sm font-medium text-gray-800">Đổi mật khẩu</p>
-              <p className="text-xs text-gray-400">Thay đổi mật khẩu đăng nhập</p>
+              <p className="text-xs text-gray-400 truncate">{email ? `Đang đăng nhập: ${email}` : 'Mật khẩu & đăng xuất'}</p>
             </div>
             <ChevronIcon open={showSecurity} />
           </button>
@@ -553,7 +614,7 @@ export default function Home({ onNavigate, activeModules }) {
               <div>
                 <label className="text-xs text-gray-500 mb-1 block">Mật khẩu mới</label>
                 <input type={showPw ? 'text' : 'password'} value={newPw}
-                  onChange={e => setNewPw(e.target.value)} placeholder="Tối thiểu 4 ký tự"
+                  onChange={e => setNewPw(e.target.value)} placeholder="Tối thiểu 8 ký tự"
                   className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm" />
               </div>
 
@@ -568,6 +629,10 @@ export default function Home({ onNavigate, activeModules }) {
               <button onClick={handleChangePassword} disabled={pwLoading || !currentPw || !newPw}
                 className="w-full py-3 bg-purple-500 text-white font-bold rounded-xl text-sm shadow-md disabled:opacity-50 active:scale-98 transition-transform">
                 {pwLoading ? 'Đang xử lý...' : 'Đổi mật khẩu'}
+              </button>
+              <button onClick={handleLogout}
+                className="w-full py-3 border border-gray-200 text-gray-600 font-medium rounded-xl text-sm flex items-center justify-center gap-2 active:scale-98 transition-transform">
+                <LogOut size={16} /> Đăng xuất khỏi máy này
               </button>
             </div>
           )}
@@ -601,6 +666,11 @@ export default function Home({ onNavigate, activeModules }) {
               Phục hồi từ file backup
             </button>
             <p className="text-[10px] text-gray-400 text-center">⚠️ Phục hồi sẽ ghi đè toàn bộ dữ liệu hiện tại</p>
+            <button onClick={handleImageRestore} disabled={!!imgRestore}
+              className="w-full py-3 border-2 border-blue-200 text-blue-700 font-medium rounded-xl text-sm flex items-center justify-center gap-2 disabled:opacity-60 active:scale-98 transition-transform">
+              📷 {imgRestore ? (imgRestore.total ? `Đang tải ảnh lên ${imgRestore.done}/${imgRestore.total}…` : 'Đang đọc file ảnh…') : 'Khôi phục ảnh từ file .zip'}
+            </button>
+            <p className="text-[10px] text-gray-400 text-center">Chỉ thêm ảnh còn thiếu — ảnh đang có giữ nguyên</p>
           </div>
         </div>
       </div>

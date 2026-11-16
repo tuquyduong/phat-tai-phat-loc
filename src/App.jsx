@@ -3,7 +3,8 @@ import {
   Package, Plus, Search, Filter, X,
   RefreshCw, LogOut, Settings, BarChart3
 } from 'lucide-react'
-import { getOrders, getCustomers, getProducts, checkPassword, createSession, verifySessionDetailed, clearSession, hasLocalSession } from './lib/supabase'
+import { getOrders, getCustomers, getProducts } from './lib/supabase'
+import { signOut } from './lib/auth'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import OrderCard from './components/OrderCard'
@@ -39,8 +40,9 @@ function AppContent() {
   const toast = useToast()
 
   // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState(() => hasLocalSession())
-  const [checkingAuth, setCheckingAuth] = useState(true)
+  // Đăng nhập do AppShell lo (Supabase Auth) — vào tới đây là đã đăng nhập
+  const [isAuthenticated, setIsAuthenticated] = useState(true)
+  const checkingAuth = false
 
   // Data state
   const [orders, setOrders] = useState([])
@@ -66,18 +68,6 @@ function AppContent() {
     const saved = localStorage.getItem('order_tracker_settings')
     return saved ? JSON.parse(saved) : DEFAULT_SETTINGS
   })
-
-  // Check auth on mount
-  useEffect(() => {
-    verifySessionDetailed()
-      .then(r => {
-        // 'offline' → giữ nguyên (token còn hạn, chỉ mất mạng)
-        if (r === 'offline') return
-        setIsAuthenticated(r === 'valid')   // 'invalid' → đăng xuất
-      })
-      .catch(() => {})
-      .finally(() => setCheckingAuth(false))
-  }, [])
 
   // Load data
   const loadData = useCallback(async (showToast = false) => {
@@ -108,22 +98,12 @@ function AppContent() {
     }
   }, [isAuthenticated, loadData])
 
-  // Handle login
-  const handleLogin = async (password) => {
-    // Lỗi được ném lên cho Login.jsx hiển thị — KHÔNG tự cho vào app
-    const success = await checkPassword(password)
-    if (success) {
-      await createSession()
-      setIsAuthenticated(true)
-      return true
-    }
-    return false
-  }
+  const handleLogin = async () => true   // không còn dùng
 
   // Handle logout
   const handleLogout = () => {
     setIsAuthenticated(false)
-    clearSession()
+    signOut()
     setOrders([])
     setCustomers([])
   }
