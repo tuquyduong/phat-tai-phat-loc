@@ -123,6 +123,7 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
 
   return <>
     <style>{tickCss}</style>
+    {editable && top && <div style={{ height: pal ? 112 : 58 }} aria-hidden/>}
     <EditorContent editor={editor} className={'note-ed' + (editable ? '' : ' ro')}/>
     {editable && <div className={'note-bar' + (top ? ' top' : '')} style={top ? { top: topOffset } : { bottom: kb }}>
       {pal && <div className="note-pal">

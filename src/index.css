@@ -114,9 +114,9 @@ input:focus, select:focus, textarea:focus {
 .note-ed .ProseMirror ul[data-type=taskList] li{display:flex;gap:10px;align-items:flex-start;margin:.15em 0}
 .note-ed .ProseMirror ul[data-type=taskList] li>label{margin-top:3px;flex-shrink:0}
 .note-ed .ProseMirror ul[data-type=taskList] li>label input{width:21px;height:21px;accent-color:#7c3aed}
-.note-ed .ProseMirror ul[data-type=taskList] li>div{flex:1;min-width:0}
+.note-ed .ProseMirror ul[data-type=taskList] li>div{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;column-gap:8px}
 .note-ed .ProseMirror ul[data-type=taskList] li[data-checked=true]>div>p{text-decoration:line-through;color:#9ca3af}
-.note-ed li[data-checked=true]>div::after{display:inline-block;font-size:11px;font-weight:600;color:#7c3aed;background:#f5f3ff;border-radius:6px;padding:1px 6px;margin-top:2px}
+.note-ed li[data-checked=true]>div::after{display:inline-block;font-size:11px;font-weight:600;color:#7c3aed;background:#f5f3ff;border-radius:6px;padding:1px 6px;white-space:nowrap}
 .note-ed .ProseMirror p.is-editor-empty:first-child::before{content:attr(data-placeholder);color:#9ca3af;float:left;height:0;pointer-events:none;font-size:16px}
 .note-bar{position:fixed;left:0;right:0;background:#fff;border-top:1px solid #e5e7eb;padding:7px 6px calc(7px + env(safe-area-inset-bottom,0px));z-index:85;box-shadow:0 -4px 14px rgba(0,0,0,.05);display:flex;flex-direction:column}
 .note-bar.top{border-top:0;border-bottom:1px solid #e5e7eb;padding-bottom:7px;box-shadow:0 4px 14px rgba(0,0,0,.06)}
@@ -128,10 +128,15 @@ input:focus, select:focus, textarea:focus {
 .nc{width:32px;height:32px;border-radius:9999px;font-size:13px;font-weight:700;color:#6b7280;border:0}
 .note-hl{background:#fde68a;color:#111;padding:0 4px;border-radius:4px;font-weight:800}
 .note-ed .ProseMirror .tableWrapper{overflow-x:auto;margin:.5em 0;-webkit-overflow-scrolling:touch}
-.note-ed .ProseMirror table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;border-collapse:collapse;max-width:100%;margin:.5em 0}
+.note-ed .ProseMirror table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;border-collapse:collapse;max-width:100%;margin:.5em 0;
+  background:linear-gradient(to right,#f9fafb 30%,rgba(249,250,251,0)) left/40px 100% no-repeat local,
+             linear-gradient(to left,#f9fafb 30%,rgba(249,250,251,0)) right/40px 100% no-repeat local,
+             radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.22),transparent) left/12px 100% no-repeat scroll,
+             radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.22),transparent) right/12px 100% no-repeat scroll}
 .note-ed .ProseMirror table tbody{display:table;min-width:100%}
-.note-ed .ProseMirror td,.note-ed .ProseMirror th{border:1px solid #d1d5db;padding:6px 8px;vertical-align:top;min-width:90px;position:relative;font-size:15px}
+.note-ed .ProseMirror td,.note-ed .ProseMirror th{border:1px solid #d1d5db;padding:6px 8px;vertical-align:top;min-width:76px;max-width:180px;position:relative;font-size:15px;background-clip:padding-box}
 .note-ed .ProseMirror th{background:#f5f3ff;font-weight:700;text-align:left}
+.note-ed .ProseMirror td{background:rgba(255,255,255,.6)}
 .note-ed .ProseMirror td p,.note-ed .ProseMirror th p{margin:0}
 .note-ed .ProseMirror .selectedCell{background:#ede9fe}
 .note-sz{font-weight:800;font-size:17px}.note-sz small{font-size:11px}
