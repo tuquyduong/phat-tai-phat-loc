@@ -9,7 +9,7 @@ import { useToast } from '../components/Toast'
 import EmojiPick from '../components/EmojiPick'
 import { nameOf } from '../lib/viec'
 import {
-  NOTE_PEOPLE, BOOK_COLORS, roleOf, canEdit, listBooks, saveBook, deleteBook, listNotes, getNote,
+  NOTE_PEOPLE, BOOK_COLORS, roleOf, canEdit, canToggleInBook, bookShared, listBooks, saveBook, deleteBook, listNotes, getNote,
   createNote, updateNote, deleteNote, seenAt, markSeen, isNewFor, plain, preview, toDoc, docTitle,
 } from '../lib/notes'
 
@@ -41,35 +41,45 @@ function Sheet({ title, onClose, children }) {
     </div>)
 }
 
+// ---------- Chọn người + quyền (dùng cho ghi chú và sổ) ----------
+function PeoplePick({ owner, me, value, onChange }) {
+  const ppl = NOTE_PEOPLE.filter(k => k !== owner)
+  const all = v => onChange(v ? Object.fromEntries(ppl.map(k => [k, v])) : {})
+  return <>
+    <div className="flex flex-wrap gap-2 mb-2">
+      <button onClick={() => all('')} className="px-3 py-2 rounded-full text-sm bg-gray-100">🔒 Chỉ mình tôi</button>
+      <button onClick={() => all('view')} className="px-3 py-2 rounded-full text-sm bg-blue-50 text-blue-700">👥 Cả nhà xem</button>
+      <button onClick={() => all('edit')} className="px-3 py-2 rounded-full text-sm bg-emerald-50 text-emerald-700">👥 Cả nhà sửa</button>
+    </div>
+    {ppl.map(k => (
+      <div key={k} className="flex items-center gap-3 py-2.5 border-b border-gray-100">
+        <Ava k={k} size={32}/><span className="flex-1 text-[15px]">{nameOf(k, me)}</span>
+        <div className="flex bg-gray-100 rounded-xl p-0.5">
+          {[['', 'Không'], ['view', '👁 Xem'], ['edit', '✏️ Sửa']].map(([v, l]) => (
+            <button key={v} onClick={() => { const n = { ...value }; if (v) n[k] = v; else delete n[k]; onChange(n) }}
+              className={`px-2.5 py-1.5 rounded-lg text-[13px] ${(value[k] || '') === v ? 'bg-white shadow-sm font-semibold ' + (v === 'edit' ? 'text-emerald-700' : v === 'view' ? 'text-blue-700' : 'text-gray-800') : 'text-gray-500'}`}>{l}</button>))}
+        </div>
+      </div>))}
+  </>
+}
+const shareLabel = (share, me) => Object.entries(share || {}).map(([k, v]) => nameOf(k, me) + (v === 'edit' ? ' ✏️' : ' 👁')).join(', ')
+
 // ---------- Chia sẻ một ghi chú ----------
-function ShareSheet({ note, me, onClose, onSave }) {
+function ShareSheet({ note, me, book, onClose, onSave }) {
   const [s, setS] = useState({ ...(note.share || {}) })
-  const ppl = NOTE_PEOPLE.filter(k => k !== note.owner)
-  const all = v => setS(v ? Object.fromEntries(ppl.map(k => [k, v])) : {})
   return (
     <Sheet title={`👥 Chia sẻ “${note.title || 'ghi chú'}”`} onClose={onClose}>
-      <div className="flex flex-wrap gap-2 mb-2">
-        <button onClick={() => all('')} className="px-3 py-2 rounded-full text-sm bg-gray-100">🔒 Chỉ mình tôi</button>
-        <button onClick={() => all('view')} className="px-3 py-2 rounded-full text-sm bg-blue-50 text-blue-700">👥 Cả nhà xem</button>
-        <button onClick={() => all('edit')} className="px-3 py-2 rounded-full text-sm bg-emerald-50 text-emerald-700">👥 Cả nhà sửa</button>
-      </div>
-      {ppl.map(k => (
-        <div key={k} className="flex items-center gap-3 py-2.5 border-b border-gray-100">
-          <Ava k={k} size={32}/><span className="flex-1 text-[15px]">{nameOf(k, me)}</span>
-          <div className="flex bg-gray-100 rounded-xl p-0.5">
-            {[['', 'Không'], ['view', '👁 Xem'], ['edit', '✏️ Sửa']].map(([v, l]) => (
-              <button key={v} onClick={() => setS(x => { const n = { ...x }; if (v) n[k] = v; else delete n[k]; return n })}
-                className={`px-2.5 py-1.5 rounded-lg text-[13px] ${(s[k] || '') === v ? 'bg-white shadow-sm font-semibold ' + (v === 'edit' ? 'text-emerald-700' : v === 'view' ? 'text-blue-700' : 'text-gray-800') : 'text-gray-500'}`}>{l}</button>))}
-          </div>
-        </div>))}
+      {book && bookShared(book) && <div className="rounded-xl bg-amber-50 text-amber-900 text-[13px] px-3 py-2 mb-3">
+        Ghi chú nằm trong sổ <b>{book.emoji} {book.name}</b> (đang chia sẻ cho {shareLabel(book.share, me)}). Bật/tắt hiện trong sổ ở nút <b>⋯</b>. Ở đây là chia sẻ <b>riêng</b> ghi chú này.</div>}
+      <PeoplePick owner={note.owner} me={me} value={s} onChange={setS}/>
       <p className="text-xs text-gray-500 mt-3 leading-relaxed">👁 <b>Xem</b>: đọc, xem và chép mật khẩu, không sửa được.<br/>✏️ <b>Sửa</b>: viết thêm, sửa chữ, tick xong việc.<br/>Chỉ bạn đổi được người chia sẻ hoặc xoá ghi chú.</p>
       <button onClick={() => onSave(s)} className="w-full mt-4 py-3 rounded-xl bg-purple-600 text-white font-semibold">Xong</button>
     </Sheet>)
 }
 
 // ---------- Sửa / thêm sổ ----------
-function BookSheet({ book, count, onClose, onSave, onDelete }) {
-  const [b, setB] = useState(book)
+function BookSheet({ book, count, me, onClose, onSave, onDelete }) {
+  const [b, setB] = useState({ share: {}, ...book })
   return (
     <Sheet title={book.id ? 'Sửa sổ' : 'Sổ mới'} onClose={onClose}>
       <input value={b.name} onChange={e => setB({ ...b, name: e.target.value })} placeholder="Tên sổ, ví dụ: Mật khẩu, Kinh, Việc nhà" autoFocus={!book.id}
@@ -77,7 +87,9 @@ function BookSheet({ book, count, onClose, onSave, onDelete }) {
       <EmojiPick value={b.emoji} onChange={emoji => setB({ ...b, emoji })}/>
       <div className="flex gap-2.5 mt-3">{BOOK_COLORS.map(c => (
         <button key={c} onClick={() => setB({ ...b, color: c })} aria-label="Màu sổ" className={`w-8 h-8 rounded-full ${b.color === c ? 'ring-2 ring-gray-800 ring-offset-2' : ''}`} style={{ background: c }}/>))}</div>
-      <p className="text-xs text-gray-500 mt-3">Sổ chỉ để bạn tự sắp xếp, người khác không thấy. Chia sẻ thì làm ở từng ghi chú (nút 👥).</p>
+      <p className="text-xs font-semibold text-gray-500 mt-5 mb-1">👥 CHIA SẺ CẢ SỔ</p>
+      <PeoplePick owner={me} me={me} value={b.share} onChange={share => setB({ ...b, share })}/>
+      <p className="text-xs text-gray-500 mt-2 leading-relaxed">Người được chọn thấy <b>sổ này</b> trên máy họ. Ghi chú trong sổ <b>mặc định ẩn</b> — chạm <b>🔒 Ẩn</b> trên từng ghi chú để đổi thành <b>👥 Hiện</b>.<br/>✏️ Sửa: được sửa các ghi chú đang hiện và <b>thêm ghi chú mới</b> vào sổ.</p>
       <button onClick={() => onSave({ ...b, name: b.name.trim() || 'Sổ mới' })} className="w-full mt-4 py-3 rounded-xl bg-purple-600 text-white font-semibold">Lưu</button>
       {book.id && <button onClick={() => { if (confirm(count ? `Xoá sổ “${book.name}”? ${count} ghi chú bên trong không mất — chuyển về “Chưa xếp sổ”.` : `Xoá sổ “${book.name}”?`)) onDelete(book) }}
         className="w-full mt-2 py-3 rounded-xl bg-red-50 text-red-600 font-medium">Xoá sổ</button>}
@@ -120,7 +132,7 @@ const NoteEditor = lazy(() => import('../components/NoteEditor'))
 export const preloadEditor = () => import('../components/NoteEditor')
 
 function Editor({ note, me, books, isNew, onBack, onChange, onDelete, onShare, onMove, onMakeTask }) {
-  const role = roleOf(note, me), ed = canEdit(note, me), own = role === 'own'
+  const role = roleOf(note, me, books), ed = canEdit(note, me, books), own = role === 'own'
   const [secrets, setSecretsState] = useState(note.secrets || [])
   const [pinned, setPinned] = useState(!!note.pinned)
   const [secret, setSecret] = useState(null)          // { i } sửa · { i: -1 } thêm mới
@@ -138,12 +150,15 @@ function Editor({ note, me, books, isNew, onBack, onChange, onDelete, onShare, o
     <div className="fixed inset-0 z-[70] bg-gray-50 flex flex-col" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
       <div className="bg-white border-b border-gray-200 relative z-[86]"><div className="max-w-2xl mx-auto flex items-center gap-1 px-2 py-2">
         <button onClick={onBack} className="w-10 h-10 text-2xl text-purple-600" aria-label="Quay lại">‹</button>
-        <span className="flex-1 min-w-0 text-sm text-gray-400 truncate">{own ? (book ? `${book.emoji} ${book.name}` : '📥 Chưa xếp sổ') : 'của ' + nameOf(note.owner, me)}</span>
+        <span className="flex-1 min-w-0 text-sm text-gray-400 truncate">{book ? `${book.emoji} ${book.name}${book.owner !== me ? ' · sổ của ' + nameOf(book.owner, me) : ''}` : own ? '📥 Chưa xếp sổ' : 'của ' + nameOf(note.owner, me)}</span>
         {own && <button onClick={onShare} className="px-3 h-9 rounded-xl bg-purple-50 text-purple-700 text-sm font-semibold">👥 Chia sẻ</button>}
         {own && <button onClick={() => setMore(true)} className="w-10 h-10 text-xl" aria-label="Thêm">⋯</button>}
       </div></div>
       <div className="flex-1 overflow-y-auto"><div className="max-w-2xl mx-auto px-4 pt-3" style={{ paddingBottom: ed ? 150 : 40 }}>
         {role === 'view' && <div className="rounded-xl px-3 py-2 mb-2 text-sm bg-blue-50 text-blue-700">👁 {nameOf(note.owner, me)} chia sẻ để bạn xem</div>}
+        {book && bookShared(book) && canToggleInBook(note, me, books) && <button onClick={() => onChange(note, { book_shared: !note.book_shared })}
+          className={`w-full text-left rounded-xl px-3 py-2 mb-2 text-[13px] ${note.book_shared ? 'bg-emerald-50 text-emerald-800' : 'bg-gray-100 text-gray-600'}`}>
+          {note.book_shared ? <>👥 <b>Đang hiện</b> cho người xem sổ ({shareLabel(book.share, me)}) · chạm để ẩn</> : <>🔒 <b>Đang ẩn</b> với người xem sổ · chạm để hiện cho {shareLabel(book.share, me)}</>}</button>}
         {role !== 'view' && others.length > 0 && <button onClick={own ? onShare : undefined}
           className="w-full flex items-center gap-2 rounded-xl px-3 py-2 mb-2 text-[13px] bg-purple-50 text-purple-800 text-left">
           <span className="flex -space-x-1.5">{others.map(k => <Ava key={k} k={k}/>)}</span>
@@ -167,7 +182,7 @@ function Editor({ note, me, books, isNew, onBack, onChange, onDelete, onShare, o
       {more && <Sheet onClose={() => setMore(false)} title="Ghi chú">
         <button onClick={() => { setPinned(!pinned); onChange(note, { pinned: !pinned }); setMore(false) }} className="w-full text-left py-3 border-b border-gray-100">{pinned ? '📌 Bỏ ghim' : '📌 Ghim lên đầu'}</button>
         <p className="text-xs text-gray-500 mt-3 mb-1.5">Chuyển sang sổ</p>
-        <div className="flex flex-wrap gap-1.5">{[{ id: null, emoji: '📥', name: 'Chưa xếp sổ' }, ...books].map(b => (
+        <div className="flex flex-wrap gap-1.5">{[{ id: null, emoji: '📥', name: 'Chưa xếp sổ' }, ...books.filter(b => b.owner === me)].map(b => (
           <button key={b.id || 'none'} onClick={() => { onChange(note, { book_id: b.id }); onMove?.(); setMore(false) }}
             className={`px-3 py-2 rounded-full text-sm ${note.book_id === b.id ? 'bg-gray-800 text-white' : 'bg-gray-100'}`}>{b.emoji} {b.name}</button>))}</div>
         <button onClick={() => { if (confirm('Xoá ghi chú này?' + (Object.keys(share).length ? ' Người được chia sẻ cũng không còn thấy.' : ''))) { setMore(false); onDelete() } }}
@@ -241,7 +256,8 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
     const id = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16) })
     const now = new Date().toISOString()
     const doc = { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] }
-    const n = { id, owner: me, book_id: bookId !== undefined ? bookId : null, title: '', body: doc, secrets: [], share: {}, pinned: false, created_at: now, updated_at: now, updated_by: me }
+    const bk = bookId ? books.find(b => b.id === bookId) : null
+    const n = { id, owner: me, book_id: bookId !== undefined ? bookId : null, book_shared: !!bk && bk.owner !== me, title: '', body: doc, secrets: [], share: {}, pinned: false, created_at: now, updated_at: now, updated_by: me }
     setNotes(ns => [n, ...ns]); setFresh(id); setNoteId(id)
     saving.current = saving.current.then(() => createNote({ id, book_id: n.book_id, body: doc })
       .catch(e => { toast.error('Lỗi tạo ghi chú: ' + e.message); setNotes(ns => ns.filter(x => x.id !== id)); setNoteId(null) }))
@@ -249,14 +265,21 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
   useEffect(() => { preloadEditor() }, [])
 
   const mine = notes.filter(n => n.owner === me)
-  const shared = notes.filter(n => n.owner !== me)
+  const myBooks = books.filter(b => b.owner === me)
+  const sharedBooks = books.filter(b => b.owner !== me)
+  const inVisibleBook = n => n.book_id && books.some(b => b.id === n.book_id)
+  const looseShared = notes.filter(n => n.owner !== me && !inVisibleBook(n))   // chia sẻ riêng lẻ (không qua sổ)
+  const inBookList = id => notes.filter(n => id === null ? n.owner === me && !inVisibleBook(n) : n.book_id === id)
   const sortN = L => [...L].sort((a, b) => (b.pinned - a.pinned) || b.updated_at.localeCompare(a.updated_at))
   const found = useMemo(() => q.trim() ? notes.filter(n => norm(plain(n)).includes(norm(q.trim()))) : null, [q, notes])
   const cur = notes.find(n => n.id === noteId)
 
+  const toggleInBook = (e, n) => { e.stopPropagation(); change(n, { book_shared: !n.book_shared }) }
   const Card = ({ n }) => {
-    const r = roleOf(n, me), fresh = isNewFor(n, me, seen)
+    const r = roleOf(n, me, books), fresh = isNewFor(n, me, seen)
     const sh = Object.entries(n.share || {})
+    const bk = n.book_id && books.find(b => b.id === n.book_id)
+    const tog = bk && bk.owner === me && bookShared(bk) && canToggleInBook(n, me, books)
     return (
       <button onClick={() => openNote(n.id)} className="w-full text-left bg-white rounded-2xl px-3.5 py-3 mt-2 shadow-sm active:bg-gray-50">
         <span className="flex items-center gap-1.5">
@@ -264,11 +287,13 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
           {n.pinned && r === 'own' && <span>📌</span>}
           <span className="font-semibold text-[15px] text-gray-800 truncate flex-1">{n.title || 'Ghi chú không tên'}</span>
           {fresh && <span className="w-2 h-2 rounded-full bg-red-500 flex-shrink-0"/>}
+          {tog && <span role="button" tabIndex={0} onClick={e => toggleInBook(e, n)} aria-label={n.book_shared ? 'Ẩn khỏi người xem sổ' : 'Hiện cho người xem sổ'}
+            className={`flex-shrink-0 text-[12px] font-semibold px-2.5 py-1 rounded-full ${n.book_shared ? 'bg-emerald-100 text-emerald-800' : 'bg-gray-100 text-gray-500'}`}>{n.book_shared ? '👥 Hiện' : '🔒 Ẩn'}</span>}
         </span>
         <span className="block text-[13px] text-gray-500 truncate mt-0.5">{preview(n) || ' '}</span>
         <span className="block text-[11px] text-gray-400 mt-1 truncate">
-          {r === 'own' ? (sh.length ? '👥 ' + sh.map(([k, v]) => nameOf(k, me) + (v === 'edit' ? ' ✏️' : ' 👁')).join(', ') : '🔒 Chỉ mình tôi')
-            : `của ${nameOf(n.owner, me)} · ${r === 'edit' ? '✏️ bạn được sửa' : '👁 chỉ xem'}`}
+          {r === 'own' ? (sh.length ? '👥 riêng: ' + shareLabel(n.share, me) : tog ? (n.book_shared ? 'hiện trong sổ' : 'chỉ mình tôi') : '🔒 Chỉ mình tôi')
+            : bk && bk.owner === me ? `${nameOf(n.owner, me)} viết` : `của ${nameOf(n.owner, me)} · ${r === 'edit' ? '✏️ bạn được sửa' : '👁 chỉ xem'}`}
           {' · '}{n.updated_by && n.updated_by !== me ? nameOf(n.updated_by, me) + ' sửa ' : ''}{ago(n.updated_at)}
         </span>
       </button>)
@@ -280,7 +305,7 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
     <div className="bg-white border-b border-gray-200 sticky top-0 z-10"><div className="max-w-2xl mx-auto flex items-center gap-1 px-2 py-2">
       <button onClick={() => inBook ? setBookId(undefined) : onBack()} className="w-10 h-10 text-2xl text-purple-600" aria-label="Quay lại">‹</button>
       <h2 className="flex-1 text-lg font-bold truncate">{inBook ? (curBook ? `${curBook.emoji} ${curBook.name}` : '📥 Chưa xếp sổ') : '📝 Ghi chú'}</h2>
-      {curBook && <button onClick={() => setBookEdit(curBook)} className="w-10 h-10 text-xl" aria-label="Sửa sổ">⋯</button>}
+      {curBook && curBook.owner === me && <button onClick={() => setBookEdit(curBook)} className="w-10 h-10 text-xl" aria-label="Sửa sổ">⋯</button>}
     </div></div>)
 
   return (
@@ -294,45 +319,58 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
           <p className="text-xs font-semibold text-gray-400 mt-4">{found.length} KẾT QUẢ</p>
           {sortN(found).map(n => <Card key={n.id} n={n}/>)}
         </> : inBook ? <>
-          {sortN(mine.filter(n => (n.book_id || null) === bookId)).map(n => <Card key={n.id} n={n}/>)}
-          {!mine.some(n => (n.book_id || null) === bookId) && <p className="text-center text-sm text-gray-400 py-12">Sổ trống — bấm ＋ để viết</p>}
+          {curBook && curBook.owner !== me && <div className="rounded-xl px-3 py-2 mt-1 text-[13px] bg-blue-50 text-blue-800 flex items-center gap-2">
+            <Ava k={curBook.owner}/> Sổ của {nameOf(curBook.owner, me)} · {(curBook.share || {})[me] === 'edit' ? '✏️ bạn được sửa và thêm ghi chú' : '👁 bạn được xem'}</div>}
+          {curBook && curBook.owner === me && bookShared(curBook) && <button onClick={() => setBookEdit(curBook)} className="w-full text-left rounded-xl px-3 py-2 mt-1 text-[13px] bg-emerald-50 text-emerald-800">
+            👥 Sổ đang chia sẻ cho <b>{shareLabel(curBook.share, me)}</b>. Chỉ ghi chú <b>👥 Hiện</b> mới hiện cho họ — chạm nhãn trên từng ghi chú để đổi.</button>}
+          {sortN(inBookList(bookId)).map(n => <Card key={n.id} n={n}/>)}
+          {!inBookList(bookId).length && <p className="text-center text-sm text-gray-400 py-12">{curBook && curBook.owner !== me ? 'Chưa có ghi chú nào được chia sẻ trong sổ này' : 'Sổ trống — bấm ＋ để viết'}</p>}
         </> : <>
-          {shared.length > 0 && <>
-            <p className="text-xs font-semibold text-gray-400 mt-4">👥 NGƯỜI NHÀ CHIA SẺ VỚI TÔI</p>
-            {sortN(shared).map(n => <Card key={n.id} n={n}/>)}
+          {(sharedBooks.length > 0 || looseShared.length > 0) && <>
+            <p className="text-xs font-semibold text-gray-400 mt-4 mb-2">👥 NGƯỜI NHÀ CHIA SẺ VỚI TÔI</p>
+            {sharedBooks.length > 0 && <div className="grid grid-cols-2 gap-2.5">{sharedBooks.map(b => (
+              <button key={b.id} onClick={() => setBookId(b.id)} className="rounded-2xl p-3 min-h-[96px] text-left flex flex-col active:scale-[.98] relative" style={{ background: b.color }}>
+                <span className="absolute top-2.5 right-2.5"><Ava k={b.owner} size={24}/></span>
+                <span className="text-[26px]">{b.emoji}</span>
+                <span className="font-bold text-[15px] mt-1 truncate pr-6">{b.name}</span>
+                <span className="text-xs text-gray-600">{notes.filter(n => n.book_id === b.id).length} ghi chú · {(b.share || {})[me] === 'edit' ? '✏️' : '👁'}</span>
+                {notes.some(n => n.book_id === b.id && isNewFor(n, me, seen)) && <span className="absolute top-1.5 left-1.5 w-2.5 h-2.5 rounded-full bg-red-500"/>}
+              </button>))}</div>}
+            {sortN(looseShared).map(n => <Card key={n.id} n={n}/>)}
           </>}
           <div className="flex items-center justify-between mt-5 mb-2">
             <p className="text-xs font-semibold text-gray-400">SỔ CỦA TÔI</p>
-            <button onClick={() => setBookEdit({ name: '', emoji: '📌', color: BOOK_COLORS[books.length % BOOK_COLORS.length] })} className="text-sm text-purple-600 font-medium">+ Sổ mới</button>
+            <button onClick={() => setBookEdit({ name: '', emoji: '📌', color: BOOK_COLORS[myBooks.length % BOOK_COLORS.length], share: {} })} className="text-sm text-purple-600 font-medium">+ Sổ mới</button>
           </div>
           <div className="grid grid-cols-2 gap-2.5">
-            {books.map(b => { const L = mine.filter(n => n.book_id === b.id), sh = L.filter(n => Object.keys(n.share || {}).length).length
+            {myBooks.map(b => { const L = notes.filter(n => n.book_id === b.id), sh = L.filter(n => n.book_shared || Object.keys(n.share || {}).length).length
               return <button key={b.id} onClick={() => setBookId(b.id)} className="rounded-2xl p-3 min-h-[104px] text-left flex flex-col active:scale-[.98]" style={{ background: b.color }}>
                 <span className="text-[26px]">{b.emoji}</span>
                 <span className="font-bold text-[15px] mt-1 truncate">{b.name}</span>
                 <span className="text-xs text-gray-600">{L.length} ghi chú</span>
-                {sh > 0 && <span className="text-[11px] text-gray-600 mt-auto pt-1">👥 {sh} đang chia sẻ</span>}
+                {bookShared(b) ? <span className="text-[11px] text-gray-700 mt-auto pt-1 flex items-center gap-1"><span className="flex -space-x-1.5">{Object.keys(b.share).map(k => <Ava key={k} k={k} size={18}/>)}</span> {sh} ghi chú đang hiện</span>
+                  : sh > 0 && <span className="text-[11px] text-gray-600 mt-auto pt-1">👥 {sh} đang chia sẻ</span>}
               </button> })}
-            {mine.some(n => !n.book_id) && <button onClick={() => setBookId(null)} className="rounded-2xl p-3 min-h-[104px] text-left flex flex-col bg-white">
+            {inBookList(null).length > 0 && <button onClick={() => setBookId(null)} className="rounded-2xl p-3 min-h-[104px] text-left flex flex-col bg-white">
               <span className="text-[26px]">📥</span><span className="font-bold text-[15px] mt-1">Chưa xếp sổ</span>
-              <span className="text-xs text-gray-600">{mine.filter(n => !n.book_id).length} ghi chú</span></button>}
-            <button onClick={() => setBookEdit({ name: '', emoji: '📌', color: BOOK_COLORS[books.length % BOOK_COLORS.length] })}
+              <span className="text-xs text-gray-600">{inBookList(null).length} ghi chú</span></button>}
+            <button onClick={() => setBookEdit({ name: '', emoji: '📌', color: BOOK_COLORS[myBooks.length % BOOK_COLORS.length], share: {} })}
               className="rounded-2xl p-3 min-h-[104px] border-2 border-dashed border-gray-300 text-gray-400 text-sm">＋ Sổ mới</button>
           </div>
           {!notes.length && <p className="text-sm text-gray-500 text-center mt-6 leading-relaxed">Chưa có ghi chú nào.<br/>Bấm <b>＋</b> để viết. Muốn nói thì chạm 🎤 trên bàn phím iPhone.</p>}
         </>}
       </div>
 
-      {<div className="fixed right-4 flex gap-3 z-20" style={{ bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))' }}>
+      {!(curBook && curBook.owner !== me && (curBook.share || {})[me] !== 'edit') && <div className="fixed right-4 flex gap-3 z-20" style={{ bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))' }}>
         <button onClick={() => newNote()} className="w-14 h-14 rounded-full bg-purple-600 text-white text-3xl shadow-lg active:scale-95" aria-label="Ghi chú mới">＋</button>
       </div>}
 
       {cur && <Editor key={cur.id} note={cur} me={me} books={books} isNew={fresh === cur.id} onBack={closeNote} onChange={change} onMakeTask={onMakeTask}
         onShare={() => setShareFor(cur)}
         onDelete={async () => { try { await flush(); await deleteNote(cur.id); setNotes(ns => ns.filter(x => x.id !== cur.id)); setNoteId(null); toast.success('Đã xoá ghi chú') } catch (e) { toast.error('Lỗi xoá: ' + e.message) } }}/>}
-      {shareFor && <ShareSheet note={shareFor} me={me} onClose={() => setShareFor(null)}
+      {shareFor && <ShareSheet note={shareFor} me={me} book={books.find(b => b.id === shareFor.book_id)} onClose={() => setShareFor(null)}
         onSave={async s => { setShareFor(null); change(shareFor, { share: s }); await flush(); toast.success(Object.keys(s).length ? 'Đã chia sẻ — người được chọn thấy ngay' : 'Đã chuyển về chỉ mình tôi') }}/>}
-      {bookEdit && <BookSheet book={bookEdit} count={mine.filter(n => n.book_id === bookEdit.id).length} onClose={() => setBookEdit(null)}
+      {bookEdit && <BookSheet book={bookEdit} me={me} count={notes.filter(n => n.book_id === bookEdit.id).length} onClose={() => setBookEdit(null)}
         onSave={async b => { try { const row = await saveBook(b); setBooks(bs => b.id ? bs.map(x => x.id === row.id ? row : x) : [...bs, row]); setBookEdit(null); toast.success('Đã lưu sổ') } catch (e) { toast.error('Lỗi: ' + e.message) } }}
         onDelete={async b => { try { await deleteBook(b.id); setBooks(bs => bs.filter(x => x.id !== b.id)); setNotes(ns => ns.map(n => n.book_id === b.id ? { ...n, book_id: null } : n)); setBookEdit(null); setBookId(undefined); toast.success('Đã xoá sổ') } catch (e) { toast.error('Lỗi: ' + e.message) } }}/>}
     </div>)

@@ -6,11 +6,24 @@ import { supabase } from './supabase'
 
 export const NOTE_PEOPLE = ['linh', 'mai', 'choo', 'moon']
 export const BOOK_COLORS = ['#ede9fe', '#dbeafe', '#dcfce7', '#fef3c7', '#fce7f3', '#e5e7eb']
-const NOTE_COLS = 'id, owner, book_id, title, body, secrets, share, pinned, created_at, updated_at, updated_by'
+const NOTE_COLS = 'id, owner, book_id, book_shared, title, body, secrets, share, pinned, created_at, updated_at, updated_by'
 
 // Quyền của người đang xem trên một ghi chú: own | edit | view | null
-export const roleOf = (n, me) => !n ? null : n.owner === me ? 'own' : (n.share || {})[me] || null
-export const canEdit = (n, me) => ['own', 'edit'].includes(roleOf(n, me))
+// = cao nhất của (chia sẻ riêng ghi chú) và (chia sẻ qua sổ — chỉ khi ghi chú bật "hiện trong sổ"; chủ sổ luôn được sửa)
+const RANK = { view: 1, edit: 2 }
+export function roleOf(n, me, books = []) {
+  if (!n) return null
+  if (n.owner === me) return 'own'
+  let r = (n.share || {})[me] || null
+  const b = n.book_id && books.find(x => x.id === n.book_id)
+  const br = !b ? null : b.owner === me ? 'edit' : n.book_shared ? (b.share || {})[me] || null : null
+  if (br && (!r || RANK[br] > RANK[r])) r = br
+  return r
+}
+export const canEdit = (n, me, books) => ['own', 'edit'].includes(roleOf(n, me, books))
+// Ai được bật/tắt "hiện cho người xem sổ": chủ ghi chú hoặc chủ sổ
+export const canToggleInBook = (n, me, books) => n.owner === me || books.find(b => b.id === n.book_id)?.owner === me
+export const bookShared = b => Object.keys(b?.share || {}).length > 0
 
 export async function listBooks() {
   const { data, error } = await supabase.from('viec_note_books').select('*').order('sort').order('created_at')
@@ -18,7 +31,7 @@ export async function listBooks() {
   return data || []
 }
 export async function saveBook(b) {
-  const f = { name: b.name, emoji: b.emoji, color: b.color }
+  const f = { name: b.name, emoji: b.emoji, color: b.color, share: b.share || {} }
   const q = b.id ? supabase.from('viec_note_books').update(f).eq('id', b.id) : supabase.from('viec_note_books').insert([f])
   const { data, error } = await q.select().single()
   if (error) throw error
