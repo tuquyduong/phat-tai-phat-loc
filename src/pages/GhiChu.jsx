@@ -205,11 +205,15 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
   const [seen] = useState(() => seenAt(me))
   const pend = useRef({}), timer = useRef(null), saving = useRef(Promise.resolve())
 
+  const toastRef = useRef(toast); toastRef.current = toast
+  // Tải từ máy chủ — giữ nguyên các thay đổi chưa kịp lưu (pend) để không bị ghi đè
   const load = useCallback(async () => {
-    try { const [b, n] = await Promise.all([listBooks(), listNotes()]); setBooks(b); setNotes(n) }
-    catch (e) { toast.error('Lỗi tải ghi chú: ' + e.message) }
+    try {
+      const [b, n] = await Promise.all([listBooks(), listNotes()])
+      setBooks(b); setNotes(n.map(x => pend.current[x.id] ? { ...x, ...pend.current[x.id] } : x))
+    } catch (e) { toastRef.current.error('Lỗi tải ghi chú: ' + e.message) }
     setLoading(false)
-  }, [toast])
+  }, [])
   useEffect(() => { load(); markSeen(me); onSeen?.() }, [load, me])        // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (openId && !loading) { openNote(openId); onOpened?.() } }, [openId, loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -219,9 +223,9 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
     const all = pend.current; pend.current = {}
     saving.current = saving.current.then(() => Promise.all(Object.entries(all).map(([id, f]) =>
       updateNote(id, f).then(row => setNotes(ns => ns.map(x => x.id === id ? { ...x, updated_at: row.updated_at, updated_by: row.updated_by, share: row.share } : x)))
-        .catch(e => toast.error('Chưa lưu được: ' + e.message)))))
+        .catch(e => toastRef.current.error('Chưa lưu được: ' + e.message)))))
     return saving.current
-  }, [toast])
+  }, [])
   useEffect(() => {
     const onHide = () => { if (document.visibilityState === 'hidden') flush(); else load() }
     document.addEventListener('visibilitychange', onHide)
@@ -275,6 +279,11 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
   const cur = notes.find(n => n.id === noteId)
 
   const toggleInBook = (e, n) => { e.stopPropagation(); change(n, { book_shared: !n.book_shared }) }
+  const setAllInBook = v => {
+    const L = inBookList(bookId).filter(n => n.book_shared !== v && canToggleInBook(n, me, books))
+    L.forEach(n => change(n, { book_shared: v }))
+    if (L.length) toast.success(v ? `Đã hiện ${L.length} ghi chú cho người xem sổ` : `Đã ẩn ${L.length} ghi chú`)
+  }
   const Card = ({ n }) => {
     const r = roleOf(n, me, books), fresh = isNewFor(n, me, seen)
     const sh = Object.entries(n.share || {})
@@ -321,8 +330,13 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
         </> : inBook ? <>
           {curBook && curBook.owner !== me && <div className="rounded-xl px-3 py-2 mt-1 text-[13px] bg-blue-50 text-blue-800 flex items-center gap-2">
             <Ava k={curBook.owner}/> Sổ của {nameOf(curBook.owner, me)} · {(curBook.share || {})[me] === 'edit' ? '✏️ bạn được sửa và thêm ghi chú' : '👁 bạn được xem'}</div>}
-          {curBook && curBook.owner === me && bookShared(curBook) && <button onClick={() => setBookEdit(curBook)} className="w-full text-left rounded-xl px-3 py-2 mt-1 text-[13px] bg-emerald-50 text-emerald-800">
-            👥 Sổ đang chia sẻ cho <b>{shareLabel(curBook.share, me)}</b>. Chỉ ghi chú <b>👥 Hiện</b> mới hiện cho họ — chạm nhãn trên từng ghi chú để đổi.</button>}
+          {curBook && curBook.owner === me && bookShared(curBook) && <div className="rounded-xl px-3 py-2 mt-1 text-[13px] bg-emerald-50 text-emerald-800">
+            <button onClick={() => setBookEdit(curBook)} className="text-left">👥 Sổ đang chia sẻ cho <b>{shareLabel(curBook.share, me)}</b>. Chỉ ghi chú <b>👥 Hiện</b> mới hiện cho họ — chạm nhãn trên từng ghi chú để đổi.</button>
+            {inBookList(bookId).length > 1 && <div className="flex gap-2 mt-2">
+              <button onClick={() => setAllInBook(true)} className="flex-1 py-1.5 rounded-lg bg-white text-emerald-800 font-semibold">👥 Hiện tất cả</button>
+              <button onClick={() => setAllInBook(false)} className="flex-1 py-1.5 rounded-lg bg-white text-gray-600 font-semibold">🔒 Ẩn tất cả</button>
+            </div>}
+          </div>}
           {sortN(inBookList(bookId)).map(n => <Card key={n.id} n={n}/>)}
           {!inBookList(bookId).length && <p className="text-center text-sm text-gray-400 py-12">{curBook && curBook.owner !== me ? 'Chưa có ghi chú nào được chia sẻ trong sổ này' : 'Sổ trống — bấm ＋ để viết'}</p>}
         </> : <>
