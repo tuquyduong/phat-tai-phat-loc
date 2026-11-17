@@ -18,9 +18,30 @@ import TextStyle from '@tiptap/extension-text-style'
 import Color from '@tiptap/extension-color'
 import Placeholder from '@tiptap/extension-placeholder'
 import Link from '@tiptap/extension-link'
+import Table from '@tiptap/extension-table'
+import TableRow from '@tiptap/extension-table-row'
+import TableHeader from '@tiptap/extension-table-header'
+import TableCell from '@tiptap/extension-table-cell'
 
 const COLORS = [['Mặc định', null], ['Đỏ', '#dc2626'], ['Xanh', '#2563eb'], ['Lục', '#059669'], ['Cam', '#d97706'], ['Tím', '#7c3aed']]
 const MARKS = [['#fde68a', 'Vàng'], ['#bbf7d0', 'Xanh'], ['#fbcfe8', 'Hồng']]
+const SIZES = [['Nhỏ', '14px'], ['Vừa', null], ['Lớn', '21px'], ['Rất lớn', '27px']]
+
+// Cỡ chữ cho đoạn bôi đen (4 cỡ cố định cho gọn)
+const FontSize = Extension.create({
+  name: 'fontSize',
+  addGlobalAttributes() {
+    return [{ types: ['textStyle'], attributes: { fontSize: {
+      default: null, parseHTML: el => el.style.fontSize || null,
+      renderHTML: a => a.fontSize ? { style: `font-size:${a.fontSize}` } : {} } } }]
+  },
+  addCommands() {
+    return {
+      setFontSize: size => ({ chain }) => chain().setMark('textStyle', { fontSize: size }).run(),
+      unsetFontSize: () => ({ chain }) => chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run(),
+    }
+  },
+})
 
 // Dòng checklist nhớ AI đã tick (attr "by"): tick → by = người đang dùng, bỏ tick → xoá
 const TaskBy = TaskItem.extend({
@@ -67,7 +88,8 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
   useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
   const force = () => { if (alive.current) setTick(x => x + 1) }
   const ext = useMemo(() => [
-    StarterKit, Underline, Highlight.configure({ multicolor: true }), TextStyle, Color,
+    StarterKit, Underline, Highlight.configure({ multicolor: true }), TextStyle, Color, FontSize,
+    Table.configure({ resizable: false }), TableRow, TableHeader, TableCell,
     TaskList, TaskBy.configure({ nested: true, onReadOnlyChecked: () => false }), stampTicks(me),
     Placeholder.configure({ placeholder: 'Tiêu đề… rồi xuống dòng viết nội dung. Muốn nói: chạm 🎤 trên bàn phím' }),
     Link.configure({ autolink: true, linkOnPaste: true, openOnClick: !editable }),
@@ -94,6 +116,8 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
   const on = (n, a) => editor.isActive(n, a) ? ' on' : ''
   const sel = !editor.state.selection.empty
   const inTask = editor.isActive('taskItem')
+  const inTable = editor.isActive('table')
+  const curSize = editor.getAttributes('textStyle').fontSize || null
   const B = (label, fn, active, aria) => <button key={aria} type="button" className={'nb' + active} onMouseDown={e => e.preventDefault()} onClick={fn} aria-label={aria}>{label}</button>
   const taskText = () => { const { $from } = editor.state.selection; for (let d = $from.depth; d > 0; d--) if ($from.node(d).type.name === 'taskItem') return $from.node(d).textContent.trim(); return '' }
 
@@ -105,12 +129,15 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
         {pal === 'hl' ? <>{MARKS.map(([col, n]) => <button key={col} type="button" className="nc" onMouseDown={e => e.preventDefault()} aria-label={'Tô ' + n}
             onClick={() => { c().toggleHighlight({ color: col }).run(); setPal(null) }} style={{ background: col, outline: editor.isActive('highlight', { color: col }) ? '3px solid #111' : 'none' }}/>)}
           <button type="button" className="nb sm" onMouseDown={e => e.preventDefault()} onClick={() => { c().unsetHighlight().run(); setPal(null) }}>Bỏ tô</button></>
+        : pal === 'sz' ? SIZES.map(([n, v]) => <button key={n} type="button" className={'nb sm' + (curSize === v ? ' on' : '')} onMouseDown={e => e.preventDefault()}
+            onClick={() => { v ? c().setFontSize(v).run() : c().unsetFontSize().run(); setPal(null) }} style={{ fontSize: v || '16px' }}>{n}</button>)
         : pal === 'co' ? COLORS.map(([n, col]) => <button key={n} type="button" className="nc" onMouseDown={e => e.preventDefault()} aria-label={'Màu ' + n}
             onClick={() => { col ? c().setColor(col).run() : c().unsetColor().run(); setPal(null) }} style={{ background: col || '#fff', border: col ? 0 : '2px solid #d1d5db' }}>{col ? '' : 'A'}</button>)
         : <>{[['Tiêu đề', 1], ['Đề mục', 2]].map(([n, l]) => <button key={n} type="button" className={'nb sm' + on('heading', { level: l })} onMouseDown={e => e.preventDefault()} onClick={() => { c().toggleHeading({ level: l }).run(); setPal(null) }}>{n}</button>)}
             <button type="button" className={'nb sm' + (editor.isActive('paragraph') ? ' on' : '')} onMouseDown={e => e.preventDefault()} onClick={() => { c().setParagraph().run(); setPal(null) }}>Chữ thường</button>
             {B('⇤', () => c().liftListItem(inTask ? 'taskItem' : 'listItem').run(), '', 'Lùi ra')}
-            {B('⇥', () => c().sinkListItem(inTask ? 'taskItem' : 'listItem').run(), '', 'Thụt vào')}</>}
+            {B('⇥', () => c().sinkListItem(inTask ? 'taskItem' : 'listItem').run(), '', 'Thụt vào')}
+            <button type="button" className="nb sm" onMouseDown={e => e.preventDefault()} onClick={() => { c().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(); setPal(null) }}>▦ Chèn bảng</button></>}
       </div>}
       <div className="note-row">{sel ? <>
         {B(<b>B</b>, () => c().toggleBold().run(), on('bold'), 'Đậm')}
@@ -119,7 +146,16 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
         {B(<s>S</s>, () => c().toggleStrike().run(), on('strike'), 'Gạch ngang')}
         {B(<span className="note-hl">A</span>, () => setPal(pal === 'hl' ? null : 'hl'), pal === 'hl' || editor.isActive('highlight') ? ' on' : '', 'Tô nền')}
         {B(<span style={{ color: editor.getAttributes('textStyle').color || '#dc2626', fontWeight: 800 }}>A</span>, () => setPal(pal === 'co' ? null : 'co'), pal === 'co' ? ' on' : '', 'Màu chữ')}
+        {B(<span className="note-sz">A<small>A</small></span>, () => setPal(pal === 'sz' ? null : 'sz'), pal === 'sz' || curSize ? ' on' : '', 'Cỡ chữ')}
         {B('⌫', () => c().unsetAllMarks().run(), '', 'Xoá định dạng')}
+      </> : inTable ? <>
+        {B('Aa', () => setPal(pal === 'aa' ? null : 'aa'), pal === 'aa' ? ' on' : '', 'Kiểu chữ')}
+        {B(<span className="note-tb">＋<small>hàng</small></span>, () => c().addRowAfter().run(), '', 'Thêm hàng')}
+        {B(<span className="note-tb">＋<small>cột</small></span>, () => c().addColumnAfter().run(), '', 'Thêm cột')}
+        {B(<span className="note-tb">－<small>hàng</small></span>, () => c().deleteRow().run(), '', 'Xoá hàng')}
+        {B(<span className="note-tb">－<small>cột</small></span>, () => c().deleteColumn().run(), '', 'Xoá cột')}
+        {B(<span className="note-tb">🗑<small>bảng</small></span>, () => { if (confirm('Xoá cả bảng?')) c().deleteTable().run() }, '', 'Xoá bảng')}
+        {B('↶', () => c().undo().run(), '', 'Hoàn tác')}
       </> : <>
         {B('Aa', () => setPal(pal === 'aa' ? null : 'aa'), pal === 'aa' ? ' on' : '', 'Kiểu chữ')}
         {B('•', () => c().toggleBulletList().run(), on('bulletList'), 'Gạch đầu dòng')}

@@ -127,3 +127,12 @@ input:focus, select:focus, textarea:focus {
 .nb.on{background:#ede9fe;color:#6d28d9}.nb.sm{font-size:13px;padding:0 10px;flex:none;max-width:none}
 .nc{width:32px;height:32px;border-radius:9999px;font-size:13px;font-weight:700;color:#6b7280;border:0}
 .note-hl{background:#fde68a;color:#111;padding:0 4px;border-radius:4px;font-weight:800}
+.note-ed .ProseMirror .tableWrapper{overflow-x:auto;margin:.5em 0;-webkit-overflow-scrolling:touch}
+.note-ed .ProseMirror table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;border-collapse:collapse;max-width:100%;margin:.5em 0}
+.note-ed .ProseMirror table tbody{display:table;min-width:100%}
+.note-ed .ProseMirror td,.note-ed .ProseMirror th{border:1px solid #d1d5db;padding:6px 8px;vertical-align:top;min-width:90px;position:relative;font-size:15px}
+.note-ed .ProseMirror th{background:#f5f3ff;font-weight:700;text-align:left}
+.note-ed .ProseMirror td p,.note-ed .ProseMirror th p{margin:0}
+.note-ed .ProseMirror .selectedCell{background:#ede9fe}
+.note-sz{font-weight:800;font-size:17px}.note-sz small{font-size:11px}
+.note-tb{display:flex;flex-direction:column;line-height:1;font-size:15px}.note-tb small{font-size:9.5px;color:#6b7280;margin-top:1px}
