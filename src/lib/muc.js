@@ -18,7 +18,6 @@ export const DEFAULT_MUC = [
   { k: 'cf', n: 'Cà phê', e: '☕', c: '#f5ebe0', kw: ['cf', 'cà phê', 'cafe', 'caphe'], ex: [] },
   { k: 'xang', n: 'Xăng', e: '⛽', c: '#e5e7eb', kw: ['xăng'], ex: [] },
 ]
-export const MUC_EMOJI = ['☕', '👩‍👧', '🥬', '🌙', '🐣', '⛽', '💊', '🍜', '🎁', '🙏', '📚', '🚕', '🛒', '🏥', '🎵', '📌']
 export const MUC_COLORS = ['#fce7f3', '#dcfce7', '#fef3c7', '#e0f2fe', '#ede9fe', '#f5ebe0', '#e5e7eb', '#fee2e2']
 
 // ---------- So khớp ----------

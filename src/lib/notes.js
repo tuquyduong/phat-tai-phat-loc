@@ -5,7 +5,6 @@
 import { supabase } from './supabase'
 
 export const NOTE_PEOPLE = ['linh', 'mai', 'choo', 'moon']
-export const BOOK_EMOJI = ['🔑', '💼', '🏠', '🛒', '💡', '📿', '🍜', '💊', '✈️', '🎁', '📌', '⭐', '📚', '🌿']
 export const BOOK_COLORS = ['#ede9fe', '#dbeafe', '#dcfce7', '#fef3c7', '#fce7f3', '#e5e7eb']
 const NOTE_COLS = 'id, owner, book_id, title, body, secrets, share, pinned, created_at, updated_at, updated_by'
 

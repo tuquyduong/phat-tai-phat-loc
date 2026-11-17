@@ -6,8 +6,9 @@
 import { useMemo, useState } from 'react'
 import { Search, X, ChevronLeft, Pencil } from 'lucide-react'
 import Modal from './Modal'
+import EmojiPick from './EmojiPick'
 import { formatMoney, moneyFull } from '../lib/helpers'
-import { match, inMuc, mucOf, assignNote, byMonth, suggestions, MUC_EMOJI, MUC_COLORS } from '../lib/muc'
+import { match, inMuc, mucOf, assignNote, byMonth, suggestions, MUC_COLORS } from '../lib/muc'
 
 const mLabel = m => `T${+m.slice(5)}`
 const dm = d => `${+d.slice(8)}/${+d.slice(5, 7)}`
@@ -90,8 +91,7 @@ export function MucEdit({ item, list, rows, onClose, onSave }) {
     <Modal isOpen onClose={onClose} title={isNew ? 'Mục mới' : 'Sửa mục'}>
       <input value={d.n} onChange={e => setD({ ...d, n: e.target.value })} placeholder="Tên mục, ví dụ: Cà phê"
         className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/>
-      <div className="flex flex-wrap gap-1.5 mt-3">{MUC_EMOJI.map(e => (
-        <button key={e} onClick={() => setD({ ...d, e })} className={`w-10 h-10 rounded-xl text-xl ${d.e === e ? 'bg-purple-100 ring-2 ring-purple-500' : 'bg-gray-100'}`}>{e}</button>))}</div>
+      <EmojiPick value={d.e} onChange={e => setD({ ...d, e })}/>
       <div className="flex gap-2 mt-3">{MUC_COLORS.map(c => (
         <button key={c} onClick={() => setD({ ...d, c })} aria-label="màu" className={`w-8 h-8 rounded-full ${d.c === c ? 'ring-2 ring-gray-800 ring-offset-2' : ''}`} style={{ background: c }}/>))}</div>
       <p className="text-xs font-semibold text-gray-500 mt-4 mb-1.5">GHI CHÚ CÓ CHỨA CHỮ…</p>

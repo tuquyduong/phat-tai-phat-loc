@@ -6,9 +6,10 @@
 // ============================================
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useToast } from '../components/Toast'
+import EmojiPick from '../components/EmojiPick'
 import { nameOf } from '../lib/viec'
 import {
-  NOTE_PEOPLE, BOOK_EMOJI, BOOK_COLORS, roleOf, canEdit, listBooks, saveBook, deleteBook, listNotes, getNote,
+  NOTE_PEOPLE, BOOK_COLORS, roleOf, canEdit, listBooks, saveBook, deleteBook, listNotes, getNote,
   createNote, updateNote, deleteNote, seenAt, markSeen, isNewFor, plain, preview, voiceToBlocks,
 } from '../lib/notes'
 
@@ -73,8 +74,7 @@ function BookSheet({ book, count, onClose, onSave, onDelete }) {
     <Sheet title={book.id ? 'Sửa sổ' : 'Sổ mới'} onClose={onClose}>
       <input value={b.name} onChange={e => setB({ ...b, name: e.target.value })} placeholder="Tên sổ, ví dụ: Mật khẩu, Kinh, Việc nhà" autoFocus={!book.id}
         className="w-full px-4 py-3 border border-gray-200 rounded-xl text-base"/>
-      <div className="flex flex-wrap gap-1.5 mt-3">{BOOK_EMOJI.map(e => (
-        <button key={e} onClick={() => setB({ ...b, emoji: e })} className={`w-10 h-10 rounded-xl text-xl ${b.emoji === e ? 'bg-purple-100 ring-2 ring-purple-500' : 'bg-gray-100'}`}>{e}</button>))}</div>
+      <EmojiPick value={b.emoji} onChange={emoji => setB({ ...b, emoji })}/>
       <div className="flex gap-2.5 mt-3">{BOOK_COLORS.map(c => (
         <button key={c} onClick={() => setB({ ...b, color: c })} aria-label="Màu sổ" className={`w-8 h-8 rounded-full ${b.color === c ? 'ring-2 ring-gray-800 ring-offset-2' : ''}`} style={{ background: c }}/>))}</div>
       <p className="text-xs text-gray-500 mt-3">Sổ chỉ để bạn tự sắp xếp, người khác không thấy. Chia sẻ thì làm ở từng ghi chú (nút 👥).</p>
