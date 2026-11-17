@@ -70,29 +70,60 @@ export async function countNew(me) {
   return (data || []).filter(n => n.updated_by !== me).length
 }
 
-// ---- Nội dung: danh sách khối {t:'p'|'h'|'b'|'c', x, ok, by, bold} ----
-export const plain = n => [n.title, ...(n.body || []).map(b => b.x), ...(n.secrets || []).map(s => s.n + ' ' + (s.u || ''))].join(' ')
+// ---- Nội dung ----
+// Định dạng mới: body = tài liệu của trình soạn {type:'doc', content:[…]}.
+// Định dạng cũ (bản đầu): body = [{t:'p'|'h'|'b'|'c', x, ok, by, bold}] + cột title — tự chuyển khi mở.
+export const isDoc = b => !!b && !Array.isArray(b) && b.type === 'doc'
+const txt = (t, marks) => t ? [{ type: 'text', text: t, ...(marks ? { marks } : {}) }] : undefined
+const para = (t, marks) => ({ type: 'paragraph', ...(t ? { content: txt(t, marks) } : {}) })
+
+export function toDoc(n) {
+  if (isDoc(n?.body)) return n.body
+  const out = [], push = (kind, item) => {             // gộp các dòng liên tiếp cùng loại vào một danh sách
+    const last = out[out.length - 1]
+    if (last?.type === kind) last.content.push(item); else out.push({ type: kind, ...(kind === 'taskList' ? {} : {}), content: [item] })
+  }
+  const title = String(n?.title || '').trim()
+  if (title) out.push({ type: 'heading', attrs: { level: 1 }, content: txt(title) })
+  for (const b of (Array.isArray(n?.body) ? n.body : [])) {
+    const lines = String(b.x || '').split('\n')
+    lines.forEach((line, i) => {
+      const t = line.replace(/\s+$/, '')
+      const marks = b.bold && t.length <= 80 ? [{ type: 'bold' }] : undefined   // đậm cả bài (lỡ bấm) thì bỏ
+      if (b.t === 'c') push('taskList', { type: 'taskItem', attrs: { checked: !!b.ok, by: b.ok ? b.by || null : null }, content: [para(t, marks)] })
+      else if (b.t === 'b') push('bulletList', { type: 'listItem', content: [para(t, marks)] })
+      else if (b.t === 'h') out.push({ type: 'heading', attrs: { level: 2 }, ...(t ? { content: txt(t, marks) } : {}) })
+      else if (!title && !out.length && i === 0 && t && t.length <= 80) out.push({ type: 'heading', attrs: { level: 1 }, content: txt(t) })   // dòng đầu làm tiêu đề
+      else out.push(para(t, marks))
+    })
+  }
+  return { type: 'doc', content: out.length ? out : [{ type: 'heading', attrs: { level: 1 } }] }
+}
+
+// Các dòng chữ của tài liệu (mỗi khối một dòng), kèm loại
+function lines(doc) {
+  const L = []
+  const walk = (node, kind) => {
+    if (!node) return
+    if (node.type === 'paragraph' || node.type === 'heading') {
+      L.push({ kind, text: (node.content || []).map(x => x.text || '').join('') }); return
+    }
+    const k = node.type === 'taskItem' ? (node.attrs?.checked ? 'done' : 'todo') : kind
+    ;(node.content || []).forEach(ch => walk(ch, k))
+  }
+  walk(doc, 'p')
+  return L
+}
+export const docTitle = doc => (lines(doc).find(l => l.text.trim())?.text.trim() || '').slice(0, 100)
+
+export const plain = n => [n.title, ...lines(toDoc({ ...n, title: isDoc(n.body) ? '' : n.title })).map(l => l.text), ...(n.secrets || []).map(s => s.n + ' ' + (s.u || ''))].join(' ')
 export function preview(n) {
-  const B = n.body || []
-  const c = B.filter(b => b.t === 'c')
-  if (c.length) return `☑ ${c.filter(b => b.ok).length}/${c.length} xong` + (c.some(b => !b.ok) ? ' · còn: ' + c.filter(b => !b.ok).map(b => b.x).filter(Boolean).join(', ') : '')
-  const t = B.map(b => b.x).filter(Boolean).join(' · ')
+  const L = lines(toDoc(n)).filter(l => l.text.trim())
+  const rest = L[0]?.text.trim() === (n.title || '').trim() ? L.slice(1) : L
+  const todo = rest.filter(l => l.kind === 'todo'), done = rest.filter(l => l.kind === 'done')
+  if (todo.length + done.length) return `☑ ${done.length}/${todo.length + done.length} xong` + (todo.length ? ' · còn: ' + todo.map(l => l.text).join(', ') : '')
+  const t = rest.map(l => l.text).join(' · ')
   if (t) return t
   if ((n.secrets || []).length) return '🔑 ' + n.secrets.map(s => s.n).join(' · ')
   return ''
-}
-
-// Giọng nói → khối: "… danh sách: a, b, c" → checklist; "xuống dòng"; "gạch đầu dòng …"
-export function voiceToBlocks(txt) {
-  const s = String(txt || '').trim()
-  if (!s) return []
-  const m = s.match(/^(.*?)[,.\s]*danh sách\s*[:：]?\s*(.+)$/i)
-  if (m) {
-    const out = m[1].trim() ? [{ t: 'p', x: m[1].trim() }] : []
-    return [...out, ...m[2].split(/,|;| và /i).map(x => x.trim()).filter(Boolean).map(x => ({ t: 'c', x, ok: false }))]
-  }
-  return s.split(/\s*xuống dòng\s*/i).filter(Boolean).map(p => {
-    const g = p.match(/^gạch đầu dòng\s*(.+)/i)
-    return g ? { t: 'b', x: g[1] } : { t: 'p', x: p }
-  })
 }

@@ -4,13 +4,13 @@
 // Ghi chú: chỉ chủ thấy; chia sẻ từng ghi chú cho từng người — 👁 Xem hoặc ✏️ Sửa.
 // Nội dung là các dòng: chữ thường, tiêu đề, gạch đầu dòng, checklist (+ chữ đậm cả dòng).
 // ============================================
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from 'react'
 import { useToast } from '../components/Toast'
 import EmojiPick from '../components/EmojiPick'
 import { nameOf } from '../lib/viec'
 import {
   NOTE_PEOPLE, BOOK_COLORS, roleOf, canEdit, listBooks, saveBook, deleteBook, listNotes, getNote,
-  createNote, updateNote, deleteNote, seenAt, markSeen, isNewFor, plain, preview, voiceToBlocks,
+  createNote, updateNote, deleteNote, seenAt, markSeen, isNewFor, plain, preview, toDoc, docTitle,
 } from '../lib/notes'
 
 const AV = { linh: '#7c3aed', mai: '#db2777', choo: '#059669', moon: '#d97706' }
@@ -115,97 +115,34 @@ function SecretRow({ s, onEdit }) {
     </div>)
 }
 
-// Ô chữ tự giãn theo nội dung
-function Grow({ value, onChange, onKeyDown, onFocus, className, placeholder, inputRef }) {
-  const r = useRef(null)
-  const fit = el => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' } }
-  useEffect(() => { fit(r.current) }, [value])
-  return <textarea ref={el => { r.current = el; if (inputRef) inputRef(el) }} rows={1} value={value} placeholder={placeholder}
-    onChange={e => { fit(e.target); onChange(e.target.value) }} onKeyDown={onKeyDown} onFocus={onFocus}
-    className={'w-full resize-none bg-transparent outline-none overflow-hidden leading-[1.45] ' + className}/>
-}
-
 // ---------- Soạn / xem một ghi chú ----------
-function Editor({ note, me, books, onBack, onChange, onDelete, onShare, onMove, onMakeTask }) {
-  const toast = useToast()
+const NoteEditor = lazy(() => import('../components/NoteEditor'))
+export const preloadEditor = () => import('../components/NoteEditor')
+
+function Editor({ note, me, books, isNew, onBack, onChange, onDelete, onShare, onMove, onMakeTask }) {
   const role = roleOf(note, me), ed = canEdit(note, me), own = role === 'own'
-  const [n, setN] = useState(note)
-  const [focus, setFocus] = useState(null)
-  const [secret, setSecret] = useState(null)          // { i } | { i: -1 } thêm mới
+  const [secrets, setSecretsState] = useState(note.secrets || [])
+  const [pinned, setPinned] = useState(!!note.pinned)
+  const [secret, setSecret] = useState(null)          // { i } sửa · { i: -1 } thêm mới
   const [more, setMore] = useState(false)
-  const [rec, setRec] = useState(false)
-  const refs = useRef([]), focusNext = useRef(null), recRef = useRef(null)
-  useEffect(() => { if (focusNext.current !== null) { refs.current[focusNext.current]?.focus(); focusNext.current = null } })
-  useEffect(() => () => recRef.current?.abort?.(), [])
-
-  // Luôn sửa trên bản mới nhất (nRef) — gõ nhanh ngay sau khi bấm nút cũng không mất thay đổi
-  const nRef = useRef(note)
-  const put = patch => { const p = typeof patch === 'function' ? patch(nRef.current) : patch; const x = { ...nRef.current, ...p }; nRef.current = x; setN(x); onChange(x, p) }
-  const bodyOf = x => x.body?.length ? x.body : [{ t: 'p', x: '' }]
-  const B = bodyOf(n)
-  const setBody = body => put({ body })
-  const setBlock = (i, p) => put(cur => ({ body: bodyOf(cur).map((b, j) => j === i ? { ...b, ...p } : b) }))
-
-  const onKey = (i, e) => {
-    const B = bodyOf(nRef.current), b = B[i]
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      if (!b.x && (b.t === 'c' || b.t === 'b')) { setBlock(i, { t: 'p' }); return }      // dòng trống của danh sách → thoát danh sách
-      const el = e.target, pos = el.selectionStart ?? b.x.length
-      const t = b.t === 'h' ? 'p' : b.t
-      const nb = [...B.slice(0, i), { ...b, x: b.x.slice(0, pos) }, { t, x: b.x.slice(pos), ok: false, bold: false }, ...B.slice(i + 1)]
-      focusNext.current = i + 1; setBody(nb)
-    } else if (e.key === 'Backspace' && e.target.selectionStart === 0 && e.target.selectionEnd === 0 && i > 0) {
-      e.preventDefault()
-      if (b.t !== 'p') { setBlock(i, { t: 'p', ok: false }); return }
-      const prev = B[i - 1]
-      focusNext.current = i - 1; setBody([...B.slice(0, i - 1), { ...prev, x: prev.x + b.x }, ...B.slice(i + 1)])
-    }
-  }
-  // Nút định dạng: đổi kiểu dòng đang gõ; chưa chọn dòng thì thêm dòng mới ở cuối
-  const fmt = t => {
-    const B = bodyOf(nRef.current), i = focus ?? -1
-    if (i < 0 || !B[i]) { focusNext.current = B.length; setBody([...B, { t, x: '', ok: false }]); return }
-    if (t === 'bold') { setBlock(i, { bold: !B[i].bold }); refs.current[i]?.focus(); return }
-    setBlock(i, { t: B[i].t === t ? 'p' : t }); refs.current[i]?.focus()
-  }
-  const tick = i => {
-    if (!ed) { toast.info('Bạn chỉ được xem ghi chú này'); return }
-    const ok = !bodyOf(nRef.current)[i].ok; setBlock(i, { ok, by: ok ? me : null })
-  }
-  const mic = () => {
-    if (rec) { recRef.current?.stop(); return }
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { toast.error('Máy này chưa cho ghi âm trong app — chạm vào dòng chữ rồi dùng nút 🎤 trên bàn phím'); return }
-    try {
-      const r = new SR(); recRef.current = r
-      r.lang = 'vi-VN'; r.interimResults = false; r.continuous = false
-      r.onresult = e => {
-        const txt = [...e.results].map(x => x[0].transcript).join(' ')
-        const add = voiceToBlocks(txt)
-        if (!add.length) return
-        put(cur => { const B = bodyOf(cur), base = B.length === 1 && !B[0].x ? [] : B
-          return { body: [...base, ...add], title: cur.title || txt.split(/[,.:]/)[0].trim().replace(/^./, c => c.toUpperCase()).slice(0, 60) } })
-        toast.success('Đã chuyển giọng nói thành chữ')
-      }
-      r.onerror = e => { setRec(false); if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast.error('Chưa được phép dùng micro — dùng nút 🎤 trên bàn phím') }
-      r.onend = () => setRec(false)
-      r.start(); setRec(true)
-    } catch { setRec(false); toast.error('Không bật được ghi âm — dùng nút 🎤 trên bàn phím') }
-  }
+  const doc0 = useMemo(() => toDoc(note), [note.id])   // eslint-disable-line react-hooks/exhaustive-deps -- chỉ đọc lúc mở
+  const names = useMemo(() => Object.fromEntries(NOTE_PEOPLE.map(k => [k, nameOf(k, me)])), [me])
+  // Ghi chú cũ (dạng dòng) → lưu sang dạng mới ngay lần sửa đầu tiên
+  const onDoc = json => onChange(note, { body: json, title: docTitle(json) })
+  const setSecrets = L => { setSecretsState(L); onChange(note, { secrets: L }) }
   const share = note.share || {}
   const others = [note.owner, ...Object.keys(share)].filter(k => k !== me)
-  const book = books.find(b => b.id === n.book_id)
+  const book = books.find(b => b.id === note.book_id)
 
   return (
     <div className="fixed inset-0 z-[70] bg-gray-50 flex flex-col" style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}>
-      <div className="bg-white border-b border-gray-200"><div className="max-w-2xl mx-auto flex items-center gap-1 px-2 py-2">
+      <div className="bg-white border-b border-gray-200 relative z-[86]"><div className="max-w-2xl mx-auto flex items-center gap-1 px-2 py-2">
         <button onClick={onBack} className="w-10 h-10 text-2xl text-purple-600" aria-label="Quay lại">‹</button>
         <span className="flex-1 min-w-0 text-sm text-gray-400 truncate">{own ? (book ? `${book.emoji} ${book.name}` : '📥 Chưa xếp sổ') : 'của ' + nameOf(note.owner, me)}</span>
         {own && <button onClick={onShare} className="px-3 h-9 rounded-xl bg-purple-50 text-purple-700 text-sm font-semibold">👥 Chia sẻ</button>}
         {own && <button onClick={() => setMore(true)} className="w-10 h-10 text-xl" aria-label="Thêm">⋯</button>}
       </div></div>
-      <div className="flex-1 overflow-y-auto"><div className="max-w-2xl mx-auto px-4 pt-3" style={{ paddingBottom: ed ? 90 : 30 }}>
+      <div className="flex-1 overflow-y-auto"><div className="max-w-2xl mx-auto px-4 pt-3" style={{ paddingBottom: ed ? 150 : 40 }}>
         {role === 'view' && <div className="rounded-xl px-3 py-2 mb-2 text-sm bg-blue-50 text-blue-700">👁 {nameOf(note.owner, me)} chia sẻ để bạn xem</div>}
         {role !== 'view' && others.length > 0 && <button onClick={own ? onShare : undefined}
           className="w-full flex items-center gap-2 rounded-xl px-3 py-2 mb-2 text-[13px] bg-purple-50 text-purple-800 text-left">
@@ -213,46 +150,26 @@ function Editor({ note, me, books, onBack, onChange, onDelete, onShare, onMove, 
           <span className="flex-1 min-w-0">{own ? Object.entries(share).map(([k, v]) => nameOf(k, me) + (v === 'edit' ? ' ✏️' : ' 👁')).join(', ') : 'Bạn được sửa cùng ' + others.map(k => nameOf(k, me)).join(', ')}
             {note.updated_by && note.updated_by !== me && <span className="text-purple-500"> · {nameOf(note.updated_by, me)} sửa {ago(note.updated_at)}</span>}</span>
         </button>}
-        {ed ? <Grow value={n.title} onChange={v => put({ title: v })} placeholder="Tiêu đề" className="text-[22px] font-bold py-1"/>
-          : <h1 className="text-[22px] font-bold py-1">{n.title || 'Ghi chú'}</h1>}
-        <div className="mt-1">{B.map((b, i) => (
-          <div key={i} className={`flex items-start gap-2 py-0.5 ${b.t === 'c' && b.ok ? 'opacity-60' : ''}`}>
-            {b.t === 'c' && <button onClick={() => tick(i)} aria-label={b.ok ? 'Bỏ đánh dấu' : 'Đánh dấu xong'}
-              className={`w-[22px] h-[22px] mt-[3px] rounded-md border-2 flex-shrink-0 flex items-center justify-center text-white text-sm ${b.ok ? 'bg-purple-600 border-purple-600' : 'border-purple-300 bg-white'}`}>{b.ok ? '✓' : ''}</button>}
-            {b.t === 'b' && <span className="w-1.5 h-1.5 bg-gray-700 rounded-full mt-[11px] mx-2 flex-shrink-0"/>}
-            <div className="flex-1 min-w-0">{ed
-              ? <Grow value={b.x} onChange={v => setBlock(i, { x: v })} onKeyDown={e => onKey(i, e)} onFocus={() => setFocus(i)} inputRef={el => { refs.current[i] = el }}
-                  placeholder={i === 0 && B.length === 1 ? 'Viết gì đó… hoặc bấm 🎤 để nói' : ''}
-                  className={`text-[16px] ${b.t === 'h' ? 'text-lg font-bold' : ''} ${b.bold ? 'font-bold' : ''} ${b.t === 'c' && b.ok ? 'line-through' : ''}`}/>
-              : <p className={`text-[16px] leading-[1.45] whitespace-pre-wrap break-words ${b.t === 'h' ? 'text-lg font-bold' : ''} ${b.bold ? 'font-bold' : ''} ${b.t === 'c' && b.ok ? 'line-through' : ''}`}>{b.x || ' '}</p>}
-            </div>
-            {b.t === 'c' && b.ok && b.by && others.length > 0 && <span className="text-[11px] px-1.5 py-0.5 rounded-md mt-1 flex-shrink-0 font-medium" style={{ background: AV[b.by] + '22', color: AV[b.by] }}>✓ {nameOf(b.by, me)}</span>}
-            {b.t === 'c' && !b.ok && b.x && onMakeTask && <button onClick={() => onMakeTask(b.x)} className="text-[11px] px-1.5 py-1 rounded-md bg-purple-50 text-purple-700 mt-0.5 flex-shrink-0" aria-label="Tạo việc">⏰</button>}
-          </div>))}</div>
-        {(n.secrets || []).length > 0 && <div className="bg-purple-50/60 border border-dashed border-purple-200 rounded-2xl p-3 mt-3">
+        <Suspense fallback={<p className="text-sm text-gray-400 py-6">Đang mở…</p>}>
+          <NoteEditor doc={doc0} editable={ed} me={me} names={names} autoFocus={isNew} onChange={onDoc}
+            onSecret={() => setSecret({ i: -1 })} onMakeTask={onMakeTask}/>
+        </Suspense>
+        {secrets.length > 0 && <div className="bg-purple-50/60 border border-dashed border-purple-200 rounded-2xl p-3 mt-3">
           <p className="text-[13px] font-semibold text-purple-800">🔑 Mật khẩu & tài khoản</p>
-          {n.secrets.map((s, i) => <SecretRow key={i} s={s} onEdit={ed ? () => setSecret({ i }) : null}/>)}
+          {secrets.map((s, i) => <SecretRow key={i} s={s} onEdit={ed ? () => setSecret({ i }) : null}/>)}
           {ed && <button onClick={() => setSecret({ i: -1 })} className="text-sm text-purple-700 mt-2">+ Thêm dòng</button>}
         </div>}
         <p className="text-[11px] text-gray-400 text-center mt-6">Sửa {ago(note.updated_at)}{note.updated_by ? ' · ' + nameOf(note.updated_by, me) : ''}</p>
       </div></div>
-      {ed && <div className="bg-white border-t border-gray-200" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
-        <div className="max-w-2xl mx-auto flex justify-around px-2 py-2">
-          {[['bold', <b key="b">B</b>, 'Chữ đậm'], ['h', 'H', 'Tiêu đề'], ['b', '•', 'Gạch đầu dòng'], ['c', '☑', 'Checklist']].map(([t, l, a]) => (
-            <button key={t} onMouseDown={e => e.preventDefault()} onClick={() => fmt(t)} aria-label={a}
-              className={`w-11 h-10 rounded-xl text-lg ${focus !== null && (t === 'bold' ? B[focus]?.bold : B[focus]?.t === t) ? 'bg-purple-100 text-purple-700' : 'bg-gray-100'}`}>{l}</button>))}
-          <button onClick={() => setSecret({ i: -1 })} className="w-11 h-10 rounded-xl bg-gray-100 text-lg" aria-label="Thêm mật khẩu">🔑</button>
-          <button onClick={mic} className={`w-14 h-10 rounded-xl text-white text-lg ${rec ? 'bg-red-600 animate-pulse' : 'bg-red-500'}`} aria-label="Nói để ghi">🎤</button>
-        </div></div>}
-      {secret && <SecretSheet item={secret.i >= 0 ? n.secrets[secret.i] : null} onClose={() => setSecret(null)}
-        onSave={s => { const L = [...(n.secrets || [])]; if (secret.i >= 0) L[secret.i] = s; else L.push(s); put({ secrets: L }); setSecret(null) }}
-        onDelete={() => { put({ secrets: n.secrets.filter((_, j) => j !== secret.i) }); setSecret(null) }}/>}
+      {secret && <SecretSheet item={secret.i >= 0 ? secrets[secret.i] : null} onClose={() => setSecret(null)}
+        onSave={s => { const L = [...secrets]; if (secret.i >= 0) L[secret.i] = s; else L.push(s); setSecrets(L); setSecret(null) }}
+        onDelete={() => { setSecrets(secrets.filter((_, j) => j !== secret.i)); setSecret(null) }}/>}
       {more && <Sheet onClose={() => setMore(false)} title="Ghi chú">
-        <button onClick={() => { put({ pinned: !n.pinned }); setMore(false) }} className="w-full text-left py-3 border-b border-gray-100">{n.pinned ? '📌 Bỏ ghim' : '📌 Ghim lên đầu'}</button>
+        <button onClick={() => { setPinned(!pinned); onChange(note, { pinned: !pinned }); setMore(false) }} className="w-full text-left py-3 border-b border-gray-100">{pinned ? '📌 Bỏ ghim' : '📌 Ghim lên đầu'}</button>
         <p className="text-xs text-gray-500 mt-3 mb-1.5">Chuyển sang sổ</p>
         <div className="flex flex-wrap gap-1.5">{[{ id: null, emoji: '📥', name: 'Chưa xếp sổ' }, ...books].map(b => (
-          <button key={b.id || 'none'} onClick={() => { put({ book_id: b.id }); onMove?.(); setMore(false) }}
-            className={`px-3 py-2 rounded-full text-sm ${n.book_id === b.id ? 'bg-gray-800 text-white' : 'bg-gray-100'}`}>{b.emoji} {b.name}</button>))}</div>
+          <button key={b.id || 'none'} onClick={() => { onChange(note, { book_id: b.id }); onMove?.(); setMore(false) }}
+            className={`px-3 py-2 rounded-full text-sm ${note.book_id === b.id ? 'bg-gray-800 text-white' : 'bg-gray-100'}`}>{b.emoji} {b.name}</button>))}</div>
         <button onClick={() => { if (confirm('Xoá ghi chú này?' + (Object.keys(share).length ? ' Người được chia sẻ cũng không còn thấy.' : ''))) { setMore(false); onDelete() } }}
           className="w-full mt-4 py-3 rounded-xl bg-red-50 text-red-600 font-medium">🗑 Xoá ghi chú</button>
       </Sheet>}
@@ -313,33 +230,23 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
     const n = notes.find(x => x.id === noteId)
     await flush()
     setNoteId(null)
-    if (n && n.owner === me && !n.title.trim() && !(n.body || []).some(b => b.x) && !(n.secrets || []).length) {   // ghi chú trống → bỏ
+    setFresh(null)
+    if (n && n.owner === me && !plain({ ...n, secrets: [] }).trim() && !(n.secrets || []).length) {   // ghi chú trống → bỏ
       deleteNote(n.id).then(() => setNotes(ns => ns.filter(x => x.id !== n.id))).catch(() => {})
     }
   }
-  const newNote = async (fields = {}) => {
-    try {
-      const n = await createNote({ book_id: bookId !== undefined ? bookId : null, ...fields })
-      setNotes(ns => [n, ...ns]); setNoteId(n.id)
-    } catch (e) { toast.error('Lỗi tạo ghi chú: ' + e.message) }
+  // Ghi chú mới: mở NGAY (id tạo sẵn trên máy) rồi mới lưu ngầm → bàn phím bật lên trong cùng lần chạm
+  const [fresh, setFresh] = useState(null)
+  const newNote = () => {
+    const id = crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16) })
+    const now = new Date().toISOString()
+    const doc = { type: 'doc', content: [{ type: 'heading', attrs: { level: 1 } }] }
+    const n = { id, owner: me, book_id: bookId !== undefined ? bookId : null, title: '', body: doc, secrets: [], share: {}, pinned: false, created_at: now, updated_at: now, updated_by: me }
+    setNotes(ns => [n, ...ns]); setFresh(id); setNoteId(id)
+    saving.current = saving.current.then(() => createNote({ id, book_id: n.book_id, body: doc })
+      .catch(e => { toast.error('Lỗi tạo ghi chú: ' + e.message); setNotes(ns => ns.filter(x => x.id !== id)); setNoteId(null) }))
   }
-  const [listen, setListen] = useState(null)          // đang nghe để tạo ghi chú mới
-  const voiceNote = () => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition
-    if (!SR) { toast.info('Máy này chưa cho ghi âm trong app — mở ghi chú mới, chạm vào dòng chữ rồi dùng nút 🎤 trên bàn phím'); newNote(); return }
-    try {
-      const r = new SR(); r.lang = 'vi-VN'; r.interimResults = true; r.continuous = false
-      let txt = ''
-      r.onresult = e => { txt = [...e.results].map(x => x[0].transcript).join(' '); setListen({ r, txt }) }
-      r.onerror = e => { if (e.error === 'not-allowed' || e.error === 'service-not-allowed') toast.error('Chưa được phép dùng micro — dùng nút 🎤 trên bàn phím') }
-      r.onend = () => {
-        setListen(null)
-        const body = voiceToBlocks(txt)
-        if (body.length) newNote({ title: txt.split(/[,.:]/)[0].trim().replace(/^./, c => c.toUpperCase()).slice(0, 60), body })
-      }
-      r.start(); setListen({ r, txt: '' })
-    } catch { toast.error('Không bật được ghi âm') }
-  }
+  useEffect(() => { preloadEditor() }, [])
 
   const mine = notes.filter(n => n.owner === me)
   const shared = notes.filter(n => n.owner !== me)
@@ -412,19 +319,15 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
             <button onClick={() => setBookEdit({ name: '', emoji: '📌', color: BOOK_COLORS[books.length % BOOK_COLORS.length] })}
               className="rounded-2xl p-3 min-h-[104px] border-2 border-dashed border-gray-300 text-gray-400 text-sm">＋ Sổ mới</button>
           </div>
-          {!notes.length && <p className="text-sm text-gray-500 text-center mt-6 leading-relaxed">Chưa có ghi chú nào.<br/>Bấm <b>＋</b> để viết, hoặc <b>🎤</b> để nói.</p>}
+          {!notes.length && <p className="text-sm text-gray-500 text-center mt-6 leading-relaxed">Chưa có ghi chú nào.<br/>Bấm <b>＋</b> để viết. Muốn nói thì chạm 🎤 trên bàn phím iPhone.</p>}
         </>}
       </div>
 
-      {listen && <div className="fixed inset-x-3 z-30 bg-red-50 border border-red-200 rounded-2xl p-3 text-sm text-red-900 shadow-lg" style={{ bottom: 'calc(150px + env(safe-area-inset-bottom, 0px))' }}>
-        <b>🎙 Đang nghe…</b> {listen.txt || 'nói đi, vd: “đi chợ, danh sách: rau, thịt, sữa”'}
-        <button onClick={() => listen.r.stop()} className="block mt-2 px-3 py-1.5 rounded-lg bg-red-500 text-white text-sm">Xong</button></div>}
       {<div className="fixed right-4 flex gap-3 z-20" style={{ bottom: 'calc(84px + env(safe-area-inset-bottom, 0px))' }}>
-        <button onClick={voiceNote} className="w-14 h-14 rounded-full bg-red-500 text-white text-2xl shadow-lg active:scale-95" aria-label="Ghi chú bằng giọng nói">🎤</button>
         <button onClick={() => newNote()} className="w-14 h-14 rounded-full bg-purple-600 text-white text-3xl shadow-lg active:scale-95" aria-label="Ghi chú mới">＋</button>
       </div>}
 
-      {cur && <Editor key={cur.id} note={cur} me={me} books={books} onBack={closeNote} onChange={change} onMakeTask={onMakeTask}
+      {cur && <Editor key={cur.id} note={cur} me={me} books={books} isNew={fresh === cur.id} onBack={closeNote} onChange={change} onMakeTask={onMakeTask}
         onShare={() => setShareFor(cur)}
         onDelete={async () => { try { await flush(); await deleteNote(cur.id); setNotes(ns => ns.filter(x => x.id !== cur.id)); setNoteId(null); toast.success('Đã xoá ghi chú') } catch (e) { toast.error('Lỗi xoá: ' + e.message) } }}/>}
       {shareFor && <ShareSheet note={shareFor} me={me} onClose={() => setShareFor(null)}
