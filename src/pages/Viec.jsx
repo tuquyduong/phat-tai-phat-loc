@@ -160,7 +160,7 @@ function PinGate({ onDone }) {
   )
 }
 
-export default function Viec({ onNavigate, account }) {
+export default function Viec({ onNavigate, account, go, onGoDone }) {
   const toast = useToast()
   const today = getLocalDateString()
   const kid = account?.role === 'viec'                       // tài khoản con: chỉ tab Việc, người dùng cố định
@@ -181,6 +181,7 @@ export default function Viec({ onNavigate, account }) {
   const [searchOpen, setSearchOpen] = useState(false)
   const [reviewOpen, setReviewOpen] = useState(false)
   const [taskEdit, setTaskEdit] = useState(null)            // { id, iso } việc đang mở chi tiết
+  const [flash, setFlash] = useState(null)                  // id Daily vừa mở từ thông báo → tô sáng vài giây
   const [undo, setUndo] = useState(null)                    // { id, iso, title } vừa tick nhanh — cho phép hoàn tác
   const undoTimer = useRef(null)               // Daily đang mở bảng nhập tay
   const [linkPrefs, setLinkPrefs] = useState(DEFAULT_LINKS)
@@ -308,6 +309,24 @@ export default function Viec({ onNavigate, account }) {
     if (t && isDoneOn(t, undo.iso || t.due_date)) tick(t, undo.iso)
   }
   const openTask = (t, iso) => setTaskEdit({ id: t.id, iso: iso || t.due_date || null })
+  // Bấm thông báo → mở đúng mục. Chờ tải xong dữ liệu (và chọn người) rồi mới xử lý.
+  const goDone = useRef(null)
+  useEffect(() => {
+    if (!go || loading || !loaded.current || goDone.current === go.n) return
+    goDone.current = go.n
+    const [kind, id, iso] = String(go.go).split(':')
+    setSearchOpen(false); setReviewOpen(false); setSel(null); setLogFor(null); setOrderEdit(null); setEditDaily(null)
+    setView('main')
+    if (kind === 'daily' && data.daily.some(d => d.id === id)) { setTaskEdit(null); setTab('daily'); setFlash(id) }
+    else if (kind === 'task') { const t = data.tasks.find(x => x.id === id); setTaskEdit(t ? { id: t.id, iso: iso || t.due_date || null } : null) }
+    onGoDone?.()
+  }, [go, loading, data])                                  // eslint-disable-line react-hooks/exhaustive-deps -- chỉ chạy khi có yêu cầu mở mới
+  useEffect(() => {                                        // cuộn tới thẻ Daily rồi tắt tô sáng sau 4 giây
+    if (!flash) return
+    const r = requestAnimationFrame(() => document.getElementById('daily-' + flash)?.scrollIntoView({ behavior: 'smooth', block: 'center' }))
+    const t = setTimeout(() => setFlash(null), 4000)
+    return () => { cancelAnimationFrame(r); clearTimeout(t) }
+  }, [flash, tab])
   const pullToday = t => run(async () => {                    // ＋ Hôm nay: đặt ngày cho CHÍNH việc đó — không tạo bản sao
     const u = await updateTask(t.id, { due_date: today })
     patch('tasks', ts => ts.map(x => x.id === t.id ? u : x))
@@ -491,7 +510,7 @@ export default function Viec({ onNavigate, account }) {
           {loading ? <p className="text-center text-sm text-gray-400 py-6">Đang tải…</p>
             : tab === 'ord' ? <OrdersPanel orders={data.orders} today={today} who={who} onToggle={toggleO} onEdit={o => setOrderEdit(o)} onNew={() => setOrderEdit('new')}/>
             : tab === 'up' ? <Upcoming U={U} today={today} cfg={cfg} onOpen={openItem} onOpenDay={setSel} onReview={() => setReviewOpen(true)} projects={data.projects}/>
-            : <DailyPanel list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now} projects={data.projects} resting={restingDaily} today={today}
+            : <DailyPanel flash={flash} list={todayDaily} prog={prog} avg={avg} running={running} runD={runD} now={now} projects={data.projects} resting={restingDaily} today={today}
                 onStart={start} onStop={stop} onTick={tickD} onCount={(d, n) => logValue(d, n, today, false)} onManual={d => setLogFor(d.id)} onStats={() => setView('stat')}
                 onAdd={() => { setEditDaily(null); setDailyFrom('main'); setView('daily') }} onEdit={d => { setEditDaily(d); setDailyFrom('main'); setView('daily') }}/>}
         </div>
@@ -607,7 +626,7 @@ function Upcoming({ U, today, cfg, onOpen, onOpenDay, onReview, projects = [] })
 }
 
 // ── THẺ DAILY ──
-function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit, projects = [], resting = [], today }) {
+function DailyPanel({ flash, list, prog, avg, running, runD, now, onStart, onStop, onTick, onCount, onManual, onStats, onAdd, onEdit, projects = [], resting = [], today }) {
   const totalMin = list.filter(d => d.kind === 'time').reduce((a, d) => a + prog(d).minutes, 0)
   const forgot = running && runD && looksForgotten(running, runD, now)
   const reachedNow = running && runD && prog(runD).minutes >= runD.target_min
@@ -633,7 +652,7 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
         {list.map(d => {
           const p = prog(d), isRun = running?.daily_id === d.id
           return (
-            <div key={d.id} className={`bg-gray-50 rounded-2xl p-2.5 flex flex-col gap-2 border-[1.5px] ${isRun ? 'border-emerald-500' : 'border-transparent'}`}>
+            <div key={d.id} id={'daily-' + d.id} className={`bg-gray-50 rounded-2xl p-2.5 flex flex-col gap-2 border-[1.5px] transition-shadow ${isRun ? 'border-emerald-500' : 'border-transparent'} ${flash === d.id ? 'ring-2 ring-amber-400 shadow-lg' : ''}`}>
               <button onClick={() => onEdit?.(d)} aria-label={'Chi tiết ' + d.name} className="flex items-center gap-2 min-w-0 text-left">
                 <div className="relative"><Ring pct={p.pct} color={d.color}/><span className="absolute inset-0 flex items-center justify-center text-base">{d.emoji}</span></div>
                 <div className="min-w-0"><div className="text-[13px] font-semibold text-gray-800 truncate">{d.name}{d.shared && ' 👥'}</div>
@@ -656,7 +675,7 @@ function DailyPanel({ list, prog, avg, running, runD, now, onStart, onStop, onTi
       </div>
       {resting.map(d => { const ph = cyclePhase(d, today || getLocalDateString())
         return (
-          <button key={d.id} onClick={() => onEdit?.(d)} className="w-full mt-2 flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-left">
+          <button key={d.id} id={'daily-' + d.id} onClick={() => onEdit?.(d)} className={`w-full mt-2 flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2.5 text-left ${flash === d.id ? 'ring-2 ring-amber-400' : ''}`}>
             <span className="text-lg opacity-60">{d.emoji}</span>
             <span className="flex-1 min-w-0 text-[13px] text-gray-500"><b className="font-semibold text-gray-600">{d.name}</b>
               {ph.state === 'before' ? ` · bắt đầu ${dm(ph.next)} (còn ${ph.left} ngày)` : ` · ⏸ đang nghỉ · còn ${ph.left} ngày · dùng lại ${dm(ph.nextOn)}`}</span>

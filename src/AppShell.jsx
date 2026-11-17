@@ -18,6 +18,10 @@ import { getActiveModules } from './lib/config'
 
 export default function AppShell() {
   // Mở từ thông báo (…/?tab=viec) thì vào thẳng tab Việc
+  // go=daily:<id> | task:<id>:<ngày> → tab Việc mở thẳng mục đó
+  const [viecGo, setViecGo] = useState(() => {
+    try { const g = new URLSearchParams(window.location.search).get('go'); return g ? { go: g, n: Date.now() } : null } catch { return null }
+  })
   const [activeModule, setActiveModule] = useState(() => {
     try {
       if (new URLSearchParams(window.location.search).get('tab') !== 'viec') return 'home'
@@ -33,7 +37,11 @@ export default function AppShell() {
   // App đang mở sẵn mà bấm thông báo → Service Worker nhắn chuyển tab
   useEffect(() => {
     if (!('serviceWorker' in navigator)) return
-    const onMsg = e => { if (e.data?.type === 'open-tab' && e.data.tab) setActiveModule(e.data.tab) }
+    const onMsg = e => {
+      if (e.data?.type !== 'open-tab' || !e.data.tab) return
+      setActiveModule(e.data.tab)
+      if (e.data.go) setViecGo({ go: e.data.go, n: Date.now() })
+    }
     navigator.serviceWorker.addEventListener('message', onMsg)
     return () => navigator.serviceWorker.removeEventListener('message', onMsg)
   }, [])
@@ -76,7 +84,7 @@ export default function AppShell() {
     <ToastProvider>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
         <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
-          <Viec account={account} />
+          <Viec account={account} go={viecGo} onGoDone={() => setViecGo(null)} />
         </Suspense>
       </div>
     </ToastProvider>
@@ -102,7 +110,7 @@ export default function AppShell() {
       case 'viec':
         return (
           <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
-            <Viec onNavigate={openFromCalendar} account={account} />
+            <Viec onNavigate={openFromCalendar} account={account} go={viecGo} onGoDone={() => setViecGo(null)} />
           </Suspense>
         )
       default:

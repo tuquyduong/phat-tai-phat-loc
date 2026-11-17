@@ -118,14 +118,18 @@ self.addEventListener('push', (event) => {
   }))
 })
 
-// Bấm vào thông báo: mở app sẵn có (nếu đang mở) và chuyển tới tab Việc
+// Bấm vào thông báo: mở app sẵn có (nếu đang mở) và chuyển tới đúng mục (go=daily:<id> | task:<id>:<ngày>)
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
   const url = (event.notification.data && event.notification.data.url) || '/?tab=viec'
   event.waitUntil((async () => {
     const all = await clients.matchAll({ type: 'window', includeUncontrolled: true })
     for (const c of all) {
-      if ('focus' in c) { c.postMessage({ type: 'open-tab', tab: 'viec' }); return c.focus() }
+      if ('focus' in c) {
+        let go = null
+        try { go = new URL(url, self.location.origin).searchParams.get('go') } catch { /* bỏ qua */ }
+        c.postMessage({ type: 'open-tab', tab: 'viec', go }); return c.focus()
+      }
     }
     return clients.openWindow(url)
   })())
