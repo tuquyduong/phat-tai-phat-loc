@@ -12,6 +12,8 @@ import {
 import { isSeries, occurrencesBetween, nextOccurrences, isDoneOn, describe, UNITS } from '../lib/recur'
 import { loadLinks, getLinkPrefs, saveLinkPrefs, linkMarks, linkGroups, DEFAULT_LINKS } from '../lib/viecLinks'
 import { signOut, changePasswordChecked } from '../lib/auth'
+import GhiChu from './GhiChu'
+import { countNew, listNotes, plain, preview as notePreview, roleOf as noteRole } from '../lib/notes'
 import { pushSupport, enablePush, disablePush, isRegistered, sendTest, moveSubscription, getPrefs, savePrefs, DEFAULT_PREFS } from '../lib/viecPush'
 
 const WD = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN']
@@ -168,7 +170,15 @@ export default function Viec({ onNavigate, account, go, onGoDone }) {
   const [data, setData] = useState({ tasks: [], daily: [], logs: [], projects: [], orders: [] })
   const [cfg, setCfgState] = useState(DEFAULT_CFG)
   const [loading, setLoading] = useState(true)
-  const [view, setView] = useState('main')                // main | stat | set | daily
+  const [view, setView] = useState('main')                // main | stat | set | daily | notes
+  // Ghi chú theo TÀI KHOẢN đăng nhập (database khoá theo tài khoản), không theo người chọn bằng PIN
+  const me = account?.who || who
+  const [noteNew, setNoteNew] = useState(0)                 // số ghi chú người nhà mới chia sẻ / vừa sửa
+  const [noteOpen, setNoteOpen] = useState(null)
+  const [noteList, setNoteList] = useState([])              // cho ô 🔍 tìm kiếm
+  const noteBadge = useCallback(() => { if (me) countNew(me).then(setNoteNew).catch(() => {}) }, [me])
+  useEffect(() => { noteBadge() }, [noteBadge])
+  useEffect(() => { const f = () => { if (document.visibilityState === 'visible') noteBadge() }; document.addEventListener('visibilitychange', f); return () => document.removeEventListener('visibilitychange', f) }, [noteBadge])
   const [month, setMonth] = useState(today.slice(0, 7))
   const [sel, setSel] = useState(null)                    // ngày đang mở bảng chi tiết
   const [tab, setTab] = useState('up')
@@ -439,7 +449,9 @@ export default function Viec({ onNavigate, account, go, onGoDone }) {
         <h2 className="text-lg font-bold text-gray-800 flex-1 truncate">📅 {PEOPLE[who]}</h2>
         <button onClick={() => { setMonth(today.slice(0, 7)); setSel(today) }}
           className="text-sm px-3 py-1.5 rounded-full bg-purple-50 text-purple-700 font-medium active:scale-95">Hôm nay</button>
-        <button onClick={() => setSearchOpen(true)} className="w-10 h-10 rounded-full text-lg bg-purple-50 active:bg-purple-100" aria-label="Tìm kiếm">🔍</button>
+        <button onClick={() => { setSearchOpen(true); listNotes().then(setNoteList).catch(() => {}) }} className="w-10 h-10 rounded-full text-lg bg-purple-50 active:bg-purple-100" aria-label="Tìm kiếm">🔍</button>
+        <button onClick={() => setView('notes')} className="relative w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Ghi chú">📝
+          {noteNew > 0 && <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center border-2 border-white">{noteNew}</span>}</button>
         <button onClick={() => setView('proj')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Kế hoạch">🎯</button>
         <button onClick={() => setView('set')} className="w-10 h-10 rounded-full text-lg active:bg-gray-100" aria-label="Cài đặt">⚙️</button>
       </div>
@@ -457,6 +469,9 @@ export default function Viec({ onNavigate, account, go, onGoDone }) {
       <button onClick={doUndo} className="font-bold text-purple-300 flex-shrink-0">Hoàn tác</button></div>}
   </>
 
+  if (view === 'notes') return <GhiChu me={me} openId={noteOpen} onOpened={() => setNoteOpen(null)} onSeen={() => setNoteNew(0)}
+    onBack={() => { setView('main'); noteBadge() }}
+    onMakeTask={title => run(async () => { const t = await createTask({ owner: who, title, due_date: today }); patch('tasks', ts => [...ts, t]); toast.success('Đã thêm việc hôm nay: ' + title) })}/>
   if (view === 'proj') return <ProjectsPage who={who} projects={data.projects} tasks={data.tasks} today={today}
     onOpen={id => { setProjId(id); setView('projd') }} onSave={saveP} onBack={() => setView('main')}/>
   const curProj = data.projects.find(p => p.id === projId)
@@ -516,7 +531,8 @@ export default function Viec({ onNavigate, account, go, onGoDone }) {
         </div>
       </div>
 
-      {searchOpen && <SearchOverlay today={today} who={who} tasks={data.tasks} orders={data.orders} projects={data.projects} daily={data.daily}
+      {searchOpen && <SearchOverlay today={today} who={who} tasks={data.tasks} orders={data.orders} projects={data.projects} daily={data.daily} notes={noteList} me={me}
+        onOpenNote={id => { setSearchOpen(false); setNoteOpen(id); setView('notes') }}
         onClose={() => setSearchOpen(false)} onOpenTask={openTask} onOpenOrder={o => setOrderEdit(o)}
         onOpenProject={id => { setSearchOpen(false); setProjId(id); setView('projd') }}
         onOpenDaily={d => { setSearchOpen(false); setEditDaily(d); setDailyFrom('main'); setView('daily') }}/>}
@@ -1175,7 +1191,7 @@ const SearchRow = ({ onClick, icon, title, sub, extra, status }) => (
     {status}
   </button>)
 
-function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, onOpenTask, onOpenOrder, onOpenProject, onOpenDaily }) {
+function SearchOverlay({ today, who, tasks, orders, projects, daily, notes = [], me, onClose, onOpenTask, onOpenOrder, onOpenProject, onOpenDaily, onOpenNote }) {
   const [q, setQ] = useState('')
   const inputRef = useRef(null)
   useEffect(() => { const t = setTimeout(() => inputRef.current?.focus(), 50); return () => clearTimeout(t) }, [])
@@ -1189,9 +1205,10 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
     const od = orders.filter(o => searchMatch(o.title + ' ' + (o.tracking || ''), q))
       .sort((a, b) => (a.received_at ? 1 : 0) - (b.received_at ? 1 : 0) || b.order_date.localeCompare(a.order_date))
     return { tasks: [...open, ...done], orders: od,
-      projects: projects.filter(p => searchMatch(p.name, q)), daily: daily.filter(d => searchMatch(d.name, q)) }
-  }, [q, tasks, orders, projects, daily])                       // eslint-disable-line react-hooks/exhaustive-deps
-  const n = r ? r.tasks.length + r.orders.length + r.projects.length + r.daily.length : 0
+      projects: projects.filter(p => searchMatch(p.name, q)), daily: daily.filter(d => searchMatch(d.name, q)),
+      notes: notes.filter(n => searchMatch(plain(n), q)) }
+  }, [q, tasks, orders, projects, daily, notes])                       // eslint-disable-line react-hooks/exhaustive-deps
+  const n = r ? r.tasks.length + r.orders.length + r.projects.length + r.daily.length + r.notes.length : 0
   const pill = (text, cls) => <span className={`text-[11px] px-2 py-0.5 rounded-full whitespace-nowrap flex-shrink-0 ${cls}`}>{text}</span>
   const taskStatus = t => {
     if (isSeries(t)) { const nx = nextOccurrences(t, today, 1)[0]; return nx ? pill(nx === today ? 'Hôm nay' : 'Lần tới ' + dm(nx), 'bg-purple-50 text-purple-700') : pill('Đã hết lặp', 'bg-gray-100 text-gray-500') }
@@ -1214,7 +1231,7 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
       </div></div>
       <div className="flex-1 overflow-y-auto" style={{ paddingBottom: 'calc(24px + env(safe-area-inset-bottom, 0px))' }}><div className="max-w-2xl mx-auto px-3">
         {!r && <div className="bg-white rounded-2xl p-3.5 mt-3 text-[13px] text-gray-600 leading-relaxed">
-          <b>Gõ bất kỳ phần nào:</b><br/>• tên việc, không cần dấu — "an co" vẫn ra "ăn cỗ"<br/>• vài số cuối mã vận đơn — "4982"<br/>• tên kế hoạch, tên Daily</div>}
+          <b>Gõ bất kỳ phần nào:</b><br/>• tên việc, không cần dấu — "an co" vẫn ra "ăn cỗ"<br/>• vài số cuối mã vận đơn — "4982"<br/>• tên kế hoạch, tên Daily, nội dung ghi chú</div>}
         {r && n === 0 && <p className="text-center text-sm text-gray-400 mt-10">Không tìm thấy "{q}"<br/><span className="text-xs">Thử bỏ bớt từ, hoặc gõ vài số cuối của mã</span></p>}
         {r && <>
           <SearchGroup label="☑️ Việc" items={r.tasks} render={t => <SearchRow key={t.id} onClick={() => onOpenTask(t, isSeries(t) ? (nextOccurrences(t, today, 1)[0] || t.repeat_start) : t.due_date)}
@@ -1229,6 +1246,8 @@ function SearchOverlay({ today, who, tasks, orders, projects, daily, onClose, on
             sub={(g => `${g.done}/${g.total} việc xong${p.archived ? ' · đã lưu trữ' : ''}`)(projectProgress(p.id, tasks, today))}/>}/>
           <SearchGroup label="◎ Daily" items={r.daily} render={d => <SearchRow key={d.id} onClick={() => onOpenDaily(d)} icon={d.emoji} title={<Hl text={d.name} q={q}/>}
             sub={`Daily · ${d.kind === 'tick' ? 'đánh dấu' : dval(d, d.target_min)}${d.archived ? ' · đã lưu trữ' : ''}`}/>}/>
+          <SearchGroup label="📝 Ghi chú" items={r.notes} render={x => <SearchRow key={x.id} onClick={() => onOpenNote(x.id)} icon="📝" title={<Hl text={x.title || 'Ghi chú không tên'} q={q}/>}
+            sub={[notePreview(x).slice(0, 60), noteRole(x, me) !== 'own' && 'của ' + nameOf(x.owner, me)].filter(Boolean).join(' · ')}/>}/>
         </>}
       </div></div>
     </div>
