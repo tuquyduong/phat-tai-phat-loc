@@ -19,6 +19,8 @@ import {
   getReconState, backdateWarnings, warnText, getHealth, convertToPayCredit, keepAsExpense,
   getAccounts, saveAccount, archiveAccount, closeAccountBooks, getBankCutoff, getUnassignedBank, suggestAccount, assignAccount
 } from '../lib/expenses'
+import ChiTheoMuc, { MucPill, PickMuc } from '../components/ChiTheoMuc'
+import { DEFAULT_MUC, loadMuc, saveMuc, getChiRows, sixMonths } from '../lib/muc'
 
 // Helpers
 function getMonthRange(date) {
@@ -100,6 +102,13 @@ export default function Expenses() {
   const [recon, setRecon] = useState(null)              // { kind, cardId } đang đối soát
   const [reconLast, setReconLast] = useState({})        // mốc đối soát gần nhất của từng tài khoản
   const [showHealth, setShowHealth] = useState(false)
+  // Theo mục: danh sách mục (settings.chi_muc) + khoản chi 6 tháng (chỉ tải khi mở tab)
+  const [mucList, setMucList] = useState(DEFAULT_MUC)
+  const [mucRows, setMucRows] = useState([])
+  const [mucLoading, setMucLoading] = useState(false)
+  const [mucOpen, setMucOpen] = useState(null)
+  const [mucPick, setMucPick] = useState(null)
+  const [mucTick, setMucTick] = useState(0)
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -115,6 +124,19 @@ export default function Expenses() {
   }, [currentMonth, toast])
 
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => { loadMuc().then(setMucList).catch(() => {}) }, [])
+  const mucMonths = useMemo(() => sixMonths(currentMonth), [currentMonth])
+  useEffect(() => {
+    if (activeView !== 'muc') return
+    let off = false
+    setMucLoading(true)
+    getChiRows(mucMonths).then(r => { if (!off) setMucRows(r) }).catch(() => { if (!off) toast.error('Lỗi tải dữ liệu theo mục') }).finally(() => { if (!off) setMucLoading(false) })
+    return () => { off = true }
+  }, [activeView, mucMonths, mucTick, toast])
+  const saveMucList = async (l, msg) => {
+    try { setMucList(await saveMuc(l)); if (msg) toast.success(msg) } catch (e) { toast.error('Lỗi lưu mục: ' + e.message) }
+  }
+  const openMuc = k => { setActiveView('muc'); setMucOpen(k) }
 
   // Balances
   const openBal = useMemo(() => ({
@@ -210,7 +232,7 @@ export default function Expenses() {
     try {
       if(editingTx) { await updateTransaction(editingTx.id, fd); toast.success('Đã cập nhật') }
       else { await createTransaction(fd); toast.success('Đã thêm') }
-      setShowAdd(false); loadData()
+      setShowAdd(false); loadData(); setMucTick(x => x + 1)
     } catch(err) { toast.error('Lỗi: '+err.message) }
   }
 
@@ -317,6 +339,8 @@ export default function Expenses() {
             className={`px-4 py-2 rounded-lg text-sm font-medium ${activeView==='list'?'bg-green-500 text-white shadow-md':'bg-white text-gray-600'}`}>Giao dịch</button>
           <button onClick={() => setActiveView('summary')}
             className={`px-4 py-2 rounded-lg text-sm font-medium ${activeView==='summary'?'bg-green-500 text-white shadow-md':'bg-white text-gray-600'}`}>Tổng hợp</button>
+          <button onClick={() => { setActiveView('muc'); setMucOpen(null) }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium whitespace-nowrap ${activeView==='muc'?'bg-green-500 text-white shadow-md':'bg-white text-gray-600'}`}>🏷 Theo mục</button>
         </div>
 
         {/* Filters */}
@@ -388,6 +412,10 @@ export default function Expenses() {
         {/* Content */}
         {loading ? (
           <div className="space-y-3">{[1,2,3].map(i => <div key={i} className="bg-white rounded-xl p-4 animate-pulse"><div className="h-4 bg-gray-200 rounded w-1/3 mb-3"/><div className="h-12 bg-gray-100 rounded"/></div>)}</div>
+        ) : activeView==='muc' ? (
+          <ChiTheoMuc key={mucMonths[5]} list={mucList} rows={mucRows} months={mucMonths} loading={mucLoading} openK={mucOpen} setOpenK={setMucOpen}
+            onSaveList={saveMucList} accName={accName} cardName={cardName}
+            onEditTx={id => { const r = mucRows.find(x => x.id === id); if (r) handleEditTx({ ...r, type: 'expense' }) }}/>
         ) : activeView==='summary' ? (
           <SummaryView summary={summary} onCatClick={(id) => { setFilterCategory(id); setActiveView('list') }} />
         ) : groupedTx.length===0 ? (
@@ -413,9 +441,10 @@ export default function Expenses() {
                       <div className="w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0 text-lg" style={{backgroundColor:txBg(tx)}}>{txIcon(tx)}</div>
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-800 truncate">{txLabel(tx)}</p>
-                        <div className="flex items-center gap-1.5 mt-0.5">
-                          {!isSpecialTx(tx) && <span className="text-xs text-gray-400">{tx.category?.name}</span>}
-                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}{tx.payment_method==='transfer' && accName(tx.account_id) ? '·' + accName(tx.account_id) : ''}{tx.type==='pay_credit' && tx.payment_method!=='credit' && cardName(tx.card_id) ? ' → TD·' + cardName(tx.card_id) : (tx.payment_method==='credit'||tx.type==='pay_credit') && cardName(tx.card_id) ? '·' + cardName(tx.card_id) : ''}</span>
+                        <div className="flex items-center gap-1.5 mt-0.5 min-w-0 overflow-hidden">
+                          {!isSpecialTx(tx) && <span className="text-xs text-gray-400 truncate">{tx.category?.name}</span>}
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full border font-medium whitespace-nowrap ${mBadge(tx.payment_method||'cash')}`}>{mShort(tx.payment_method||'cash')}{tx.payment_method==='transfer' && accName(tx.account_id) ? '·' + accName(tx.account_id) : ''}{tx.type==='pay_credit' && tx.payment_method!=='credit' && cardName(tx.card_id) ? ' → TD·' + cardName(tx.card_id) : (tx.payment_method==='credit'||tx.type==='pay_credit') && cardName(tx.card_id) ? '·' + cardName(tx.card_id) : ''}</span>
+                          {tx.type==='expense' && <MucPill list={mucList} note={tx.note} onOpen={openMuc} onPick={setMucPick}/>}
                         </div>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
@@ -441,7 +470,8 @@ export default function Expenses() {
         <button onClick={() => handleAddTx('expense')} className="w-12 h-12 bg-red-500 text-white rounded-full shadow-lg flex items-center justify-center active:scale-90"><ArrowUpCircle size={24}/></button>
       </div>
 
-      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx} cards={cards} reconLast={reconLast} accounts={accounts}
+      <PickMuc note={mucPick} list={mucList} onClose={() => setMucPick(null)} onSave={l => { saveMucList(l, 'Đã gán mục'); setMucPick(null) }}/>
+      <TransactionForm isOpen={showAdd} onClose={() => setShowAdd(false)} onSave={handleSaveTx} cards={cards} reconLast={reconLast} accounts={accounts} mucList={mucList}
         categories={categories} type={addType} editingTx={editingTx}
         onDelete={editingTx?() => { handleDeleteTx(editingTx); setShowAdd(false) }:null} />
       <TransferForm isOpen={showTransfer} onClose={() => setShowTransfer(false)} toast={toast} onSaved={loadData} closeBal={closeBal} reconLast={reconLast} accounts={accounts} cards={cards} />
@@ -513,7 +543,7 @@ function SummaryView({ summary, onCatClick }) {
 // ============================================
 // TRANSACTION FORM - TM/CK/TD
 // ============================================
-function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete, cards = [], reconLast = {}, accounts = [] }) {
+function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx, onDelete, cards = [], reconLast = {}, accounts = [], mucList = [] }) {
   const toast = useToast()
   const [formType, setFormType] = useState(type)
   const [amount, setAmount] = useState('')
@@ -620,7 +650,11 @@ function TransactionForm({ isOpen, onClose, onSave, categories, type, editingTx,
         </div>
 
         <div><label className="text-xs text-gray-500 mb-1 block">Ngày</label><input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
-        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Mua nguyên liệu..." className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/></div>
+        <div><label className="text-xs text-gray-500 mb-1 block">Ghi chú</label><input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="Ví dụ: Mua nguyên liệu..." className="w-full px-4 py-3 border border-gray-200 rounded-xl text-sm"/>
+          {formType==='expense' && mucList.length > 0 && <div className="flex gap-1.5 overflow-x-auto no-scrollbar mt-2" aria-label="Chọn nhanh mục">
+            {mucList.map(m => <button key={m.k} type="button" onClick={() => setNote(m.n)}
+              className={`flex-shrink-0 px-2.5 py-1.5 rounded-full text-xs font-medium text-gray-700 ${note.trim().toLowerCase()===m.n.toLowerCase()?'ring-2 ring-gray-700':''}`} style={{ background: m.c }}>{m.e} {m.n}</button>)}
+          </div>}</div>
 
         <div className="flex gap-2 pt-2">
           {onDelete && <button onClick={onDelete} className="px-4 py-3 text-red-500 hover:bg-red-50 rounded-xl"><Trash2 size={18}/></button>}
