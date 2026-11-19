@@ -1348,7 +1348,7 @@ function vnDay(v) {
   const s = String(v)
   return s.length <= 10 ? s : todayLocal(new Date(s))
 }
-const saleDay = s => vnDay(s.sold_at) || vnDay(s.created_at)
+export const saleDay = s => vnDay(s.sold_at) || vnDay(s.created_at)
 
 function saleLabel(s, jMap) {
   const j = s.jewelry_id && jMap[s.jewelry_id]
@@ -1379,9 +1379,15 @@ export function reportMonths(sales) {
 }
 
 // DOANH THU: tính vào đúng tháng BÁN. month = 'YYYY-MM', hoặc null = tất cả
+// Kỳ báo cáo: null = tất cả, 'YYYY-MM' = một tháng, { from, to } = khoảng ngày (gồm cả 2 đầu)
+export function inPeriod(day, p) {
+  if (!p) return true
+  if (typeof p === 'string') return (day || '').startsWith(p)
+  return !!day && day >= p.from && day <= p.to
+}
 export function revenueReport(sales, jewelry, month) {
   const jMap = {}; jewelry.forEach(j => { jMap[j.id] = j })
-  const inMonth = s => !month || (saleDay(s) || '').startsWith(month)
+  const inMonth = s => inPeriod(saleDay(s), month)
   const rows = sales.filter(inMonth).map(s => {
     const day = saleDay(s), total = saleTotal(s)
     const paidDay = s.paid ? (vnDay(s.paid_at) || day) : null
@@ -1446,7 +1452,7 @@ export function cashflowReport(sales, jewelry, month) {
       events.push({ ...base, day: vnDay(s.paid_at) || day, amount: total - dep, kind: dep > 0 ? 'Trả nốt' : 'Thanh toán' })
     }
   })
-  const list = events.filter(e => !month || (e.day || '').startsWith(month))
+  const list = events.filter(e => inPeriod(e.day, month))
     .sort((a, b) => (b.day || '').localeCompare(a.day || ''))
   const total = list.reduce((a, e) => a + e.amount, 0)
   const byDay = {}, byMonth = {}
@@ -1457,7 +1463,7 @@ export function cashflowReport(sales, jewelry, month) {
     x.total += e.amount; x.count += 1
   })
   // Tiền về tháng này nhưng của đơn bán tháng trước = thu nợ cũ
-  const fromOld = month ? list.filter(e => !(e.saleDay || '').startsWith(month)).reduce((a, e) => a + e.amount, 0) : 0
+  const fromOld = month ? list.filter(e => !inPeriod(e.saleDay, month)).reduce((a, e) => a + e.amount, 0) : 0
   // Từng ngày tiền về: tổng, số khoản, phần thu nợ của đơn bán ngày trước
   const days = []
   list.forEach(e => {

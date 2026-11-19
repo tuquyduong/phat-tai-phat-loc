@@ -25,7 +25,7 @@ import {
   getActiveTrip, setActiveTrip,
   uploadImage, thumbUrl, resizeImage,
   calcStats, getCustomerNames, fmtMoney, moneyFull, fmtInput, parseInput, todayLocal,
-  reportMonths, revenueReport, cashflowReport, debtReport, monthLocal, prevMonthOf, flushPendingIntakes , preorderNeed, searchJewelry } from '../lib/jewelry'
+  reportMonths, revenueReport, cashflowReport, inPeriod, saleDay, debtReport, monthLocal, prevMonthOf, flushPendingIntakes , preorderNeed, searchJewelry } from '../lib/jewelry'
 
 // ============================================
 // MAIN
@@ -1377,12 +1377,97 @@ function DayHeader({ day, today, yday, open, onToggle, amount, green = false, me
   )
 }
 
+// Bảng chọn khoảng ngày: chạm ngày bắt đầu, rồi chạm ngày kết thúc
+const isoOf  = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+const dayOf  = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d) }
+const addDay = (s, n) => { const d = dayOf(s); d.setDate(d.getDate() + n); return isoOf(d) }
+const spanOf = (a, b) => Math.round((dayOf(b) - dayOf(a)) / 86400000) + 1
+// Kỳ đang xem → { from, to } (to không vượt quá hôm nay)
+function periodRange(p, today) {
+  if (!p) return null
+  if (typeof p !== 'string') return p
+  const last = isoOf(new Date(Number(p.slice(0, 4)), Number(p.slice(5, 7)), 0))
+  return { from: `${p}-01`, to: last > today ? today : last }
+}
+function RangeSheet({ open, init, today, preview, marks, onClose, onPick }) {
+  const [a, setA] = useState(null), [b, setB] = useState(null), [vm, setVm] = useState(today.slice(0, 7))
+  useEffect(() => {
+    if (!open) return
+    setA(init?.from || null); setB(init?.to || null); setVm((init?.to || today).slice(0, 7))
+    document.body.style.overflow = 'hidden'
+    return () => { document.body.style.overflow = '' }
+  }, [open])  // eslint-disable-line react-hooks/exhaustive-deps
+  if (!open) return null
+  const [y, m] = vm.split('-').map(Number)
+  const lead = (new Date(y, m - 1, 1).getDay() + 6) % 7, nd = new Date(y, m, 0).getDate()
+  const goM = dir => { const d = new Date(y, m - 1 + dir, 1); const k = isoOf(d).slice(0, 7); if (k <= today.slice(0, 7)) setVm(k) }
+  const tap = s => { if (!a || b) { setA(s); setB(null) } else if (s < a) { setB(a); setA(s) } else setB(s) }
+  const end = b || a
+  const pv  = a ? preview(a, end) : null
+  const full = s => s ? `${+s.slice(8)}/${+s.slice(5, 7)}/${s.slice(0, 4)}` : '—'
+  return (
+    <div className="fixed inset-0 z-[70]">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose}/>
+      <div className="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl px-3.5 pt-2 max-w-lg mx-auto"
+        style={{ paddingBottom: 'calc(14px + env(safe-area-inset-bottom))' }}>
+        <div className="w-10 h-1.5 rounded-full bg-gray-200 mx-auto mb-2"/>
+        <div className="text-base font-bold text-center">Chọn khoảng ngày</div>
+        <div className="text-xs text-center text-gray-500 mt-1 mb-2">
+          {a && !b ? <>Giờ chạm <b className="text-purple-600">ngày kết thúc</b></> : <>Chạm <b className="text-purple-600">ngày bắt đầu</b></>}
+        </div>
+        <div className="flex gap-2 mb-2">
+          {[['Từ ngày', a, !a || !!b], ['Đến ngày', b, !!a && !b]].map(([l, v, cur]) => (
+            <div key={l} className={`flex-1 rounded-xl border-[1.5px] px-2.5 py-1.5 ${cur ? 'border-purple-500 bg-purple-50' : 'border-gray-200'}`}>
+              <div className="text-[10px] text-gray-500">{l}</div>
+              <div className="text-[15px] font-bold">{full(v)}</div>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center justify-between my-1">
+          <button onClick={() => goM(-1)} className="w-10 h-9 rounded-lg bg-gray-100 flex items-center justify-center active:scale-95" aria-label="Tháng trước"><ChevronLeft size={18}/></button>
+          <b className="text-[15px]">Tháng {m}/{y}</b>
+          <button onClick={() => goM(1)} disabled={vm >= today.slice(0, 7)} className="w-10 h-9 rounded-lg bg-gray-100 flex items-center justify-center disabled:opacity-30 active:scale-95" aria-label="Tháng sau"><ChevronRight size={18}/></button>
+        </div>
+        <div className="grid grid-cols-7 text-center text-[11px] text-gray-400 py-1">
+          {['T2','T3','T4','T5','T6','T7','CN'].map(w => <div key={w}>{w}</div>)}
+        </div>
+        <div className="grid grid-cols-7">
+          {Array.from({ length: lead }, (_, i) => <span key={'x' + i}/>)}
+          {Array.from({ length: nd }, (_, i) => {
+            const s = isoOf(new Date(y, m - 1, i + 1)), isS = s === a, isE = s === end
+            const inR = a && b && s > a && s < b, off = s > today
+            return (
+              <button key={s} data-day={s} disabled={off} onClick={() => tap(s)}
+                className={`relative h-11 text-[15px]
+                  ${isS || isE ? 'bg-purple-600 text-white font-bold' : inR ? 'bg-purple-100' : ''}
+                  ${isS && isE ? 'rounded-xl' : isS ? 'rounded-l-xl' : isE ? 'rounded-r-xl' : ''}
+                  ${off ? 'text-gray-300' : s === today && !isS && !isE ? 'text-purple-600 font-bold' : ''}`}>
+                {i + 1}
+                {marks[s] && <i className={`absolute left-1/2 -ml-0.5 bottom-1.5 w-1 h-1 rounded-full ${isS || isE ? 'bg-white' : 'bg-purple-400'}`}/>}
+              </button>
+            )
+          })}
+        </div>
+        <div className="mt-2.5 bg-purple-50 rounded-xl px-3 py-2.5 flex justify-between items-center">
+          <span className="text-xs text-gray-500">{pv ? `${spanOf(a, end)} ngày · ${pv.orders} đơn` : 'Chưa chọn ngày'}</span>
+          <b className="text-[17px] text-purple-800">{pv ? moneyFull(pv.revenue) : ''}</b>
+        </div>
+        <button disabled={!a} onClick={() => onPick(a, end)}
+          className="w-full h-12 mt-2.5 rounded-xl bg-purple-600 text-white text-base font-bold disabled:opacity-40 active:scale-[.98]">
+          Xem báo cáo
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) {
   const [bcTab, setBcTab] = useState('dt')            // dt | tien | no | chay | ton
   const [month, setMonth] = useState(monthLocal())    // 'YYYY-MM' — null là Tất cả
   const [openDays, setOpenDays] = useState({})        // 'dt:2026-11-12' → true/false; chưa bấm thì chỉ mở ngày mới nhất
   const [selId, setSelId] = useState(null)            // món đang bấm để thu tiền / sửa
   const [busy,  setBusy]  = useState(null)
+  const [pickOpen, setPickOpen] = useState(false)     // bảng chọn khoảng ngày
   const isOpen  = (t, day, first) => { const v = openDays[`${t}:${day}`]; return v === undefined ? day === first : v }
   const setOpen = (t, list, val) => setOpenDays(o => { const n = { ...o }; list.forEach(d => { n[`${t}:${d}`] = val }); return n })
   const today   = todayLocal(), yday = todayLocal(new Date(Date.now() - 86400000))
@@ -1398,17 +1483,40 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
   }
   const fmtDate = d => { if(!d) return ''; const [y,m,day]=d.split('-'); return `${day}/${m}/${y.slice(2)}` }
   const dm   = d => { if(!d) return ''; const [,m,day]=d.split('-'); return `${+day}/${+m}` }
-  const mLab = m => m ? `Tháng ${+m.slice(5)}/${m.slice(0,4)}` : 'Tất cả các tháng'
+  const mLab = m => !m ? 'Tất cả các tháng' : typeof m === 'string' ? `Tháng ${+m.slice(5)}/${m.slice(0,4)}`
+    : m.from === m.to ? `${m.from === today ? 'Hôm nay · ' : m.from === yday ? 'Hôm qua · ' : ''}${dm(m.from)}/${m.from.slice(0,4)}`
+    : `${dm(m.from)} → ${dm(m.to)}`
+  const isRange = !!month && typeof month !== 'string'
 
   const months = useMemo(() => reportMonths(sales), [sales])
   const rev    = useMemo(() => revenueReport(sales, jewelry, month), [sales, jewelry, month])
   const cash   = useMemo(() => cashflowReport(sales, jewelry, month), [sales, jewelry, month])
   const debt   = useMemo(() => debtReport(sales, jewelry), [sales, jewelry])
-  const prevM  = month ? prevMonthOf(month) : null           // tháng liền trước theo lịch
-  const prev   = useMemo(() => prevM ? revenueReport(sales, jewelry, prevM).revenue : 0, [sales, jewelry, prevM])
+  // Kỳ liền trước để so sánh: tháng → tháng trước; khoảng ngày → cùng số ngày ngay trước đó
+  const prevM  = !month ? null : isRange
+    ? { from: addDay(month.from, -spanOf(month.from, month.to)), to: addDay(month.from, -1) }
+    : prevMonthOf(month)
+  const prevKey = !prevM ? '' : typeof prevM === 'string' ? prevM : `${prevM.from}_${prevM.to}`
+  const prev   = useMemo(() => prevM ? revenueReport(sales, jewelry, prevM).revenue : 0, [sales, jewelry, prevKey])  // eslint-disable-line react-hooks/exhaustive-deps
+  const span   = isRange ? spanOf(month.from, month.to > today ? today : month.to) : 0
+  const saleMarks = useMemo(() => { const o = {}; sales.forEach(x => { const d = saleDay(x); if (d) o[d] = 1 }); return o }, [sales])
+  const pickRange = (a, b) => {
+    setPickOpen(false)
+    // Chọn trọn 1 tháng (hoặc từ mùng 1 tới hôm nay của tháng này) → giữ chế độ tháng như cũ
+    const r = periodRange(a.slice(0, 7), today)
+    setMonth(a === r.from && b === r.to ? a.slice(0, 7) : { from: a, to: b })
+  }
+  // ‹ ›: chế độ tháng nhảy theo tháng; khoảng ngày lùi/tiến đúng bằng số ngày đang xem
+  const shiftRange = dir => {
+    const n = spanOf(month.from, month.to)
+    let a = addDay(month.from, dir * n), b = addDay(month.to, dir * n)
+    if (b > today) b = today
+    if (a > b) return
+    setMonth({ from: a, to: b })
+  }
   const mi     = month ? months.indexOf(month) : -1
   // Số ngày tính trung bình: tháng này → tới hôm nay; tháng cũ → đủ cả tháng
-  const daysInView = !month ? 0 : month === monthLocal() ? Number(todayLocal().slice(8))
+  const daysInView = !month ? 0 : isRange ? span : month === monthLocal() ? Number(todayLocal().slice(8))
     : new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()
   const soldDays = rev.days.filter(d => d.revenue > 0).length
   const dtFirst  = rev.days[0]?.day,  dtKeys = rev.days.map(d => d.day)
@@ -1419,23 +1527,32 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
   const cMax     = Math.max(1, ...cash.days.map(d => d.total))
 
   const monthBar = (
-    <div className="flex items-center gap-2 mx-3 mt-3">
-      <button onClick={() => mi > 0 && setMonth(months[mi - 1])} disabled={mi <= 0}
-        className="p-2 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Tháng trước">
-        <ChevronLeft size={16}/>
-      </button>
-      <div className="flex-1 text-center text-sm font-semibold text-gray-800">{mLab(month)}</div>
-      <button onClick={() => mi >= 0 && mi < months.length - 1 && setMonth(months[mi + 1])}
-        disabled={mi < 0 || mi >= months.length - 1}
-        className="p-2 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Tháng sau">
-        <ChevronRight size={16}/>
-      </button>
-      <button onClick={() => setMonth(month ? null : monthLocal())}
-        className={`px-3 py-2 rounded-lg text-xs font-medium border active:scale-95
-          ${!month ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200'}`}>
-        Tất cả
-      </button>
-    </div>
+    <>
+      <div className="flex items-center gap-2 mx-3 mt-3">
+        <button onClick={() => isRange ? shiftRange(-1) : (mi > 0 && setMonth(months[mi - 1]))}
+          disabled={!isRange && mi <= 0}
+          className="p-2.5 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Kỳ trước">
+          <ChevronLeft size={16}/>
+        </button>
+        <button onClick={() => setPickOpen(true)}
+          className="flex-1 min-w-0 py-2 px-2 rounded-lg border-[1.5px] border-purple-300 bg-purple-50 text-sm font-semibold text-purple-800 truncate active:scale-[.98]">
+          📅 {mLab(month)}{isRange && month.from !== month.to && <span className="font-medium text-purple-500 text-xs"> · {span} ngày</span>}
+        </button>
+        <button onClick={() => isRange ? shiftRange(1) : (mi >= 0 && mi < months.length - 1 && setMonth(months[mi + 1]))}
+          disabled={isRange ? month.to >= today : (mi < 0 || mi >= months.length - 1)}
+          className="p-2.5 rounded-lg bg-white border border-gray-100 disabled:opacity-30 active:scale-95" aria-label="Kỳ sau">
+          <ChevronRight size={16}/>
+        </button>
+        <button onClick={() => setMonth(month ? null : monthLocal())}
+          className={`px-3 py-2 rounded-lg text-xs font-medium border active:scale-95
+            ${!month ? 'bg-purple-600 text-white border-purple-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+          Tất cả
+        </button>
+      </div>
+      <RangeSheet open={pickOpen} init={periodRange(month, today)} today={today} marks={saleMarks}
+        preview={(a, b) => revenueReport(sales, jewelry, { from: a, to: b })}
+        onClose={() => setPickOpen(false)} onPick={pickRange}/>
+    </>
   )
   const chip = (t, c) => (
     <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded-full whitespace-nowrap ${c}`}>{t}</span>
@@ -1461,14 +1578,14 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
         <>
           {monthBar}
           <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 px-4 py-3">
-            <div className="text-[11px] text-gray-500">Doanh thu ghi nhận (theo ngày bán)</div>
+            <div className="text-[11px] text-gray-500">Doanh thu ghi nhận (theo ngày bán){isRange && ` · ${mLab(month)}`}</div>
             <div className="text-xl font-bold text-gray-900 mt-0.5">{moneyFull(rev.revenue)}</div>
             <div className="text-[11px] text-gray-500 mt-1">
               {rev.orders} đơn · {rev.qty} món
               {rev.giftQty > 0 && ` · tặng ${rev.giftQty} món`}
               {month && prev > 0 && (
                 <span className={rev.revenue >= prev ? 'text-green-600' : 'text-red-500'}>
-                  {' · '}{rev.revenue >= prev ? 'tăng' : 'giảm'} {Math.abs(Math.round((rev.revenue - prev) / prev * 100))}% so với tháng trước
+                  {' · '}{rev.revenue >= prev ? 'tăng' : 'giảm'} {Math.abs(Math.round((rev.revenue - prev) / prev * 100))}% so với {isRange ? `${span} ngày trước đó` : 'tháng trước'}
                 </span>
               )}
             </div>
@@ -1486,6 +1603,7 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
             {month && soldDays > 0 && (
               <div className="text-[11px] text-gray-500 mt-1.5">
                 Có bán {soldDays}/{daysInView} ngày · trung bình {moneyFull(Math.round(rev.revenue / daysInView / 1000) * 1000)} mỗi ngày
+                {rev.orders > 0 && ` · ${moneyFull(Math.round(rev.revenue / rev.orders / 1000) * 1000)} mỗi đơn`}
               </div>
             )}
           </div>
@@ -1518,7 +1636,7 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
                 )}
               </div>
               {rev.days.length === 0 && (
-                <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn nào trong tháng này</div>
+                <div className="text-center py-8 text-gray-400 text-sm">Chưa có đơn nào trong {isRange ? 'khoảng này' : 'tháng này'}</div>
               )}
               {rev.days.map(dd => {
                 const open = isOpen('dt', dd.day, dtFirst)
@@ -1628,11 +1746,11 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
         <>
           {monthBar}
           <div className="bg-white rounded-xl border border-gray-100 mx-3 mt-3 px-4 py-3">
-            <div className="text-[11px] text-gray-500">Tiền thực về (theo ngày nhận)</div>
+            <div className="text-[11px] text-gray-500">Tiền thực về (theo ngày nhận){isRange && ` · ${mLab(month)}`}</div>
             <div className="text-xl font-bold text-green-600 mt-0.5">{moneyFull(cash.total)}</div>
             <div className="text-[11px] text-gray-500 mt-1">
               {cash.events.length} khoản
-              {cash.fromOld > 0 && ` · trong đó thu nợ tháng trước ${fmtMoney(cash.fromOld)}`}
+              {cash.fromOld > 0 && ` · trong đó thu nợ ${isRange ? 'đơn bán trước kỳ' : 'tháng trước'} ${fmtMoney(cash.fromOld)}`}
             </div>
           </div>
           <div className="mx-3 mt-2 px-3 py-2 bg-gray-50 rounded-xl text-[10px] text-gray-500 leading-relaxed">
@@ -1677,13 +1795,13 @@ function BcTab({ stats, sales = [], jewelry = [], toast, onPatch, onEditSale }) 
                   noteClass="text-gray-600 !font-medium"
                   fill={pctOf(dd.total, cMax)}/>
                 {open && dd.events.map(e => {
-                  const old = !(e.saleDay || '').startsWith(month)
+                  const old = !inPeriod(e.saleDay, month)
                   return (
                     <div key={e.saleId + e.kind} className="border-t border-gray-100 pl-[68px] pr-4 py-2 flex items-start gap-2">
                       <div className="flex-1 min-w-0">
                         <div className="text-xs font-medium text-gray-800 truncate">{e.customer}</div>
                         <div className="text-[10px] text-gray-500 truncate">
-                          {e.kind} · {e.label} · đơn ngày {dm(e.saleDay)}{old ? ' (tháng trước)' : ''}
+                          {e.kind} · {e.label} · đơn ngày {dm(e.saleDay)}{old ? (isRange ? ' (trước kỳ)' : ' (tháng trước)') : ''}
                         </div>
                       </div>
                       <div className="text-xs font-semibold text-green-600 flex-shrink-0">+{fmtMoney(e.amount)}</div>
