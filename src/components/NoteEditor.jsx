@@ -78,20 +78,27 @@ const stampTicks = me => Extension.create({
   },
 })
 
-// Bàn phím: đo bằng visualViewport; đang gõ trên máy cảm ứng mà không đo được → đưa thanh lên trên
-function useBarPlace(focused) {
-  const [st, setSt] = useState({ kb: 0, top: false })
+// Vị trí thanh công cụ, tính theo PHẦN MÀN HÌNH ĐANG NHÌN THẤY (visualViewport).
+// iPhone: khi bàn phím mở và kéo xuống cuối ghi chú, vùng nhìn thấy trượt xuống trong trang —
+// thanh phải bám theo đáy vùng đó (ngay trên bàn phím), không bám theo đầu/đáy trang.
+// Chỉ khi máy không báo được bàn phím (vùng nhìn thấy gần bằng cả trang) mới đưa thanh lên đầu vùng nhìn thấy.
+export function barPlace({ innerH, vvH, vvTop, focused, touch, topOffset }) {
+  const bottom = Math.max(0, Math.round(innerH - vvH - vvTop))     // khoảng từ đáy trang lên đáy vùng nhìn thấy
+  const noKb = focused && touch && vvH > innerH * 0.85              // đang gõ mà vùng nhìn thấy không bị bàn phím thu nhỏ
+  return noKb ? { top: true, y: Math.max(topOffset, Math.round(vvTop)) } : { top: false, y: bottom }
+}
+function useBarPlace(focused, topOffset) {
+  const [st, setSt] = useState({ top: false, y: 0 })
   useEffect(() => {
     const vv = window.visualViewport, touch = 'ontouchstart' in window
-    const f = () => { const kb = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0; setSt({ kb, top: focused && touch && kb < 80 }) }
+    const f = () => setSt(barPlace({ innerH: window.innerHeight, vvH: vv ? vv.height : window.innerHeight, vvTop: vv ? vv.offsetTop : 0, focused, touch, topOffset }))
     f(); const t = setTimeout(f, 700)
-    vv?.addEventListener('resize', f); vv?.addEventListener('scroll', f)
-    return () => { clearTimeout(t); vv?.removeEventListener('resize', f); vv?.removeEventListener('scroll', f) }
-  }, [focused])
+    vv?.addEventListener('resize', f); vv?.addEventListener('scroll', f); window.addEventListener('scroll', f, { passive: true })
+    return () => { clearTimeout(t); vv?.removeEventListener('resize', f); vv?.removeEventListener('scroll', f); window.removeEventListener('scroll', f) }
+  }, [focused, topOffset])
   return st
 }
 
-// Ảnh: thu nhỏ còn cạnh dài 1280px, JPEG ~80% (ảnh iPhone 3–5MB → ~200KB)
 export function shrinkImage(file, max = 1024) {
   return new Promise((ok, fail) => {
     const img = new window.Image(), url = URL.createObjectURL(file)
@@ -150,7 +157,7 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
   const editor = useEditor({
     extensions: ext, content: doc, editable,
     onUpdate: ({ editor }) => cb.current?.(editor.getJSON()),
-    onSelectionUpdate: () => { force(); if (alive.current) setPal(null) },
+    onSelectionUpdate: ({ editor }) => { force(); if (alive.current) { setPal(null); if (editor.view.hasFocus()) setFocused(true) } },
     onTransaction: () => force(),
     onFocus: () => { if (alive.current) setFocused(true) },
     // Rời ô soạn: ẩn thanh — trừ khi vừa chạm vào chính thanh công cụ (iPhone có thể rời ô khi chạm nút)
@@ -159,7 +166,7 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
   // Ghi chú mới: đặt con trỏ ngay trong lần chạm để bàn phím bật lên
   useLayoutEffect(() => { if (editor && autoFocus && editable) editor.commands.focus('end') }, [editor])
   useEffect(() => { if (editor && onReady) setTimeout(() => onReady(editor.getJSON()), 0) }, [editor])   // eslint-disable-line react-hooks/exhaustive-deps
-  const { kb, top } = useBarPlace(focused)
+  const { top, y } = useBarPlace(focused, topOffset)
 
   // Tên người tick hiện cạnh dòng checklist (người xem thấy "Bạn", con thấy "Bố Linh")
   const tickCss = useMemo(() => Object.entries(names).map(([k, n]) =>
@@ -195,7 +202,7 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
     {editable && top && (focused || pal) && <div style={{ height: pal ? 112 : 58 }} aria-hidden/>}
     <EditorContent editor={editor} className={'note-ed' + (editable ? '' : ' ro')}/>
     <input ref={fileRef} type="file" accept="image/*" multiple hidden onChange={pickImage}/>
-    {editable && (focused || pal) && <div className={'note-bar' + (top ? ' top' : '')} style={top ? { top: topOffset } : { bottom: kb }}
+    {editable && (focused || pal) && <div className={'note-bar' + (top ? ' top' : '')} style={top ? { top: y } : { bottom: y }}
       onPointerDown={() => { barTouch.current = Date.now() }} onTouchStart={() => { barTouch.current = Date.now() }}>
       {pal && <div className="note-pal">
         {pal === 'hl' ? <>{MARKS.map(([col, n]) => <button key={col} type="button" className="nc" onMouseDown={e => e.preventDefault()} aria-label={'Tô ' + n}
