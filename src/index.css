@@ -134,10 +134,24 @@ input:focus, select:focus, textarea:focus {
              radial-gradient(farthest-side at 0 50%,rgba(0,0,0,.22),transparent) left/12px 100% no-repeat scroll,
              radial-gradient(farthest-side at 100% 50%,rgba(0,0,0,.22),transparent) right/12px 100% no-repeat scroll}
 .note-ed .ProseMirror table tbody{display:table;min-width:100%}
-.note-ed .ProseMirror td,.note-ed .ProseMirror th{border:1px solid #d1d5db;padding:6px 8px;vertical-align:top;min-width:76px;max-width:180px;position:relative;font-size:15px;background-clip:padding-box}
+.note-ed .ProseMirror td,.note-ed .ProseMirror th{border:1px solid #d1d5db;padding:6px 8px;vertical-align:top;min-width:76px;position:relative;font-size:15px;background-clip:padding-box}
 .note-ed .ProseMirror th{background:#f5f3ff;font-weight:700;text-align:left}
 .note-ed .ProseMirror td{background:rgba(255,255,255,.6)}
 .note-ed .ProseMirror td p,.note-ed .ProseMirror th p{margin:0}
 .note-ed .ProseMirror .selectedCell{background:#ede9fe}
 .note-sz{font-weight:800;font-size:17px}.note-sz small{font-size:11px}
 .note-tb{display:flex;flex-direction:column;line-height:1;font-size:15px}.note-tb small{font-size:9.5px;color:#6b7280;margin-top:1px}
+.note-ed .ProseMirror tr[data-sum] td{background:#f5f3ff;font-weight:700;color:#5b21b6;border-top:2px solid #a78bfa}
+.note-ed .ProseMirror table[data-totals] tr[data-sum] td:first-child{color:#6d28d9}
+.note-ed .ProseMirror td.num,.note-ed .ProseMirror th.num{text-align:right}
+.note-ed .ProseMirror td.calc{background:#faf5ff;color:#6d28d9}
+.note-ed .ProseMirror img{max-width:100%;height:auto;border-radius:12px;margin:.4em 0;display:block}
+.note-ed .ProseMirror img.ProseMirror-selectednode{outline:3px solid #7c3aed}
+.note-pal .grp{width:100%;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+.note-pal .grp .nb{max-width:none;font-size:14px;height:42px;justify-content:flex-start;padding:0 10px;text-align:left;display:flex;align-items:center;gap:6px}
+.note-pal .ttl{width:100%;font-size:12px;color:#6b7280;text-align:center;margin-bottom:2px}
+.note-pal .ttl b{color:#5b21b6}
+.note-ed .tbl-add{display:flex;gap:8px;margin:2px 0 14px;flex-wrap:wrap;user-select:none;-webkit-user-select:none}
+.note-ed .tbl-add button{border:1.5px dashed #c4b5fd;background:#faf5ff;color:#6d28d9;font-weight:600;font-size:15px;padding:9px 14px;border-radius:12px;min-height:42px;touch-action:manipulation}
+.note-ed .tbl-add button:active{background:#ede9fe}
+.note-ed .tbl-add button.on{border-style:solid;background:#ede9fe}
