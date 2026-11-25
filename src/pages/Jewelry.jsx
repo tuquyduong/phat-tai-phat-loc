@@ -10,6 +10,7 @@ import {
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
 import MountsTab from './JewelryMounts'
+import KhoReport from '../components/KhoReport'
 import {
   getJewelry, createJewelry, updateJewelry, deleteJewelry,
   getJewelrySales, createSale, deleteSale, updateSaleStatus, updateSale,
@@ -204,6 +205,7 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
           <SubFilter value={khoView} onChange={setKhoView} options={[
             ['stock',    `Trong kho (${stats.inStock})`],
             ['incoming', `Đang về (${stats.incomingCount})`],
+            ['report',   '📊 Báo cáo'],
           ]}/>
         )}
         {!detail && modTab === 'ban' && (
@@ -243,7 +245,9 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
             if (await handleDelete(detailItem)) closeDetail()
           }}/>
       ) : modTab === 'kho' ? (
-        khoView === 'stock' ? (
+        khoView === 'report' ? (
+            <KhoReport items={stats.withDays} onSelect={openDetail}/>
+          ) : khoView === 'stock' ? (
             <KhoTab items={stats.withDays}
               categories={categories}
               cat={khoCat} setCat={setKhoCat}
