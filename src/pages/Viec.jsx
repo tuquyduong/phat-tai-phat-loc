@@ -3,6 +3,7 @@
 // Màn chính chỉ có lịch; bấm ngày mở bảng chi tiết.
 // ============================================
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { onFresh } from '../lib/offline'
 import {
   useToast } from '../components/Toast'
 import { getLocalDateString } from '../lib/helpers'
@@ -209,6 +210,7 @@ export default function Viec({ onNavigate, account, go, onGoDone }) {
     setLoading(false)
   }, [who])                                                // eslint-disable-line react-hooks/exhaustive-deps -- toast cố định, chỉ tải lại khi đổi người
   useEffect(() => { load() }, [load])
+  useEffect(() => onFresh(() => { load(); if (who) getLinkPrefs(who).then(setLinkPrefs).catch(() => {}) }), [load, who])   // có số liệu mới → tải lại lặng lẽ
   // Mốc từ Trang sức & Lab cho khung lịch đang xem (chỉ đọc)
   useEffect(() => { if (who) getLinkPrefs(who).then(setLinkPrefs).catch(() => {}) }, [who])
   useEffect(() => {

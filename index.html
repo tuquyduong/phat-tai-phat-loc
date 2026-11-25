@@ -20,11 +20,6 @@
     <!-- PWA Manifest -->
     <link rel="manifest" href="/manifest.json" />
     
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
-    
     <title>Chi Mai - Quản Lý Đơn Hàng</title>
   </head>
   <body>
@@ -62,7 +57,11 @@
               var a = document.activeElement;
               if (a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)) return;
               sessionStorage.setItem('reloadedFor', m[0]);
-              location.reload();
+              // Ghi bản mới vào bộ nhớ app trước, để lần tải lại dùng đúng bản mới (không phải bản cũ lưu sẵn)
+              var put = (window.caches ? caches.open('chimai-app').then(function (c) {
+                return c.put('/index.html', new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
+              }) : Promise.resolve()).catch(function () {});
+              put.then(function () { location.reload(); });
             })
             .catch(function () {});
         }

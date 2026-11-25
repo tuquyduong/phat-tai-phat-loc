@@ -1,10 +1,34 @@
 import { createClient } from '@supabase/supabase-js'
 import { getLocalDateString } from './helpers'
+import { offlineFetch, setTokenGetter } from './offline'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'YOUR_SUPABASE_URL'
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE_ANON_KEY'
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, { global: { fetch: offlineFetch } })
+
+// Mã đăng nhập khi mạng yếu / mất mạng: mã cũ hết hạn thì Supabase cố gia hạn và có thể chờ tới ~30 giây.
+// Chờ tối đa 2,5 giây; quá thì dùng tạm phiên đã lưu trong máy (dữ liệu vẫn hiện từ bản nhớ),
+// việc gia hạn vẫn chạy tiếp phía sau và tự cập nhật khi xong.
+{
+  const auth = supabase.auth
+  const realGetSession = auth.getSession.bind(auth)
+  const stored = () => {
+    try {
+      const raw = localStorage.getItem(auth.storageKey)
+      const s = raw ? JSON.parse(raw) : null
+      return s?.access_token ? (s.currentSession || s) : null
+    } catch { return null }
+  }
+  auth.getSession = () => {
+    const real = realGetSession()
+    const s = stored()
+    if (!s) return real
+    const fallback = new Promise(res => setTimeout(() => res({ data: { session: s }, error: null }), navigator.onLine === false ? 0 : 2500))
+    return Promise.race([real.then(r => (r?.data?.session || !r?.error) ? r : fallback), fallback])
+  }
+  setTokenGetter(() => realGetSession().then(r => r?.data?.session?.access_token || null))
+}
 
 // ============================================
 // CUSTOMERS

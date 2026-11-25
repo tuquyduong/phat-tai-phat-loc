@@ -2,6 +2,7 @@
 // JEWELRY MODULE - Quản lý Trang Sức
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { onFresh } from '../lib/offline'
 import {
   Diamond, Plus, Trash2, Edit2, ChevronDown, ChevronLeft, Settings,
   RefreshCw, Tag, Package, Search, X, Check, Truck, Wallet, AlertCircle, PackageCheck,
@@ -104,6 +105,7 @@ export default function Jewelry({ openTarget = null, onTargetDone } = {}) {
     setSales(list => list.map(s => s.id === id ? { ...s, ...patch } : s)), [])
 
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => onFresh(() => loadData(true)), [loadData])      // có số liệu mới → tải lại lặng lẽ
   useEffect(() => {                                     // ghi bù các dòng sổ nhập lần trước mạng lỗi chưa ghi được
     flushPendingIntakes().then(n => { if (n) { toast.success(`Đã ghi bù ${n} dòng sổ nhập`); loadData() } }).catch(() => {})
   }, [])                                                // eslint-disable-line react-hooks/exhaustive-deps

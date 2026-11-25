@@ -4,6 +4,7 @@
 // Phiên đăng nhập lưu trong máy, tự gia hạn — mất mạng vẫn mở được app.
 // ============================================
 import { supabase } from './supabase'
+import { clearOffline } from './offline'
 
 const LAST_EMAIL = 'chimai_last_email'
 
@@ -35,6 +36,7 @@ export async function signIn(email, password) {
 
 export async function signOut() {
   await supabase.auth.signOut().catch(() => {})
+  await clearOffline()                       // xoá dữ liệu nhớ trong máy của tài khoản vừa thoát
 }
 
 // Lần đầu đăng nhập bằng mật khẩu tạm → bắt đổi

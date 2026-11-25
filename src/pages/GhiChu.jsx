@@ -5,6 +5,7 @@
 // Nội dung là các dòng: chữ thường, tiêu đề, gạch đầu dòng, checklist (+ chữ đậm cả dòng).
 // ============================================
 import { useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from 'react'
+import { onFresh } from '../lib/offline'
 import { useToast } from '../components/Toast'
 import EmojiPick from '../components/EmojiPick'
 import { nameOf } from '../lib/viec'
@@ -215,6 +216,8 @@ export default function GhiChu({ me, onBack, openId, onOpened, onMakeTask, onSee
     setLoading(false)
   }, [])
   useEffect(() => { load(); markSeen(me); onSeen?.() }, [load, me])        // eslint-disable-line react-hooks/exhaustive-deps
+  // Có số liệu mới → đợi lưu xong phần đang ghi rồi mới tải lại (giữ phần đang sửa dở)
+  useEffect(() => onFresh(() => { saving.current.then(load) }), [load])
   useEffect(() => { if (openId && !loading) { openNote(openId); onOpened?.() } }, [openId, loading])   // eslint-disable-line react-hooks/exhaustive-deps
 
   // ---- Lưu tự động: gom các thay đổi, ghi sau 0,7 giây ----

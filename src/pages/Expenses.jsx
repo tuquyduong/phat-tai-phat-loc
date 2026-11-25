@@ -3,6 +3,7 @@
 // + TM/CK/TD, Lũy kế, Chuyển nội bộ, Trả nợ TD
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { onFresh } from '../lib/offline'
 import {
   RefreshCw, ChevronLeft, ChevronRight, Trash2,
   ArrowUpCircle, ArrowDownCircle, Settings, Plus, X, Edit2, ArrowLeftRight, CreditCard,
@@ -110,8 +111,8 @@ export default function Expenses() {
   const [mucPick, setMucPick] = useState(null)
   const [mucTick, setMucTick] = useState(0)
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  const loadData = useCallback(async (silent) => {
+    if (silent !== true) setLoading(true)
     try {
       const { start, end } = getMonthRange(currentMonth)
       const [cats,txs,sum,running,initBal,cds,rl,accs] = await Promise.all([
@@ -124,6 +125,8 @@ export default function Expenses() {
   }, [currentMonth, toast])
 
   useEffect(() => { loadData() }, [loadData])
+  // Có số liệu mới (vừa mở app bằng dữ liệu nhớ, hoặc có mạng lại) → tải lại lặng lẽ
+  useEffect(() => onFresh(() => { loadData(true); loadMuc().then(setMucList).catch(() => {}) }), [loadData])
   useEffect(() => { loadMuc().then(setMucList).catch(() => {}) }, [])
   const mucMonths = useMemo(() => sixMonths(currentMonth), [currentMonth])
   useEffect(() => {

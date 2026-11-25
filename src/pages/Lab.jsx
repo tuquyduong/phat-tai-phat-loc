@@ -4,6 +4,7 @@
 // + Quick edit stock, 4 decimal display
 // ============================================
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { onFresh } from '../lib/offline'
 import {
   RefreshCw, Plus, Minus, Trash2, Edit2, Star, ChevronLeft, ChevronDown, ChevronUp,
   Copy, Search, X, Pin, FlaskConical, Package, StickyNote, Calculator, Settings,
@@ -42,8 +43,8 @@ export default function Lab({ openTarget = null, onTargetDone } = {}) {
   const [search, setSearch] = useState('')
   const [showCategoryMgr, setShowCategoryMgr] = useState(false)
 
-  const loadData = useCallback(async () => {
-    setLoading(true)
+  const loadData = useCallback(async (silent) => {
+    if (silent !== true) setLoading(true)
     try {
       const [ing,frm,nts,cats,bat] = await Promise.all([getIngredients(),getFormulas(),getLabNotes(),getLabCategories(),getBatches()])
       setIngredients(ing); setFormulas(frm); setNotes(nts); setLabCategories(cats); setBatches(bat)
@@ -52,6 +53,7 @@ export default function Lab({ openTarget = null, onTargetDone } = {}) {
   }, [])
 
   useEffect(() => { loadData() }, [loadData])
+  useEffect(() => onFresh(() => loadData(true)), [loadData])      // có số liệu mới → tải lại lặng lẽ
 
   const alertCount = ingredients.filter(i => {
     const t = getAlertThreshold(i)

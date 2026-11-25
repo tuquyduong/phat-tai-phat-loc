@@ -1,103 +1,102 @@
-const CACHE_NAME = 'order-tracker-v1';
+// ============================================
+// SERVICE WORKER — mở app tức thì, mất mạng vẫn chạy
+// • Chương trình (index.html + /assets/*) lưu sẵn trong máy: mở là chạy ngay từ máy, không chờ mạng.
+// • Bản mới: tải ngầm khi có mạng, lần mở sau dùng bản mới (index.html còn tự tải lại 1 lần khi thấy bản mới).
+// • Dữ liệu (Supabase) KHÔNG đi qua đây — do src/lib/offline.js lo, theo từng tài khoản.
+// ============================================
+const CACHE = 'chimai-app'
+const SHELL = '/index.html'
 
-// Assets cần cache ngay khi install
-const PRECACHE_ASSETS = [
-  '/',
-  '/index.html',
-  '/manifest.json',
-  '/favicon.svg',
-];
+// Lưu index.html + toàn bộ file chương trình theo /asset-list.json (do bản build tạo ra).
+// Giữ 2 thế hệ: file của bản cũ chỉ xoá khi đã có bản mới hơn nữa (máy đang chạy bản cũ vẫn mở được tab chưa tải).
+async function syncAssets(cache) {
+  let list
+  try {
+    const r = await fetch('/asset-list.json', { cache: 'no-store' })
+    if (!r.ok) return
+    list = await r.json()
+  } catch { return }
+  const prevRes = await cache.match('/asset-list.json')
+  const prev = prevRes ? await prevRes.json().catch(() => []) : []
+  const have = new Set((await cache.keys()).map(q => new URL(q.url).pathname))
+  for (const f of list) {
+    if (have.has(f)) continue
+    try { const r = await fetch(f); if (r.ok) await cache.put(f, r) } catch { /* lần sau thử lại */ }
+  }
+  if (JSON.stringify(prev) !== JSON.stringify(list)) {
+    const keep = new Set([...list, ...prev])
+    for (const q of await cache.keys()) {
+      const p = new URL(q.url).pathname
+      if (p.startsWith('/assets/') && !keep.has(p)) await cache.delete(q)
+    }
+    await cache.put('/asset-list.json', new Response(JSON.stringify(list), { headers: { 'Content-Type': 'application/json' } }))
+  }
+}
+async function refreshShell() {
+  const cache = await caches.open(CACHE)
+  try {
+    const r = await fetch(SHELL, { cache: 'no-store' })
+    if (r.ok) await cache.put(SHELL, r)
+  } catch { return }
+  await syncAssets(cache)
+}
 
-// Install - cache assets cơ bản
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => {
-      console.log('PWA: Caching app shell');
-      return cache.addAll(PRECACHE_ASSETS);
-    })
-  );
-  self.skipWaiting();
-});
+self.addEventListener('install', event => {
+  event.waitUntil(refreshShell())
+  self.skipWaiting()
+})
 
-// Activate - xóa cache cũ
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((cacheNames) => {
-      return Promise.all(
-        cacheNames
-          .filter((name) => name !== CACHE_NAME)
-          .map((name) => {
-            console.log('PWA: Deleting old cache', name);
-            return caches.delete(name);
-          })
-      );
-    })
-  );
-  self.clients.claim();
-});
+self.addEventListener('activate', event => {
+  event.waitUntil((async () => {
+    for (const n of await caches.keys()) if (n !== CACHE) await caches.delete(n)   // xoá kho cũ 'order-tracker-v1'
+    await self.clients.claim()
+  })())
+})
 
-// Fetch - Network first, fallback to cache
-self.addEventListener('fetch', (event) => {
-  const { request } = event;
-  const url = new URL(request.url);
+self.addEventListener('fetch', event => {
+  const { request } = event
+  if (request.method !== 'GET') return
+  const url = new URL(request.url)
+  if (url.origin !== self.location.origin) return          // Supabase, ảnh… đi thẳng
+  if (url.searchParams.has('__v')) return                   // kiểm tra phiên bản: luôn hỏi máy chủ
 
-  // Bỏ qua requests đến Supabase (luôn cần network)
-  if (url.hostname.includes('supabase')) {
-    return;
+  // Mở app: trả ngay bản trong máy, đồng thời tải ngầm bản mới cho lần sau
+  if (request.mode === 'navigate' || url.pathname === '/' || url.pathname === SHELL) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE)
+      const hit = await cache.match(SHELL)
+      if (hit) { event.waitUntil(refreshShell()); return hit }
+      try {
+        const r = await fetch(SHELL, { cache: 'no-store' })
+        if (r.ok) { await cache.put(SHELL, r.clone()); event.waitUntil(syncAssets(cache)) }
+        return r
+      } catch { return new Response('Không có mạng và app chưa được lưu trong máy. Mở lại khi có mạng.', { status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' } }) }
+    })())
+    return
   }
 
-  // Bỏ qua các request không phải GET
-  if (request.method !== 'GET') {
-    return;
+  // File chương trình có mã băm trong tên → không bao giờ đổi: lấy trong máy trước
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE)
+      const hit = await cache.match(url.pathname)
+      if (hit) return hit
+      const r = await fetch(request)
+      if (r.ok) await cache.put(url.pathname, r.clone())
+      return r
+    })())
+    return
   }
 
-  // Yêu cầu kiểm tra phiên bản: luôn đi thẳng ra mạng, không lưu đệm
-  if (url.searchParams.has('__v')) {
-    return;
-  }
-
-  event.respondWith(
-    // Thử network trước
-    fetch(request)
-      .then((response) => {
-        // Clone response để cache
-        const responseClone = response.clone();
-        
-        // Cache response mới
-        caches.open(CACHE_NAME).then((cache) => {
-          // Chỉ cache successful responses
-          if (response.status === 200) {
-            cache.put(request, responseClone);
-          }
-        });
-
-        return response;
-      })
-      .catch(() => {
-        // Network failed, thử cache
-        return caches.match(request).then((cachedResponse) => {
-          if (cachedResponse) {
-            return cachedResponse;
-          }
-          
-          // Nếu là navigation request, trả về index.html
-          if (request.mode === 'navigate') {
-            return caches.match('/index.html');
-          }
-          
-          return new Response('Offline', { status: 503 });
-        });
-      })
-  );
-});
-
-// Background Sync (cho tương lai)
-self.addEventListener('sync', (event) => {
-  if (event.tag === 'sync-orders') {
-    console.log('PWA: Background sync triggered');
-    // Có thể implement sync data khi online trở lại
-  }
-});
+  // Còn lại (biểu tượng, manifest…): trả bản trong máy nếu có, tải ngầm bản mới
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE)
+    const hit = await cache.match(request)
+    const net = fetch(request).then(r => { if (r.ok) cache.put(request, r.clone()); return r }).catch(() => null)
+    if (hit) { event.waitUntil(net); return hit }
+    return (await net) || new Response('', { status: 504 })
+  })())
+})
 
 // ── THÔNG BÁO ĐẨY (tab Việc) ──
 // Máy chủ gửi { title, body, tag, url }. Nội dung hỏng thì vẫn hiện thông báo chung,

@@ -6,11 +6,13 @@ import { useState, useEffect, lazy, Suspense } from 'react'
 import { ToastProvider } from './components/Toast'
 import BottomTabs from './components/shared/BottomTabs'
 import Home from './pages/Home'
-import Expenses from './pages/Expenses'
-import Lab from './pages/Lab'
-import Jewelry from './pages/Jewelry'
-// Tab Việc chỉ tải khi mở lần đầu — các tab khác không phải gánh thêm
-const Viec = lazy(() => import('./pages/Viec'))
+// Mỗi tab là một phần riêng, chỉ đọc khi mở — mở app nhẹ hơn (các phần đều đã lưu sẵn trong máy)
+const Expenses = lazy(() => import('./pages/Expenses'))
+const Lab      = lazy(() => import('./pages/Lab'))
+const Jewelry  = lazy(() => import('./pages/Jewelry'))
+const Viec     = lazy(() => import('./pages/Viec'))
+import OfflineBadge from './components/OfflineBadge'
+import { onFresh, clearOffline } from './lib/offline'
 import { supabase } from './lib/supabase'
 import { mustChangePassword } from './lib/auth'
 import Login, { SetNewPassword } from './components/Login'
@@ -58,18 +60,20 @@ export default function AppShell() {
       if (alive && !(error && !data.session)) setSession(data.session || null)
     })
     load()
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => { if (alive) setSession(s || null) })
+    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => {
+      if (e === 'SIGNED_OUT') clearOffline()                 // thoát tài khoản → xoá dữ liệu nhớ trong máy
+      if (alive) setSession(s || null)
+    })
     window.addEventListener('online', load)
     return () => { alive = false; sub.subscription.unsubscribe(); window.removeEventListener('online', load) }
   }, [])
 
   // Load module config
   useEffect(() => {
-    if (isAuthenticated) {
-      getActiveModules()
-        .then(m => setActiveModulesState(m))
-        .catch(() => {})
-    }
+    if (!isAuthenticated) return
+    const load = () => getActiveModules().then(m => setActiveModulesState(m)).catch(() => {})
+    load()
+    return onFresh(load)
   }, [isAuthenticated])
 
   if (session === undefined) return (                                            // đang đọc phiên / chờ có mạng
@@ -86,6 +90,7 @@ export default function AppShell() {
         <Suspense fallback={<div className="text-center text-gray-400 py-20">Đang mở Việc…</div>}>
           <Viec account={account} go={viecGo} onGoDone={() => setViecGo(null)} />
         </Suspense>
+        <OfflineBadge bottom={false}/>
       </div>
     </ToastProvider>
   )
@@ -121,7 +126,10 @@ export default function AppShell() {
   return (
     <ToastProvider>
       <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 pb-16">
-        {renderModule()}
+        <Suspense fallback={<div className="text-center text-gray-400 py-20 text-sm">Đang mở…</div>}>
+          {renderModule()}
+        </Suspense>
+        <OfflineBadge/>
         <BottomTabs
           activeTab={activeModule}
           onTabChange={setActiveModule}
