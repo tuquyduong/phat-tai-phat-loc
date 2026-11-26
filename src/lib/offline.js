@@ -88,13 +88,26 @@ const toRes = rec => new Response(rec.body, { status: rec.status, headers: rec.h
 const served = new Set()
 let revalidating = 0, changed = false
 
+// Gửi yêu cầu; nếu máy chủ báo mã đăng nhập hết hạn (401) thì lấy mã mới và gửi lại đúng 1 lần
+async function send(input, init) {
+  const res = await fetch(input, init)
+  if (res.status !== 401 || !freshToken) return res
+  const h = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined))
+  if (!h.get('Authorization')) return res
+  const tok = await freshToken().catch(() => null)
+  if (!tok || 'Bearer ' + tok === h.get('Authorization')) return res
+  h.set('Authorization', 'Bearer ' + tok)
+  return fetch(input, { ...init, headers: h })
+}
+
 export async function offlineFetch(input, init = {}) {
   const url = typeof input === 'string' ? input : input.url
   const method = (init.method || (typeof input !== 'string' && input.method) || 'GET').toUpperCase()
-  if (!url.includes('/rest/v1/')) return fetch(input, init)
+  if (/\/(storage|functions)\/v1\//.test(url)) return send(input, init)                // ảnh, hàm: chỉ lo mã hết hạn
+  if (!url.includes('/rest/v1/')) return fetch(input, init)                          // đăng nhập/gia hạn: đi thẳng
   const isRpc = url.includes('/rest/v1/rpc/')
   const readRpc = method === 'POST' && isRpc && READ_RPC.some(n => new URL(url).pathname.endsWith('/rpc/' + n))
-  if (!(method === 'GET' && !isRpc) && !readRpc) return fetch(input, init)          // GHI: luôn gửi thẳng máy chủ
+  if (!(method === 'GET' && !isRpc) && !readRpc) return send(input, init)           // GHI: luôn gửi thẳng máy chủ
 
   const headers = new Headers(init.headers || (typeof input !== 'string' ? input.headers : undefined))
   const uid = uidOf(headers.get('Authorization'))
@@ -114,15 +127,7 @@ export async function offlineFetch(input, init = {}) {
   }
 
   try {
-    let res = await fetch(input, init)
-    // Mã đăng nhập hết hạn (thường do vừa mở app sau nhiều giờ): lấy mã mới rồi thử lại 1 lần
-    if (res.status === 401 && freshToken) {
-      const tok = await freshToken().catch(() => null)
-      if (tok && 'Bearer ' + tok !== headers.get('Authorization')) {
-        headers.set('Authorization', 'Bearer ' + tok)
-        res = await fetch(input, { ...init, headers })
-      }
-    }
+    const res = await send(input, init)
     if (res.ok) { save(key, res.clone()); markOnline(); return res }
     if (cached && (res.status === 401 || res.status >= 500)) { markStale(cached.at); return toRes(cached) }
     return res
@@ -137,11 +142,7 @@ function revalidate(input, init, key, cached) {
   revalidating++; st.syncing = revalidating; emit()
   ;(async () => {
     try {
-      let res = await fetch(input, init)
-      if (res.status === 401 && freshToken) {
-        const tok = await freshToken().catch(() => null)
-        if (tok) { const h = new Headers(init.headers); h.set('Authorization', 'Bearer ' + tok); res = await fetch(input, { ...init, headers: h }) }
-      }
+      const res = await send(input, init)
       if (res.ok) {
         const rec = await save(key, res)
         if (rec && rec.body !== cached.body) changed = true

@@ -7,12 +7,16 @@ const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || 'YOUR_SUPABASE
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, { global: { fetch: offlineFetch } })
 
-// Mã đăng nhập khi mạng yếu / mất mạng: mã cũ hết hạn thì Supabase cố gia hạn và có thể chờ tới ~30 giây.
-// Chờ tối đa 2,5 giây; quá thì dùng tạm phiên đã lưu trong máy (dữ liệu vẫn hiện từ bản nhớ),
-// việc gia hạn vẫn chạy tiếp phía sau và tự cập nhật khi xong.
+// Mã đăng nhập lúc mở app: sau một đêm mã đã hết hạn, Supabase phải gia hạn qua mạng (0,5–2 giây) mới cho vào.
+// Lúc mới mở (10 giây đầu) hoặc mất mạng: dùng NGAY phiên đã lưu trong máy → vào app tức thì;
+// việc gia hạn vẫn chạy ngầm, xong thì mọi yêu cầu sau dùng mã mới. Yêu cầu nào lỡ gửi bằng mã cũ
+// bị máy chủ từ chối (401) sẽ được offline.js lấy mã mới và gửi lại 1 lần.
+// Ngoài 10 giây đầu: chờ gia hạn tối đa 2,5 giây, quá thì dùng tạm phiên trong máy.
 {
   const auth = supabase.auth
   const realGetSession = auth.getSession.bind(auth)
+  const T0 = Date.now()
+  let fresh = false                                    // đã gia hạn xong ít nhất 1 lần trong lần mở app này
   const stored = () => {
     try {
       const raw = localStorage.getItem(auth.storageKey)
@@ -22,9 +26,13 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, { global: { f
   }
   auth.getSession = () => {
     const real = realGetSession()
+    real.then(r => { if (r?.data?.session) fresh = true }, () => {})
     const s = stored()
     if (!s) return real
-    const fallback = new Promise(res => setTimeout(() => res({ data: { session: s }, error: null }), navigator.onLine === false ? 0 : 2500))
+    if (navigator.onLine === false || (!fresh && Date.now() - T0 < 10000)) {
+      return Promise.resolve({ data: { session: s }, error: null })
+    }
+    const fallback = new Promise(res => setTimeout(() => res({ data: { session: s }, error: null }), 2500))
     return Promise.race([real.then(r => (r?.data?.session || !r?.error) ? r : fallback), fallback])
   }
   setTokenGetter(() => realGetSession().then(r => r?.data?.session?.access_token || null))
