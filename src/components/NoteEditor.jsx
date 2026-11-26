@@ -9,6 +9,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useEditor, EditorContent, Extension } from '@tiptap/react'
 import { Plugin } from '@tiptap/pm/state'
+import { openLink } from '../lib/openLink'
 import StarterKit from '@tiptap/starter-kit'
 import TaskList from '@tiptap/extension-task-list'
 import TaskItem from '@tiptap/extension-task-item'
@@ -135,6 +136,42 @@ function FxPick({ ti, colLabel, onApply }) {
   </div>
 }
 
+// Chạm nhanh vào link → mở (Facebook/YouTube mở thẳng trong app, đúng video). Nhấn giữ / kéo → vẫn chọn & sửa chữ như thường.
+// Giống app Ghi chú của iPhone. Máy tính: bấm chuột vào link là mở.
+const TapLink = Extension.create({
+  name: 'tapLink',
+  addProseMirrorPlugins() {
+    let t = null, touchAt = 0
+    const linkOf = e => e.target?.closest?.('a[href]')
+    return [new Plugin({ props: { handleDOMEvents: {
+      touchstart(_v, e) {
+        const a = linkOf(e)
+        t = a && e.touches.length === 1 ? { a, x: e.touches[0].clientX, y: e.touches[0].clientY, at: Date.now() } : null
+        return false
+      },
+      touchmove(_v, e) {
+        if (t) { const p = e.touches[0]; if (Math.abs(p.clientX - t.x) > 10 || Math.abs(p.clientY - t.y) > 10) t = null }
+        return false
+      },
+      touchend(_v, e) {
+        if (!t) return false
+        const { a, at } = t; t = null
+        if (Date.now() - at > 500 || linkOf(e) !== a) return false          // nhấn giữ → để sửa chữ
+        e.preventDefault(); touchAt = Date.now()                           // không đặt con trỏ, không bật bàn phím
+        openLink(a.getAttribute('href'))
+        return true
+      },
+      click(_v, e) {
+        const a = linkOf(e)
+        if (!a) return false
+        e.preventDefault()
+        if (Date.now() - touchAt > 800 && !e.shiftKey) openLink(a.getAttribute('href'))
+        return true
+      },
+    } } })]
+  },
+})
+
 export default function NoteEditor({ doc, editable, me, names, autoFocus, onChange, onSecret, onMakeTask, onUploadImage, onReady, topOffset = 52 }) {
   const fileRef = useRef(null)
   const [busy, setBusy] = useState(false)
@@ -151,7 +188,7 @@ export default function NoteEditor({ doc, editable, me, names, autoFocus, onChan
     Image.configure({ inline: false, allowBase64: true }),
     TaskList, TaskBy.configure({ nested: true, onReadOnlyChecked: () => false }), stampTicks(me),
     Placeholder.configure({ placeholder: 'Tiêu đề… rồi xuống dòng viết nội dung. Muốn nói: chạm 🎤 trên bàn phím' }),
-    Link.configure({ autolink: true, linkOnPaste: true, openOnClick: !editable }),
+    Link.configure({ autolink: true, linkOnPaste: true, openOnClick: false }), TapLink,
   ], [me, editable])
   const cb = useRef(onChange); cb.current = onChange
   const editor = useEditor({
